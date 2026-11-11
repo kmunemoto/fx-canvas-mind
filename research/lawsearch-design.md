@@ -131,6 +131,9 @@ process.
     - a `SHARED` line from the allow-list that now checks every check run's task (`assertTaskAllowed`, 7.3);
     - a write into a frozen rule constant (`lawsearch-frozen.ts`, 12.7 G3);
     - a frozen `Set` that `readOnlySet` did not make read-only (5.3).
+    - (C4h, 2026-11-11) a check's worker that is not sandboxed (`… not sandboxed (granted here: …)`, 12.9 F2), and a
+      main-realm module that tries to change `Worker.prototype`, `EventTarget.prototype` or `globalThis.Worker` (a
+      `TypeError` at its load, 12.9 F7).
 
     Such a run writes no `checks.csv` and no print.txt, as before.
   - A run without `--unstable-worker-options` stops at its first check run. Deno 2.9.6 prints `Unstable API
@@ -153,12 +156,15 @@ process.
     `HAND_IDS`, `TRIALS`, `OUT`, `GEN`, `SEED`, `FLIP`, `STRENGTH`, `RUN`, `G_FILE`, `KAPPA_DELTA`, `KAPPA_PL`) once,
     as `main()`'s first statement, into a map that only `env()` reads. It then revokes the environment permission for
     the whole process (`readSettings`). After that, any `Deno.env` call in the main thread or in a worker started later
-    is refused (`NotCapable`, exit 1).
+    is refused (`NotCapable`, exit 1). (C4h, 2026-11-11) The checks' workers never hold env at all, being started with
+    "none"; an inheriting worker would lose it at the revoke too (7.7's C4h bullet).
   - In `syn` and `walkfiles` modes the run's GMO files are read from the disk once, at gate 3 (`treeBytes`,
     `lawsearch-gen.ts`). The manifest's tree digest is taken of exactly those bytes. `loadPairTf` (through `src.read`,
     `lawsearch.ts` `memSourceOf`) and the retrace of 13 (iv) (`retraceCheck`'s `read`) read those bytes, never the disk.
   - The hand runner still loads its temporary GMO files from the disk: its `Source` has no `read`.
-  - The checks' workers have no permission at all (7.3, 12.7): no file, no environment.
+  - The checks' workers have no permission at all (7.3, 12.7): no file, no environment. (C4h, 2026-11-11) Each one tests
+    that when it gets its first message, against the main thread's own grants, and refuses to serve otherwise (exit 1;
+    `lawsearch-sandbox.ts`, 12.9 F2).
   - The yml's walkfiles and syn steps narrow the write grant to the run's own folder (7.8).
 
 ### 2.5 Arithmetic
@@ -196,15 +202,17 @@ examples fix (7.2) and `print.txt`'s notes. Labels contain no comma.
 | `lawsearch-stage0.ts` | D | stage 0 as its own program (spec 9's import rule) | bars, ind, items, events, select0, checks, dump |
 | `lawsearch-dump.ts` | D | writes `lawsearch-dump.md`'s files | types, rules, const |
 | `lawsearch-hand.ts` | D | the hand runner | everything |
-| `lawsearch.ts` | D | the program: modes, gates, the pipeline; (C4f, 2026-11-08) the guard of each stage's universe (`Guard`, 7.7); (C4g, 2026-11-10) the settings read once and env revoked (`readSettings`), the gate-3 bytes and the three loads from them (`memSourceOf`, `readOf`), the follow-bar checks' worker (`followInWorker`), exit 7 (7.7) | everything (lockdown and frozen first) |
+| `lawsearch.ts` | D | the program: modes, gates, the pipeline; (C4f, 2026-11-08) the guard of each stage's universe (`Guard`, 7.7); (C4g, 2026-11-10) the settings read once and env revoked (`readSettings`), the gate-3 bytes and the three loads from them (`memSourceOf`, `readOf`), the follow-bar checks' worker (`followInWorker`), exit 7 (7.7); (C4h, 2026-11-11) the grants it holds (`grantsHeld`), sent to every check's worker (12.9 F2) | everything (lockdown and frozen first) |
 | `lawsearch-flip.ts` (written in C2; listed C3) | D | spec 14.2's flip conditions on the exact mirror (23.1), 7.9 | (C4g: lockdown and frozen first) const, rules, bars, gen, items, events, checks, stage0, trade, types |
-| `lawsearch-par.ts` (written in C4b; listed C4c, 2026-11-07) | D | the worker pool (`WorkerPool`) that runs the units of the checks cut, poison and presence on `WORKERS` workers (7.3, 7.7, 12.1); (C4g, 2026-11-10) `checkPools`: a cut pool made for each cut run (deltas, T order, one target per job, no want) and a probe pool kept for the run, max(1, `WORKERS`) workers each, every worker with no permission (12.7) | checks and types (types only) |
-| `lawsearch-par-worker.ts` (written in C4b; listed C4c, 2026-11-07) | D | one worker: answers each job with `lawsearch-checks.ts`'s `runUnitJob`; reads no file and no environment, writes nothing; (C4g) started with no permission and refuses to serve if any permission reads granted; imports the lockdown and the frozen constants first; a cut worker grows its universe job by job (`applyGrow`) | lockdown, frozen, checks, types |
-| `lawsearch-follow-worker.ts` (C4g, 2026-11-10) | D | the realm of one follow-bar check (spec 15 追う足): started by `lawsearch.ts` for one call with no permission, it gets the snapshot's timeframe and the rows' coordinates and answers `followValues` (6.1, 12.7) | lockdown, frozen, trade, types |
-| `lawsearch-lockdown.ts` (C4g, 2026-11-10) | D | the delete-only lockdown of a realm: removes the permission-free channels between realms and processes from its globals and the Deno namespace; imports nothing; the first import of every entry point (12.7 G3) | — |
-| `lawsearch-frozen.ts` (C4g, 2026-11-10) | D | deep-freezes every object exported by `lawsearch-const.ts` and `lawsearch-rules.ts`, and quotes.ts' `GMO_SYMBOLS` and `GMO_INTERVALS`, in every realm; the second import of every entry point (12.7 G3) | const, rules (types through them); quotes.ts |
-| `lawsearch-audit.ts` (C4g, 2026-11-10) | D | not part of the program (no realm imports it): the hand job's static audits `graph`, `source` and `catch` over the realms' module graphs (`deno info --json`) and their source files (7.8 hand steps 10–12) | — |
+| `lawsearch-par.ts` (written in C4b; listed C4c, 2026-11-07) | D | the worker pool (`WorkerPool`) that runs the units of the checks cut, poison and presence on `WORKERS` workers (7.3, 7.7, 12.1); (C4g, 2026-11-10) `checkPools`: a cut pool made for each cut run (deltas, T order, one target per job, no want) and a probe pool kept for the run, max(1, `WORKERS`) workers each, every worker with no permission (12.7); (C4h, 2026-11-11) every "universe" message carries the main thread's grants (12.9 F2) | checks and types (types only) |
+| `lawsearch-par-worker.ts` (written in C4b; listed C4c, 2026-11-07) | D | one worker: answers each job with `lawsearch-checks.ts`'s `runUnitJob`; reads no file and no environment, writes nothing; (C4g) started with no permission and refuses to serve if any permission reads granted; imports the lockdown and the frozen constants first; a cut worker grows its universe job by job (`applyGrow`). (C4h, 2026-11-11) C4g's test queried each permission without a path, which reads "prompt" in a worker that inherited the program's `--allow-read=.` too, so it would have served; it now tests the main thread's own grants, path-scoped (`lawsearch-sandbox.ts`, 12.9 F2) | lockdown, frozen, checks, sandbox, types |
+| `lawsearch-follow-worker.ts` (C4g, 2026-11-10) | D | the realm of one follow-bar check (spec 15 追う足): started by `lawsearch.ts` for one call with no permission, it gets the snapshot's timeframe and the rows' coordinates and answers `followValues` (6.1, 12.7); (C4h, 2026-11-11) it had no run-time test of its sandbox; it now answers an error, and computes nothing, when it holds one of the main thread's grants (12.9 F2) | lockdown, frozen, trade, sandbox, types |
+| `lawsearch-lockdown.ts` (C4g, 2026-11-10) | D | the lockdown of a realm (delete-only in C4g): removes the permission-free channels between realms and processes from its globals and the Deno namespace; imports nothing; the first import of every entry point (12.7 G3); (C4h, 2026-11-11) the first module request, re-exports counted (12.9 F4); in the main realm only, it also freezes `Worker.prototype` and `EventTarget.prototype` and pins `globalThis.Worker` (12.9 F7) | — |
+| `lawsearch-frozen.ts` (C4g, 2026-11-10) | D | deep-freezes every object exported by `lawsearch-const.ts` and `lawsearch-rules.ts`, and quotes.ts' `GMO_SYMBOLS` and `GMO_INTERVALS`, in every realm; the second import (C4h: module request) of every entry point (12.7 G3) | const, rules (types through them); quotes.ts |
+| `lawsearch-audit.ts` (C4g, 2026-11-10) | D | not part of the program (no realm imports it): the hand job's static audits `graph`, `source` and `catch` over the realms' module graphs (`deno info --json`) and their source files (7.8 hand steps 10–12); (C4h, 2026-11-11) `graph` counts re-exports among an entry's first module requests (F4), and two more modes: `trigger`, every module of the graphs in a push path of `lawsearch.yml` or `lawsearch-audit.yml` (F5), and `relay`, the main realm's freeze (F7) (7.8 hand steps 13 and 14, 12.9) | — (`relay` evaluates the lockdown) |
+| `lawsearch-sandbox.ts` (C4h, 2026-11-11) | D | the run-time test that a check's worker is sandboxed: `grantsHeld` (the main thread: each path-less permission name, and read and write on `.`, the run folder and the dump folder, that read "granted" there) and `refusalOf` (a worker: why it must not serve, when any of them, or any path-less name, reads "granted" in its own realm) (12.9 F2) | — (imports nothing) |
 | `.github/workflows/lawsearch.yml` | D | CI | — |
+| `.github/workflows/lawsearch-audit.yml` (C4h, 2026-11-11) | D | CI: the hand job's cheap audits and `MODE=hand`, run on a push that changes a module of the four graphs outside `lawsearch.yml`'s paths (7.8, 12.9 F5) | — |
 | `research/money-stats.ts` (+1 export) | C | U(x, ν) of spec 8.5 | — |
 
 (C4c, 2026-11-07) `lawsearch-candat-check.ts`, C4b's CI guard for `candidatesAt`, is deleted with `candidatesAt`
@@ -219,7 +227,13 @@ started by the pool as a Web Worker (so `deno info` of a program does not list i
 - `lawsearch-flip.ts`, the flip judgement.
 
 Each one's first two imports are `lawsearch-lockdown.ts`, then `lawsearch-frozen.ts`, so these two are evaluated before
-any other module of the realm. Their order and their graphs are audited in CI (7.8 hand step 10). The par worker now
+any other module of the realm. Their order and their graphs are audited in CI (7.8 hand step 10).
+(C4h, 2026-11-11; C4g's review, the lead's F4) That "so" held only for import lines: an ES module evaluates every
+value module request in source order, re-exports (`export … from`, `export * from`) included, and C4g's audit counted
+import lines only. A re-export above the lockdown ran its whole graph first, unseen (C4g's refuter: `lawsearch-events.ts`
+then captured CacheStorage). The audit now counts every value module request in source order (`import type` and
+`export type` skipped), from the source text and from `deno info`'s own parse, which must agree. So the lockdown, which
+imports nothing, is evaluated first in every realm, then `lawsearch-frozen.ts`'s graph, then the rest. The par worker now
 also imports the lockdown and the frozen constants (and, through them, `lawsearch-const.ts`, `lawsearch-rules.ts`,
 `lib.ts` and `quotes.ts`).
 
@@ -751,6 +765,11 @@ own (7.7), and `avoidOf`'s table is read-only, so the plant's first `add` throws
 `Set.prototype.has.call`. The read-only table does not stop that write. So the plant reaches the checks only if they
 share the main run's Set, and it tests H1's separation itself in CI: the checks' avoid table is another Set, so the
 cut or presence fails (8; 7.8, the job `plants-c4g`).
+(C4h, 2026-11-11; C4g's review, the lead's F3) It also showed a carry route inside the checks: every poison and
+presence unit of a check run in a probe worker shared the task's one table, so presence variant (ii) read the entry
+variant (i) wrote for the same pair, timeframe and T (the key has no variant in it): half of its presence failures.
+Since C4h each poison and presence unit gets its own read-only copy of the task's table (7.3 `unitAvoidOf`), and the
+plant's presence counts halve (8).
 
 (C4g) The plant `gmoWriteR` is in `trialSignals`. The main run's first call of the process, in stage 0, rewrites one
 bid close of the run's own gmo folder: USD/JPY m15 2024-03-11T04:00Z, 113.217 → 113.218, a first-half bar of C 7101's
@@ -775,6 +794,10 @@ is cheap:
       `avoid` is still the checks' own Set by identity, which the allow-list wants (7.3).
     - The run plant `avoidStashR3call` writes past the read-only table with `Set.prototype.add.call` (above); H1 is
       what catches it.
+    - (C4h, 2026-11-11; the lead's F3) In a worker, the task's sealed table is no longer what a poison or presence unit
+      reads: each such unit gets a fresh copy made read-only here (`readOnlySet(new Set(task.avoid))`, 7.3
+      `unitAvoidOf`), so a write past it with `Set.prototype.add.call` stays in that one unit. The cut's units still
+      read the task's table (12.9 F3 says why that carries no later bar).
 - The `ExclCtx` is frozen (`exclCtxFrom`; `exclCtxOf` goes through it): no field can be replaced and no property
   added. Stage 3's period, when given, is a frozen copy.
 - `holesOf` freezes the `Holes` object and its two per-pair lists (`present`, `hole`): no field and no list entry can
@@ -1335,7 +1358,14 @@ export function assertTaskAllowed(task: UnitTask, chk: CheckInputs, where: strin
     holes any more (`poisonCheck` has no `ExclCtx` option), so they are always made this way: `exclCtxOf` of the
     trial's timeframe in the thread's copy of the check's universe, with the task's avoid table, kept in the task's
     `UnitCache`. (C4g, 2026-11-10) Since no unit runs in the main thread, they are made once per task on each probe
-    worker only.
+    worker only. (C4h, 2026-11-11; C4g's review, the lead's F3) A poison unit now reads only the cached `ExclCtx`'s
+    holes: its `ExclCtx` is made again for the unit (`exclCtxFrom` of the cached holes) with the unit's own read-only
+    copy of the task's avoid table (`unitAvoidOf`), and so is every presence unit's (`presenceGotAt` gets the copy). The
+    task's table is read-only through its own `add`, `delete` and `clear`, but `Set.prototype.add.call` writes into any
+    Set, so until C4h one unit could leave a value there for a later unit of the same probe worker and run (12.9 F3).
+    The copy holds the same entries (the ledger's 111 avoided slots), so no decision changes; measured: nothing (12.9).
+    The cut's units still share their task's table: they are fed in T order to workers made for the cut run, so the
+    table can hold only entries made from bars at or before the current target.
   - The uncut decision ("want") is made in the main thread from the run's own signals (`decisionOfClassified`). A
     unit returns its decision only when it differs from want. The check then replays the units in its own order
     (target by target, trial by trial; probe by probe) and does there everything its loop did: `compared`, the
@@ -1367,6 +1397,14 @@ export function assertTaskAllowed(task: UnitTask, chk: CheckInputs, where: strin
         snapshot at each run (`shipOf`), as before. By the spec, poison's and presence's inputs hold the bars after T.
       - Every worker of both pools is started with `deno: { permissions: "none" }`. A par worker also refuses to serve
         if any permission reads `granted` (`notSandboxed`).
+        - (C4h, 2026-11-11; C4g's review, the lead's F2) That test queried each permission without a path. Under the
+          program's real flags (`--allow-read=. --allow-write=<OUT>`) such a query reads "prompt" in a worker that
+          inherited them too, so a worker started without "none" would have served (C4g's refuter). Now every
+          "universe" message carries the main thread's grants (`lawsearch-sandbox.ts` `grantsHeld`: each path-less
+          name, and read and write on `.`, the run folder and the dump folder, that read "granted" there), and the
+          worker throws before it takes the universe if any of them, or any path-less name, reads "granted" in its
+          realm (`refusalOf`); the run stops (exit 1). Path-scoped queries read "prompt" in a "none" worker. The
+          follow-bar worker (7.7 `followInWorker`) does the same with its one message. Proof: 12.9 F2.
       - The answers are still replayed in the check's order, so the bytes do not depend on where or when a unit ran
         (12 rule 3, and its condition). Why the two pools differ, what each keeps by construction, and what stays open:
         12.7.
@@ -1671,6 +1709,16 @@ The other environment variables:
     started when the revoke came lost it (`c4g/integ/perm/` in the C4g scratch folder). So the settings are read, and
     env revoked, before any worker exists. No audit checks that order; an edit that starts a worker earlier would
     reopen the environment to it (12.7, residual 5).
+    - (C4h, 2026-11-11; C4g's review, the lead's F2) **That paragraph was wrong; the order is not what keeps env from
+      the checks.** C4g's refuter measured (`c4g/refute-power-2` in the C4g scratch folder, Deno 2.9.6): a worker
+      started with `deno: { permissions: "none" }` gets `NotCapable` for `Deno.env` whenever it is made, 20 of 20
+      before the revoke and 3 of 3 with no revoke at all; and an inheriting worker that was already running and
+      reading env got `NotCapable` at the moment of the revoke. The "2 of 3" was an inheriting worker's read that ran
+      before the revoke statement, not a worker keeping env. What the revoke does: it closes env for the main thread,
+      and at once for any worker that inherits the main thread's permissions. The program's workers never hold env,
+      because they are started with "none"; since C4h each of them tests that at run time and refuses to serve when it
+      holds any of the main thread's grants (12.9 F2). So no edit of the order can reopen env to them; an edit that
+      drops "none" stops the run (exit 1).
   - The refusals and their messages are unchanged, and so is their order: only the reads moved. A refusal probe with
     `--allow-env` only (7.8 hand steps 7 and 8) still meets its first file read as `NotCapable`, exit 1.
 - `TRIALS` (default TRIAL_STEP3);
@@ -1872,7 +1920,10 @@ from there, and the loads named in items 2–4 are those loads.
     `exit 7: a universe changed after it was loaded; <folder> was removed`.
   - The end line now reads `identity checks and allow-lists … ms (<n>)`, and `[lawsearch pools] {…}` follows it.
 - (C4g) `main()`'s first lines print one stderr line: `[lawsearch] lockdown: removed <names>; <n> constant objects
-  frozen; env read and revoked`. On the main thread it names BroadcastChannel, caches, CacheStorage, Cache,
+  frozen; env read and revoked`. (C4h, 2026-11-11) It now reads `[lawsearch] lockdown: removed <names>; frozen
+  Worker.prototype, EventTarget.prototype, globalThis.Worker (pinned); <n> constant objects frozen; env read and
+  revoked` (12.9 F7), and the pools' line ends `…; every worker must not hold: <the main thread's grants>` (F2). Both
+  are stderr only: no output file names them. On the main thread it names BroadcastChannel, caches, CacheStorage, Cache,
   localStorage, sessionStorage, Storage, navigator, Navigator, process, Deno.kill, Deno.addSignalListener,
   Deno.removeSignalListener and Deno[Deno.internal], and 77 objects frozen (12.7 G3).
 
@@ -1888,7 +1939,8 @@ and the lead sets it after the trial passes.
   and `Function` throw an `EvalError` in every realm. An unknown V8 flag stops Deno at its start, which is fail closed
   too.
 - `--allow-read=.` and `--allow-env`, as before. The environment is revoked by the program itself after the settings
-  are read (above). The checks' workers have no permission at all.
+  are read (above). The checks' workers have no permission at all. (C4h, 2026-11-11) And each of them refuses to serve
+  when it holds one of the main thread's grants (12.9 F2).
 - Write: `DENO_RUN` keeps `--allow-write=research/out`. `DENO_WALK` has no write grant, and each step that uses it
   adds `--allow-write=<the run's own folder>`: a walkfiles run's dump folder, or a syn run's run folder, which holds
   its gmo files and its dumps.
@@ -1897,6 +1949,10 @@ and the lead sets it after the trial passes.
     `c4g/integ/perm/revoke.txt`). So the narrowing is done by the flags.
   - Write cannot go below the run's own folder, because `writeRun` and the dumps need it. Main-run code can still
     write there, and it can read everything under `.` (12.7, residual 6).
+  - (C4h, 2026-11-11; C4g's review, the lead's F8) A `MODE=syn` run needs no more than `--allow-write=<OUT>` either: its
+    run folder is OUT (its gmo files and `manifest.json`, then its dumps in `OUT/ts`). C4g's refuter measured it with no
+    `research/out` folder at the start, and C4h's smoke-step run did the same (12.9 F8). The yml's comment above
+    `DENO_WALK` said a syn run still needed `research/out`; it is corrected.
 
 ### 7.8 `.github/workflows/lawsearch.yml`
 
@@ -1909,11 +1965,25 @@ on:
   workflow_dispatch:
 permissions: { contents: read }
 jobs:
-  hand:     # deno check; the stage-0 graph; the realms' graph, source and catch audits (C4g); TS hand; Python hand; the hand plants; no read through a memory block (C4e; widened C4f); real modes, CUT_MAX, WORKERS refused
+  hand:     # deno check; the stage-0 graph; the realms' graph, source and catch audits (C4g); the push paths cover the graphs, the main realm's freeze (C4h); TS hand; Python hand; the hand plants; no read through a memory block (C4e; widened C4f); real modes, CUT_MAX, WORKERS refused
   syn:      # needs hand; matrix of 10's runs (+ w0-n-1001, C4e); TS syn → Python --run (recompute + compare); the run plants; WORKERS=0 vs 4 (three jobs; + cmp-c-7101's lastBarStateG3, C4f); uploads research/out/lawsearch/** as an artifact
   flip:     # (described in step 5 below)
   plants-c4g:  # (C4g) needs hand; its own C 7101 (MODE=syn); the seven C4g run plants, each wanting its exit and its catch; an artifact
   smoke:    # SMOKE 7001–7004, only with the repository variable LS_SMOKE_STRENGTH
+```
+
+(C4h, 2026-11-11) And a second workflow, `.github/workflows/lawsearch-audit.yml` (hand steps 13 and 14 below):
+
+```yaml
+name: Research lawsearch (audits of the shared modules)
+on:
+  push:
+    branches: [claude/app-confirmation-jvmk03]
+    paths: [.github/workflows/lawsearch-audit.yml, the 42 modules of the four graphs outside lawsearch.yml's paths]
+  workflow_dispatch:
+permissions: { contents: read }
+jobs:
+  audit:    # deno check; the stage-0 graph; the graph, source and catch audits; the push paths cover the graphs; TS hand
 ```
 
 (C4g, 2026-11-10; the lead's G1 and G3) The workflow's `env` now holds two run commands besides `WORKERS: "4"`:
@@ -1925,6 +1995,10 @@ jobs:
 Every syn, flip and plant run step uses `DENO_WALK` plus `--allow-write=<its own folder>`. So do the `WORKERS=0` step's
 two runs and `plants-c4g`'s runs, except `gmoWriteR` (below). The hand job's `MODE=hand` steps and the real-mode step
 use `DENO_RUN`. The flip judgement has no write grant (7.9). What the flags do: 7.7, the end.
+(C4h, 2026-11-11; C4g's review, a ci-docs refuter; the lead's F8) That list missed one step: the smoke job's "TS
+(MODE=syn, provisional strength)" still ran `$DENO_RUN`, with the broad grant on `research/out`. It now runs `$DENO_WALK
+--allow-write=$OUT`, as every other run step. So `DENO_RUN` is used by the hand job's steps (which write nothing) and by
+`gmoWriteR` alone. The comment above `DENO_WALK` in the yml is corrected too (7.7's C4h bullet on write).
 
 - **hand**:
   1. `deno check` on every `research/lawsearch*.ts`.
@@ -2068,6 +2142,15 @@ use `DENO_RUN`. The flip judgement has no write grant (7.9). What the flags do: 
           `research/ledger`, with no error, no dynamic import, and every dependency a module of the graph. So there is
           no JSON or other data module, and no remote, `npm:` or `node:` module;
         - each entry's first two imports are `./lawsearch-lockdown.ts` and then `./lawsearch-frozen.ts`;
+          - (C4h, 2026-11-11; C4g's review, the ci-docs reviewer, reproduced by a refuter; the lead's F4) counted as an ES
+            module evaluates them: every value module request in source order, re-exports included (`import … from`,
+            `import "…"`, `export … from`, `export * from`; `import type` and `export type` are skipped), read twice,
+            from the source text (`SOURCE_REQUEST`, the refuter's fixed pattern) and from `deno info`'s own parse of
+            the entry (its dependencies that have a `code` specifier, by the position of the request), and both must
+            say lockdown, then frozen. C4g's pattern read `import` lines only, so `export { followValues as fv } from
+            "./lawsearch-trade.ts";` or `export * from "./lawsearch-trade.ts";` above the lockdown passed, while ES
+            evaluation ran the trade module's whole graph first (the refuter saw `lawsearch-events.ts` capture
+            CacheStorage before the lockdown deleted it). Shown in 12.9 F4;
         - `lawsearch-lockdown.ts` imports nothing;
         - `lawsearch-frozen.ts`'s graph holds no lawsearch module but `lawsearch-const.ts`, `lawsearch-rules.ts` and
           `lawsearch-types.ts`;
@@ -2106,6 +2189,37 @@ use `DENO_RUN`. The flip judgement has no write grant (7.9). What the flags do: 
     - a worker entry without the lockdown first → graph.
 
     On the final code all three steps exit 0.
+  13. (C4h, 2026-11-11; C4g's review, the ci-docs reviewer, reproduced by a refuter; the lead's F5) **Every module of
+      the four graphs is in a push path of `lawsearch.yml` or `lawsearch-audit.yml`.** `research/lawsearch-audit.ts
+      trigger` reads both workflows' `on.push.paths` (the plain list form; GitHub's filter patterns, `*` not crossing
+      `/` and `**` crossing it; a pattern with any other special character is refused, not guessed) and fails when a
+      module of the graphs (step 10's `graph-*.json`) is matched by neither. It prints a path of `lawsearch-audit.yml`
+      that matches no module, as information.
+      - Why. This workflow runs only on a change to `research/lawsearch*`, `research/money-stats.ts` or itself, but
+        the guarantees of 12.7 rest on the text of modules the program shares with other code: `trend-data.ts`'s read
+        through `src.read`, `ownerhold-data.ts`'s `Source`, `CATCH_ALLOW`'s pinned lines of `trend-data.ts`,
+        `ownerhold-data.ts` and `trend-labels.ts`, who imports `trend-stats.ts` and `bigflow-lib.ts`, and `quotes.ts`'
+        frozen maps. 42 of the graphs' 67 modules are outside this workflow's paths (C4h's count). A change to one of
+        them ran no audit until the next lawsearch push. `.github/workflows/lawsearch-audit.yml` (below) now runs the
+        cheap audits on such a push, and this step keeps its list from going stale.
+  14. (C4h, 2026-11-11; C4g's review, the power reviewer, reproduced by a refuter; the lead's F7; outside the threat
+      model) **The main realm's freeze refuses the relay hooks.** `research/lawsearch-audit.ts relay` evaluates
+      `lawsearch-lockdown.ts` and wants each of four hooks refused with a `TypeError`: wrapping
+      `Worker.prototype.postMessage`, redefining its `onmessage` setter, replacing `globalThis.Worker`, and wrapping
+      `EventTarget.prototype.addEventListener`. Step 10 shows that the lockdown is the first module request of every
+      entry, so these hold in the program's main realm. Seconds. On 12ee6d2's lockdown the step exits 1 (none is
+      refused); on C4h's it exits 0 (12.9 F7).
+
+  (C4h, 2026-11-11) In the yml, steps 13 and 14 run right after step 12, before step 3.
+- (C4h, 2026-11-11; the lead's F5) **`.github/workflows/lawsearch-audit.yml`**, a workflow of its own (one job,
+  `audit`, timeout 30 minutes, Deno only). It runs on a push to the branch that changes any of the 42 modules of the
+  four graphs outside `lawsearch.yml`'s paths (each listed by name, from `deno info --json`; and itself), and on
+  `workflow_dispatch`. Its steps are `lawsearch.yml`'s hand steps 1, 2, 10, 11, 12 and 13, then `MODE=hand` (step 3).
+  It starts none of the multi-hour runs: a change that the audits pass but that changes the program's output is seen
+  by the next `lawsearch.yml` run. Hand step 13 runs in both workflows, so a new import of a module that neither list
+  names fails the push that adds it (when the importing module is listed) or the next lawsearch push. Shown with
+  mutated copies in 12.9 F5: `trend-data.ts`'s read put back to `Deno.readTextFile` fails the catch step; a module
+  taken out of the list, or a new module imported by a listed one, fails step 13.
 - (C4b, 2026-11-05; written here C4c, 2026-11-07) The workflow sets `WORKERS: "4"` for every job (GitHub's
   `ubuntu-latest` runner has 4 vCPUs), so every run step's checks run their units on 4 workers. No step compares two
   `WORKERS` values: that the bytes do not depend on it (12 rule 3) is shown by local runs (12.1).
@@ -2484,6 +2598,16 @@ use `DENO_RUN`. The flip judgement has no write grant (7.9). What the flags do: 
     - `rp2EnvE04`, `WORKERS=4`: exit 1, a line `NotCapable: Requires env access to "RP2E04_…`, no print.txt.
     - `avoidStashR3call`: exit 3, a failed `cut` or `presence` row in checks.csv (printed), stage 2 not opened (no
       stage2.csv, no `syn2` row in load.csv).
+      - (C4h, 2026-11-11; C4g's review, both reviewers, reproduced by a refuter; the lead's F1) **In C4g the row test
+        could never fail.** The line was `grep -E ",(cut|presence),0," … | cut -c1-160 || {…}`. A step with no
+        `shell:` runs as `bash -e`, without `pipefail`, so the pipeline's status was `cut`'s, always 0: only the exit
+        and stage 2 were enforced. Now `grep -q` decides, and the rows are printed after it. No other line of the yml
+        has that form (C4h checked every `| … ||` and `if … | …`: the others test the right command or use process
+        substitution). Shown with the extracted step and a fake deno replaying C4g's kept plant outputs (12.9 F1).
+      - (C4h; the lead's F3) Its presence failures halve: m15 E04.F00 186 → 93, E04.F01 190 → 95, E26.F00 192 → 96,
+        E26.F01 182 → 91, S01 174 → 87, B06 178 → 89; h1 190 → 95, 156 → 78, 192 → 96, 186 → 93, 186 → 93, 194 → 97.
+        The cut rows (m15.S01 24, h1.E26.F00 1, h1.S01 16), every poison row and cut_fail.csv are unchanged, and the
+        exit is still 3 (8, 12.9 F3).
     - `lenmemoEntryEarly`: exit 3, and the rows `*,follow-bars m15 first,0,` and `*,follow-bars h1 first,0,` in
       checks.csv.
     - `judgeListen2E04`: exit 3, a failed `cut` row of an E04.F00 or E04.F01 trial in checks.csv, a stage-0 cut row of
@@ -2511,6 +2635,7 @@ use `DENO_RUN`. The flip judgement has no write grant (7.9). What the flags do: 
       missed there: `rp2EnvE04`, `judgeListen2E04`, `judgeCacheCarryE04` (its run 2), `w0protoG3` and `gmoWriteR`.
       `lenmemoEntryEarly`'s follow-bars test failed too. Only `avoidStashR3call` was caught, by H1 (8).
   - Its local time is about 1.3 h (12.8). It has not run on GitHub.
+  - (C4h, 2026-11-11) C4h's run of the step, verbatim from the C4h yml, alone, and its time: 12.9.
 - (C3, 2026-11-05; the lead's D5) No step sets `CUT_MAX` (the builder checks the yml); the Python's `--run` refuses a
   capped run (exit 2). (C4b, 2026-11-05) Except hand step 7 (the lead's E13), which sets only invalid values and
   expects the refusal; no run step sets it. The Python's `--compare` refuses a capped run too (the lead's E14;
@@ -2614,7 +2739,7 @@ required now.
 | `avoidStashR3` (C4f, 2026-11-08; C4e's review: the power reviewer's `avoidStashR3`, the power refuter's `rs-wt`; the lead's H4; the reviewer's name) | B: reasonOf (③), every trial | ③ computed on `reasonUsesFuture`'s window (the holes after T), its answer kept in the `ExclCtx`'s avoid table as an entry `plant:r3:<pair>:<tf>:<T>:<0 or 1>` and read from there first. A look-ahead kept in the avoid table, which until C4f every check unit shared with the main run (a worker got a clone with the entries) | `CMP-C 7101`: exit 1 in stage 0's main part: the read-only avoid table (H2; 5.3) throws `Error: the avoid table is read-only: add refused`; no print.txt (7.8 syn step 3). H1 alone: exit 3, the cut fails on m15.S01, h1.E26.F00 and h1.S01 (`reasonUsesFuture`'s rows) and presence on all 12 trials. fcce9e6: exit 0, every check passed and stage 2 opened: missed. A write by `Set.prototype.add.call`, which passes H2, is caught by H1 on the full C4f code (7.8 syn step 3, `rp3by`). Not run on b3a2c43 (C4e's reviewers report the same miss; not measured) |
 | `chosenCutSecondDiff` (C4f, 2026-11-08; the C4e docs writer's observation; the lead's H8, who gave the name as an example; taken by the C4f integrator) | D: cutCheck (check `cut.chosen.second` only) | as `chosenCutFirstDiff`, in `cut.chosen.second`: the cut decision of the first target of the first chosen trial (table order) gets a planted mark, so one bar of that chosen trial differs; nothing else changes | 7.7's D9 path end to end on `CMP-N 1001` (it opens stage 2 and chooses m15.E04.F01, m15.B06 and h1.B06): exit 3; `cut.chosen.second` failed on m15.E04.F01 (1 of 94,869, stage `stage2`), its bar in cut_fail.csv; print.txt has `withheld.stage2=1` and no verdict line; stage2.csv is written; stages 0 and 1 are not withheld and `K_total` is shown (7.8 syn step 3). The first run plant that fails `cut.chosen.second` |
 | `rp2EnvE04` (C4g, 2026-11-10; C4f's review, the refuter's; the lead's G5) | B: candidatesOf (spec 5's walk), E04's trials only; `rp2EnvSigns` (`lawsearch-events.ts`) | `bufferReadE04`'s drop rule, with the next close's sign per bar slot kept in the process environment (`RP2E04_<pi>_<key>`): written by the first call (the main run's, on its whole series), read by every later call in any realm. The ENVIRONMENT channel | the job `plants-c4g` (7.8): exit 1, `NotCapable: Requires env access to "RP2E04_…"` at the main run's first `Deno.env.get` (the environment is revoked after the settings are read, 7.7), no print.txt (only config.json). b322c13: exit 0, every check passed, no trial chosen (the clean run chooses h1.E04.F00): **missed** |
-| `avoidStashR3call` (C4g; C4f's review, the refuter's "rp4 call"; the lead's G5) | B: reasonOf (③), every trial | `avoidStashR3` with its entry written by `Set.prototype.add.call` and read by `Set.prototype.has.call`, past the read-only avoid table (H2). The avoid-table channel, by a write H2 does not stop: it tests H1's separation in CI | `plants-c4g`: exit 3. The cut fails on m15.S01 (24), h1.E26.F00 (1) and h1.S01 (16) (`reasonUsesFuture`'s rows), presence on all 12 trials (156–194 of 200), and stage 2 is not opened. b322c13: the same exit and rows (H1 was there already). It is in CI so that the job fails if H1's separate avoid table is ever lost. The presence counts equal C4f's for `rp3by`, so they come from the main run's wrong rows compared in the main thread, not from carry between units (12.7) |
+| `avoidStashR3call` (C4g; C4f's review, the refuter's "rp4 call"; the lead's G5) | B: reasonOf (③), every trial | `avoidStashR3` with its entry written by `Set.prototype.add.call` and read by `Set.prototype.has.call`, past the read-only avoid table (H2). The avoid-table channel, by a write H2 does not stop: it tests H1's separation in CI | `plants-c4g`: exit 3. The cut fails on m15.S01 (24), h1.E26.F00 (1) and h1.S01 (16) (`reasonUsesFuture`'s rows), presence on all 12 trials (156–194 of 200), and stage 2 is not opened. b322c13: the same exit and rows (H1 was there already). It is in CI so that the job fails if H1's separate avoid table is ever lost. The presence counts equal C4f's for `rp3by`, so they come from the main run's wrong rows compared in the main thread, not from carry between units (12.7). (C4h, 2026-11-11; C4g's review, the lead's F3) **That last sentence was wrong for half of each count.** Equal counts on b322c13 could not rule carry out: C4f's pool workers were long-lived too. C4g's refuter measured it: of 1,107 presence hits, 1,100 were variant (ii) reading the answer variant (i) of the same job had written into the task's shared table (6 crossed trials, 1 was equal). The (i) half is the main run's wrong rows (true detection); every (ii) failure was carry. Since C4h each poison and presence unit has its own copy of the table, and C4h measured: the presence counts halve exactly (m15 186/190/192/182/174/178 → 93/95/96/91/87/89, h1 190/156/192/186/186/194 → 95/78/96/93/93/97), no (ii) row is left, the cut rows, poison rows and cut_fail.csv are unchanged, and the exit is still 3. The yml's test (a failed cut or presence row, exit 3, stage 2 not opened) is unchanged, and since C4h it is enforced (7.8, F1) |
 | `lenmemoEntryEarly` (C4g; C4f's review, the refuter's `lenmemo` with `entryEarly`; the lead's G5) | C: tradeOf, valuesAt (`lawsearch-trade.ts`) | `entryEarly`'s j − 1, with a module-level memo of `valuesAt` keyed by the pair, the series key, the entry and exit bars' closes and the direction, switched on by the plant's first trade in a realm and read back on series longer than 16 bars (6.1). MODULE STATE reaching a check that ran in the main thread | `plants-c4g`: exit 3; `follow-bars m15 first` and `h1 first` fail, with (i) changed on all 273,528 m15 and 60,660 h1 rows (the follow-bar check now runs in a worker of its own, where no trade has run). `suspect13.retrace.stage1` fails on 9 trials too, on b322c13 as here. b322c13: exit 3 by the retrace alone; follow-bars passed with 0 changed rows (the main run's memo answered the check): **missed** by its named check |
 | `judgeListen2E04` (C4g; the C4g power judge's; the lead's G5) | B: candidatesOf, E04's trials only; a `message` listener added at the module's evaluation (`lawsearch-events.ts` `LISTEN_BANK`, `listenNext`) | `bufferReadE04`'s drop rule, with the next close taken from the series of the latest `universe` message the realm received (in a par worker: the universe its pool sent it), or from the series itself where none holds it (the main run). No built-in is changed. A listener keeping what a worker is SENT | `plants-c4g`: exit 3; the cut fails on all four E04 trials (m15.E04.F00 277, F01 17, h1.E04.F00 295, F01 27 rows), stage 2 not opened. Poison and presence pass on all four: by the spec their workers get the whole universe (12.7, residual 1). b322c13 (every worker sent the whole uncut universe): exit 0, every check passed: **missed** |
 | `judgeCacheCarryE04` (C4g; the C4g power judge's; the C4g integrator rewrote its helper for speed, 5.3; the lead's G5) | B: candidatesOf, E04's trials only; `jccSigns` | `bufferReadE04`'s drop rule, with the next close's sign per (pair, timeframe, bar start) memoised forward from every E04 series a realm sees, in a module `Map` and in CacheStorage (read back at the module's evaluation; in Deno 2.9.6 shared by the workers of one entry module, within a process and across processes, on disk). STATE CARRIED between units, check runs and processes | `plants-c4g`, run twice: exit 3 both times; the cut fails on the four E04 trials (277/17/295/27) and run 2's cut_fail.csv is run 1's, byte for byte (the lockdown deletes CacheStorage; cut workers are fresh per cut run). Presence also fails on h1.E04.F00, 2 of 200, in all four runs; the count stays, but the bar it names varies (the memo carried between presence units of the kept probe pool: 12.7, residual 2). b322c13: run 1 exit 3 (the cut; presence passed, its workers reading the main run's memo from CacheStorage); run 2 exit 0, no cut row (its cut workers read run 1's memo): **missed** |
@@ -3064,20 +3189,50 @@ that path end to end (the table above; 7.8 syn step 3). Stage 2's `suspect13` ch
     - `lawsearch-par-worker.ts` refuses to serve when any permission reads `granted` (`notSandboxed`), so a Deno that
       ignored `deno: { permissions: "none" }` would fail closed there. `lawsearch-follow-worker.ts` has no such check.
       It is started with the same option, and the same flag is needed. Whether to add the check is the lead's choice.
+      - (C4h, 2026-11-11) The first sentence was wrong under the program's flags: `notSandboxed` queried without a
+        path, which reads "prompt" in an inheriting worker under `--allow-read=.`, so it would have served (C4g's
+        refuter). The lead's F2: both workers now test the main thread's own grants, path-scoped (7.3, 12.7 G2, 12.9).
     - No audit checks two facts that 12.7 rests on:
       - that `readSettings` runs before any worker is made (residual 5);
       - that the shared functions the main thread's checks run (`stratumOf`, `jstDayKey`, and `entryExitIndex` on the
         main side) stay free of state.
+      - (C4h, 2026-11-11) The first is not needed: the order does not keep env from the workers ("none" does, 12.7
+        residual 5's C4h note). The lead decided the second stays a documented residual, with no new audit.
 
       An edit that breaks either would bring a channel back unseen. A narrow audit, such as an allow-list of the
       shared functions `lawsearch-checks.ts` may call in the main thread, could be added.
     - `trend-data.ts` and `ownerhold-data.ts` gained an optional `read`. With none given they behave as before, but
       their other callers (the weekly (b) routine and other research) were not run in C4g (the header of this file).
+      - (C4h, 2026-11-11) The lead checked them: the weekly (b) program does not load `trend-data.ts`, and a `bsyn` run
+        and `loadTf` over 22,040 synthetic files were byte-identical on b322c13 and C4g. No action.
     - `WORKERS=0` and `WORKERS=1` now run exactly alike. The refusal, the yml and the step names still speak of `0`
       (7.7, 7.8). Nothing is wrong, but the two names mean one thing now.
   - `lawsearch-dump.md`: section 1's bullet on the TS endings now says exit 7, and section 2's plant bullet names the
     C4g plants and their exits, and that `gmoWriteR` writes into the run's own gmo folder during the run and writes it
     back. No compared file or field changes its meaning, and the Python is not affected: its 5 and 6 are its own.
+  - No spec question.
+- **O-18 for the lead** (C4h, 2026-11-11). The sources were C4g's review (two reviewers, nine findings, eight distinct;
+  each reproduced from scratch by a refuter) and the lead's F1–F8 on it. 12.9 holds every proof.
+  - Done as the lead decided:
+    - F1: the `plants-c4g` row test of `avoidStashR3call` is enforced (`grep -q`); no other dead `| … ||` in the yml
+      (7.8).
+    - F2: both check workers refuse to serve when they hold any of the main thread's grants (`lawsearch-sandbox.ts`);
+      the sentences that credited the revoke's order are corrected (2.4, 7.3, 7.7, 12.7 G1, G2, residual 5).
+    - F3: a read-only copy of the avoid table per poison and presence unit, adopted because the paired timer shows
+      nothing measurable; `avoidStashR3call`'s presence counts halve (8); the task-level objects are tabled (12.9).
+    - F4: the graph audit counts re-exports, from the source text and from `deno info` (7.8 hand step 10).
+    - F5: the new workflow `lawsearch-audit.yml` and hand step 13 (7.8).
+    - F6: residual 6's wording (12.7).
+    - F7: the main realm's freeze of `Worker.prototype` and `EventTarget.prototype` and the pinned `Worker`, with hand
+      step 14 (12.7 G3, residual 10); not as a run plant.
+    - F8: the comment above `DENO_WALK` and the smoke step's grant (7.7, 7.8).
+    - The lead's decisions on the C4g docs writer's questions are written where they apply: the kept probe pool stays
+      a documented residual (12.7 residual 2), `stratumOf` and `jstDayKey` staying state-free stays a documented
+      residual with no new audit, and the shared loaders' other callers need no action (the C4g block above).
+  - To confirm: the module name `lawsearch-sandbox.ts`, the workflow `lawsearch-audit.yml` and its 42 paths, the two new
+    hand steps; the cost and CI time (12.9: @@O18TIME@@).
+  - `lawsearch-dump.md` is not changed: no output's format or meaning changes (one plant's rows change their counts,
+    and that plant's files are never compared with the Python's).
   - No spec question.
 
 ---
@@ -3871,6 +4026,10 @@ These are not regressions: they are the same in b3a2c43 and in both of C4c's des
        land in the main run's table, which the checks never read (H1), so the cut and presence fail. Inside a check's
        own table such a write keeps only that check's own answers, on one side and in one realm. That is still not
        enforced, but it can carry no main-run answer.
+       - (C4h, 2026-11-11; the lead's F3) It could carry one check unit's answer to a later unit, though: half of
+         `avoidStashR3call`'s presence failures were variant (ii) reading variant (i)'s entry (8). Since C4h each
+         poison and presence unit writes only into its own copy (7.3 `unitAvoidOf`); the cut's units share their task's
+         table, which in T order holds entries made from bars at or before the current target only (12.9 F3).
      - The holes' typed arrays are unchanged.
 
      The first premise is unchanged.
@@ -3971,6 +4130,15 @@ These are not regressions: they are the same in b3a2c43 and in both of C4c's des
        one in the same worker of the same run, plus whatever shared channel Deno has that the lockdown does not delete
        (12.7, residuals 2 and 4). Its effect on rule 3 is that poison's and presence's bytes can depend on `WORKERS`
        and on timing when the code keeps such state (measured, 12.7). Clean code is unaffected.
+     - (C4h, 2026-11-11; C4g's review, the power reviewer, reproduced by a refuter; the lead's F3) **The framing above
+       ("state not held in an object handed to the code") left out a route: the task object a worker is handed.** A
+       check run's task (its trials, its avoid table, `answerKnowing`, the plant) is one object per worker, read by
+       every unit of that run there, and its avoid table could be written through `Set.prototype.add.call` past
+       `readOnlySet`. That was measured as carry: half of `avoidStashR3call`'s presence failures (8). C4h gives each
+       poison and presence unit its own read-only copy of the table, so that route is closed (7.3 `unitAvoidOf`). The
+       other task-level objects a probe worker's units share are tabled in 12.9 F3, with which can still carry: the
+       cached `ExclCtx`'s holes (typed arrays, writable), the poison tables, and the universe `u` (typed arrays,
+       writable) can; the frozen task, trial list and trials cannot.
      - The 40 E items will run through this code. For the cut they can keep any state without hiding a look-ahead.
        For poison and presence, state kept across units can still hide a naive one, but never from the cut.
 3. **To confirm:** the plant names `lastBarStateG3` and `lastBarStateG5` (8; the names of both C4c designers), and
@@ -4290,6 +4458,12 @@ The files are in the C4g scratch folder: `c4g/design-final.json`, `c4g/design-{s
   - The order matters. A worker made before the revoke keeps env: the C4g integrator saw it in 2 of 3 tries, so it is
     a race. A worker that had already started lost it. So the settings are read and env is revoked before any worker
     exists.
+    - (C4h, 2026-11-11; C4g's review, the lead's F2) **Wrong: the order is not what keeps env from the checks.** A
+      worker started with `permissions: "none"` never holds env, whenever it is made, even with no revoke at all (C4g's
+      refuter, `c4g/refute-power-2`: 20 of 20, and 3 of 3 without a revoke). An inheriting worker loses env at the
+      moment of the revoke, even one already running; the "2 of 3" was its read before the revoke statement ran. The
+      revoke closes env for the main thread, and at once for any inheriting worker. The program's workers are all
+      "none", and since C4h each one refuses to serve when it holds any of the main thread's grants (G2's C4h bullet).
   - `rp2EnvE04` now stops at the main run's first `Deno.env.get` (exit 1). On b322c13 it passed every check.
 - **The gate-3 bytes.** Gate 3 reads every gmo file once (`treeBytes`), and the manifest's digest is taken of exactly
   those bytes. Then, before any main-run code, the three stages' universes are loaded from those bytes and kept (their
@@ -4306,6 +4480,16 @@ The files are in the C4g scratch folder: `c4g/design-final.json`, `c4g/design-{s
 
 Every worker is started with `deno: { permissions: "none" }` (needs `--unstable-worker-options`; without it Deno 2.9.6
 exits 70 at the first check run: fail closed). Its entry imports the lockdown and the frozen constants first (G3).
+(C4h, 2026-11-11; C4g's review, the lead's F2) **"none" is now tested in every worker, under the program's real flags.**
+C4g's par worker queried each permission without a path (`notSandboxed`); under `--allow-read=. --allow-write=<OUT>` that
+reads "prompt" in an inheriting worker too, so a worker started without "none" served (C4g's refuter ran the real par
+worker so), and the follow-bar worker had no test at all. Now the main thread lists the grants it holds
+(`lawsearch-sandbox.ts` `grantsHeld`: each path-less name, and read and write on `.`, the run folder and the dump folder,
+that read "granted" there) and sends them with its first message to every worker; a worker refuses to serve when any of
+them, or any path-less name, reads "granted" in its realm (`refusalOf`). A path-scoped query reads "granted" in an
+inheriting worker and "prompt" in a "none" one. Shown with the real workers under the CI flags, and end to end with
+copies whose `new Worker` lines lost "none": each run stops with `… not sandboxed (granted here: read ".", …)`, exit 1
+(12.9 F2).
 
 - **The cut** (12.1 item 15). A pool is made for each cut run and ended with it. There is one target per job, and the
   jobs are sent in T order. The worker first gets the universe without bars, then each job's new bars only. Jobs carry
@@ -4337,7 +4521,7 @@ answer side.
 | check | where it runs | why (the decision) | evidence |
 |---|---|---|---|
 | the units of `cut`, `cut.chosen.first`, `cut.chosen.second`, `suspect13.cut.*` | a cut pool's worker (fresh per cut run, deltas, T order, one target per job, no want) | they run shared code (`candidatesOf`, `reasonOf`, `indOf`): moved into a realm that never held a later bar | `lawsearch-par.ts`, `-par-worker.ts`. Every dump byte-equal (12.1). `judgeListen2E04`, `judgeCacheCarryE04` (run 2) and `w0protoG3` at `WORKERS=0` missed on b322c13 and caught here. `[lawsearch pools]` on clean C 7101: 4 cut runs, 16 cut spawns |
-| the units of `poison`, `presence`, `suspect13.poison1000.*`, `suspect13.presence.*` | the probe pool's workers (kept for the run, no want) | they run shared code: moved into workers no main-run code touched. By the spec their inputs hold the future, so not by construction (residuals 1, 2) | `judgeListen2E04` passes them (the residual by the spec). `judgeCacheCarryE04`'s presence row shows the carry (2 of 200, the bar varying). `avoidStashR3call`'s presence failures equal C4f's for `rp3by`, so they are the main run's wrong rows, not carry |
+| the units of `poison`, `presence`, `suspect13.poison1000.*`, `suspect13.presence.*` | the probe pool's workers (kept for the run, no want) | they run shared code: moved into workers no main-run code touched. By the spec their inputs hold the future, so not by construction (residuals 1, 2) | `judgeListen2E04` passes them (the residual by the spec). `judgeCacheCarryE04`'s presence row shows the carry (2 of 200, the bar varying). `avoidStashR3call`'s presence failures equal C4f's for `rp3by`, so they are the main run's wrong rows, not carry. (C4h, 2026-11-11; the lead's F3) **Half of them were carry**: variant (ii) read variant (i)'s answer from the task's shared avoid table (C4g's refuter: 1,100 of 1,107 hits). Since C4h each poison and presence unit has its own copy of the table, and every count halves (186 → 93 …, 8); the other half is the main run's wrong rows |
 | `follow-bars` (m15 and h1, stages 1 and 2) | a fresh worker per call (`lawsearch-follow-worker.ts`); the comparison in the main thread | it runs shared code (`valuesAt`, `windowSeries`, `poisonBars`): moved; the worker gets coordinates only | `lenmemoEntryEarly`: caught here, missed by its named check on b322c13. The CheckResult strings are the old ones (every dump byte-equal) |
 | the gates: the rules files (`checkRulesFiles`), the manifest's tree digest, the avoid table's sha256 | the main thread, before any main-run code | nothing of the main run exists yet | gate rows of every run's checks.csv and print.txt equal C4f's; the refusal steps pass |
 | `data.syn0/1/2` and `h1Only` | the main thread | plain reads of the snapshot: `dataCheck` lists the snapshot's own load problems; `h1OnlyCheck` compares T with SPLIT | in `gmoWriteR` the snapshot keeps 113.217 while the disk holds 113.218 |
@@ -4349,7 +4533,7 @@ answer side.
 | the entry-bar sub-check of the cut checks | the main thread | the check side is a plain loop over the snapshot's starts; the main side is `entryExitIndex`, the main run's own function, which belongs where the main run's state is | every dump byte-equal |
 | `suspect13.retrace` | the main thread | it reads the gate-3 bytes (`readOf`, never the disk) and runs `jstDayKey` (pure), `POINTS_PER_PRICE`, `MID_DIGITS` and the frozen GMO maps | `retraceCheck(read, …)`; O 6001–6004 equal C4f's and the yml's O step passes. No run that writes the disk has a spec 13 hit (C 7101 has none), so that the retrace cannot see such a write rests on the code (`readOf`), not on a run |
 | `sameFirstHalf`, `addsUp`, `print` | the main thread | they compare main-run results with each other, or print keys with the frozen `PRINT_KEYS` | every dump equal |
-| the guard: H1's separation, the task allow-list, H2, H3 | the main thread | identities and digests, before and after the main run's parts | `seriesStashE04` exit 7 in 24 s; `trialStashE04` and `avoidStashR3` exit 1; `avoidStashR3call` exit 3 (H1). Per clean C 7101 run: digests 2.5–2.9 s (21), snapshots about 0.3 s, identity checks and allow-lists 8–21 ms |
+| the guard: H1's separation, the task allow-list, H2, H3 | the main thread | identities and digests, before and after the main run's parts | `seriesStashE04` exit 7 in 24 s; `trialStashE04` and `avoidStashR3` exit 1; `avoidStashR3call` exit 3 (H1; C4h: its presence counts halve, 8). Per clean C 7101 run: digests 2.5–2.9 s (21), snapshots about 0.3 s, identity checks and allow-lists 8–21 ms |
 
 #### G3: every realm
 
@@ -4366,6 +4550,14 @@ answer side.
   A name it cannot delete is shadowed with an unconfigurable `undefined`. It freezes no intrinsic: freezing the
   built-in prototypes in the hot realms cost +3 to +10 % of a unit's time (measured by the C4g designers and judges),
   and it would only help against deliberate hooks, which T leaves out.
+  - (C4h, 2026-11-11; C4g's review, the lead's F7; outside T) In the MAIN realm only (a worker realm has
+    `WorkerGlobalScope`), it now also freezes `Worker.prototype` and `EventTarget.prototype` and makes
+    `globalThis.Worker` read-only and unconfigurable. Neither prototype is on a unit's hot path (units run in workers,
+    whose intrinsics stay unfrozen), and a same-day pair of whole C 7101 runs shows its cost (12.9). It refuses the two
+    relays C4g's refuter built (a wrap of `Worker.prototype.postMessage`, and an `onmessage`-setter hook; both hid the
+    cut on C4g's code): each now stops with a `TypeError` when the plant installs its hook (12.9 F7). Residual 10 says
+    what stays open.
+  - (C4h; the lead's F4) "The first import" means the first module request, re-exports counted (3, 7.8 hand step 10).
 - **`--disallow-code-generation-from-strings`**, merged into the one `--v8-flags`: `eval` and `Function` throw in every
   realm. An unknown V8 flag stops Deno at its start (fail closed).
 - **The frozen constants** (`lawsearch-frozen.ts`) are the second import of every entry point. It deep-freezes every
@@ -4373,13 +4565,18 @@ answer side.
   `S_OF_F`, `REASONS`, `PLANTS`, …) and quotes.ts' `GMO_SYMBOLS` and `GMO_INTERVALS`: 77 objects on the main thread.
   Until C4g `SEEDS.cut = 1` succeeded at run time (C4f's review), and `SEEDS` picks the cut's signal targets.
   `lawsearch-const.ts` itself is not edited: its sha256 constants are part of R_law.
-- **The audits** (7.8 hand steps 10–12):
+- **The audits** (7.8 hand steps 10–12; C4h: 13 and 14):
   - the graph audit: every realm's module graph holds the repository's `.ts` code only, with no data module and nothing
-    under `research/out` or `research/ledger`, and the lockdown first;
+    under `research/out` or `research/ledger`, and the lockdown first (C4h: first among every value module request,
+    re-exports included, from the source text and from `deno info`, F4);
   - the source rule: no `node:`, no computed `import(`, no `eval` or `Function`, no `Deno[`, no shared memory, no other
     `new Worker`, with a 3-line allow-list;
   - the catch audit: every Deno call inside a try block or with `.catch` is one of 19 audited entries. Two catches now
-    rethrow anything but `NotFound`, so that a permission refusal cannot silently change the output.
+    rethrow anything but `NotFound`, so that a permission refusal cannot silently change the output;
+  - (C4h, 2026-11-11; F5) the trigger audit: every module of the four graphs is in a push path of `lawsearch.yml` or of
+    the new `lawsearch-audit.yml`, which runs these audits (and `MODE=hand`) when a module the program shares with other
+    code changes;
+  - (C4h; F7) the relay audit: in a realm where the lockdown ran, the four relay hooks are refused (`TypeError`).
 
 #### G4: what stays of C4f's guard, and why
 
@@ -4403,7 +4600,9 @@ answer side.
 The job `plants-c4g` holds seven run plants, one per channel (8's table, 8's table of channels, and 7.8). Each was
 missed on b322c13, with two exceptions:
 - `lenmemoEntryEarly` was missed by its named check, follow-bars; that run still exited 3, through the retrace;
-- `avoidStashR3call` was caught there too, by H1. It is in CI so that the job fails if H1's separation is ever lost. Each is caught on the C4g code by a named check, stopped by a clear error, or (`gmoWriteR`)
+- `avoidStashR3call` was caught there too, by H1. It is in CI so that the job fails if H1's separation is ever lost.
+  (C4h, 2026-11-11; F1) In C4g its row test could never fail (a pipe into `cut` under `bash -e` without `pipefail`), so
+  only its exit and stage 2 were enforced; since C4h the row test is enforced too (7.8). Each is caught on the C4g code by a named check, stopped by a clear error, or (`gmoWriteR`)
 shown to reach nothing the run reads.
 
 #### What stays open
@@ -4426,6 +4625,16 @@ Inside T:
    - A fresh realm per probe unit, or per trial, would close this at the cost of a worker start and a universe copy
      per unit (not measured). A fixed job-to-worker assignment would make the bytes repeatable per `WORKERS`, but it
      would not stop the carry.
+   - (C4h, 2026-11-11; C4g's review, the lead's F3) **The routes of this carry are three, not two.** Besides module or
+     realm state, the task-level objects a probe worker is handed are shared by every unit of a check run there. The
+     avoid table was one, writable through `Set.prototype.add.call`: half of `avoidStashR3call`'s presence failures
+     were carry through it (8). C4h closes that route: each poison and presence unit gets its own read-only copy.
+     What stays (12.9 F3's table): the cached `ExclCtx`'s holes and the poison tables (typed arrays, one per task per
+     worker), and the universe `u` the worker is sent for the run (plain objects and typed arrays), each writable, so
+     a unit can still leave a value there for a later unit; the frozen task, its trial list and its trials cannot
+     carry. The cut is immune to all of them by T order (its pool is fresh for each cut run, and its realm holds no bar
+     after the current target). The lead's decision stands: the kept pool stays (a fresh pool per run costs about 20 %
+     of m15 presence).
 3. **The main-thread checks take the main run's answers as data.** These are the wants, `entryExitIndex`,
    `Ind.donchian`, the signals that pick the targets, spec 13's hit lines, `sameFirstHalf` and `addsUp`. If a main-run
    function is wrong the same way on both of its own sides, these checks cannot see it; the worker checks are the ones
@@ -4438,8 +4647,20 @@ Inside T:
 5. **The env revoke is process-wide, but a worker made just before it can keep env** (a race, measured). The code reads
    the settings and revokes before any worker exists, but no audit checks that order, so an edit that starts a worker
    earlier would reopen the environment to it.
+   - (C4h, 2026-11-11; C4g's review, the lead's F2) **Wrong, and withdrawn as a residual.** No worker keeps env: an
+     inheriting worker loses it at the revoke, and the program's workers, started with "none", never hold it (G1's C4h
+     bullet). The order of the revoke protects the main thread only. What keeps env and the files out of the checks'
+     realms is "none", and since C4h each worker tests it at run time against the main thread's own grants and
+     refuses to serve otherwise (G2's C4h bullet). What stays: the worker's own module code runs at its start, before
+     its first message and so before the test (an inheriting worker's module code could read a file then; the run
+     still stops); and a worker that held some grant but none of the listed ones would pass (an inheriting worker holds
+     them all).
 6. **Write is narrowed to the run's own folder, not to nothing.** Main-run code can still write there, and it can read
    everything under `.` and the scratch folder. Nothing it writes into the run's gmo folder is read again (G1).
+   - (C4h, 2026-11-11; C4g's review, the ci-docs reviewer; the lead's F6) Corrected: main-run code can read everything
+     under the repository (`--allow-read=.`, the CI's grant); only the local runs of the builders and integrators were
+     also granted the scratch folder (`--allow-read=.,<scratch>`). In CI no scratch folder is readable (C4g's refuter,
+     `c4g/refute-ci-docs-5`). Since C4h `MODE=syn` and the smoke step write only their OUT too (7.7, 7.8).
 7. **The `WORKERS=0` against 4 step** sees only state that changes bytes between the two settings. It stays defense in
    depth, not a guard (7.8 syn step 3).
 8. **Points open since earlier rounds, unchanged:**
@@ -4455,11 +4676,24 @@ Outside T (deliberate concealment aimed at the harness; not required, and open):
    a `MessagePort` `onmessage` setter hook hid the sandbox design's cut.
 10. A relay through `Worker.prototype.postMessage`: the power judge's `judgeRelayE04` hid every check on the process
     design's prototype.
+    - (C4h, 2026-11-11; C4g's review, the power reviewer, reproduced by a refuter; the lead's F7) On C4g's code two
+      relays hid the cut: a main-realm wrap of `Worker.prototype.postMessage` and an `onmessage`-setter hook, each
+      adding the main run's universe to what a cut worker is sent, with `judgeListen2E04`'s listener using it (exit 0,
+      "0 of 34556 … differ" on the E04 cuts; C4h ran both on 12ee6d2 again, 12.9 F7). **Closed since C4h: these two
+      hooks**, and any other change to `Worker.prototype`, `EventTarget.prototype` or `globalThis.Worker` in the main
+      realm. G3's freeze makes each plant stop with a `TypeError` when it installs its hook (exit 1, about 2 s), and
+      hand step 14 checks the freeze. **Not closed: the relay itself.** A hook on another built-in that the harness
+      calls with a worker or a message can still reach the worker: `Array.prototype.push` (which takes `lawsearch-par.ts`'s
+      slot, with its worker; C4g's refuter's micro test), `Object.prototype` setters, the `MessageEvent` `data` getter
+      the replies are read through, and the other built-ins of residual 9; and a worker-realm hook (worker intrinsics
+      are not frozen).
 11. A module that tells a check realm from the main realm (by its missing permissions or its missing bars) and
     misbehaves only there.
 12. Blinding the digest, inverting the poison, or rewriting the verdict or the dumps.
 
 No intrinsic is frozen in the hot realms. That would only help against 9 and 10, and it was measured at +3 to +10 %.
+(C4h, 2026-11-11) Still true of the hot realms (the workers). The main realm now freezes two prototypes and pins
+`globalThis.Worker` (G3's C4h bullet), which are off every hot path; 12.9 has the cost.
 
 ### 12.8 What the realms cost, step 4 and the CI time (C4g, 2026-11-10)
 
@@ -4565,3 +4799,132 @@ pairs, run back to back, separate the code's cost from the machine's.
   - GitHub (arithmetic, not measured): if the runner is as fast as this VM, the longest job, `w0-n-1001`, takes about
     2.4 h; at 1.5 times slower about 3.6 h, and at 2 times about 4.8 h. All are under the 360-minute timeout, but at 2
     times only about 1.2 h of margin is left. `plants-c4g` would take about 2.6 h at 2 times.
+
+### 12.9 C4g's review fixed: the sandbox test, the avoid copies, the audits, the trigger and the freeze (C4h, 2026-11-11)
+
+**Why.** C4g's two reviewers found nine problems (one found by both, so eight). A refuter reproduced every one from
+scratch (C4g's report, `c4g/final.json` in the C4g scratch folder: `review[].findings[]` with each verdict and its
+reproduction). The lead's F1–F8 fix them; F7 and F8 are outside the threat model T (12.7) and were done because they
+cost nothing measurable. Rules 1–4 of 12 hold: no output changes but the rows of one plant (F3, said below), W0 and W4
+give the same bytes, no check and no count of targets or probes changes, and the spec is not changed. Everything below
+was run by the C4h fixer in the C4h scratch folder (`c4h/`; its `progress-fixer.md` lists every file). The code at
+launch was C4g's (`c4h/code-at-launch.sha256` equals `c4g/code-c4g.sha256` for the 24 `research/lawsearch*.ts`); the
+final code is `c4h/code-final.sha256`.
+
+**F1 (a bug): the `plants-c4g` row test of `avoidStashR3call` could never fail.** The line `grep -E
+",(cut|presence),0," $d/checks.csv | cut -c1-160 || {…}` ran under `bash -e` without `pipefail` (a step with no
+`shell:`), so its status was `cut`'s. Now `grep -q` decides and the rows are printed after it (7.8). Every other
+`| … ||` and `if … | …` of the yml was checked: each tests the right command or uses process substitution.
+- Proof (`c4h/f1/`): the step extracted from the yml (`extract.py`, asserting no `shell:` and no `defaults:`), run with
+  `bash -e` and a fake `deno` that replays C4g's kept plant outputs (`c4g/kept/c4gplants-alone`; C4g's refuter's
+  harness), on 12ee6d2's yml and on C4h's:
+
+  | case | 12ee6d2's step | C4h's step |
+  |---|---|---|
+  | clean | exit 0 | exit 0 |
+  | `avoid-norow` (every `,cut,0,` and `,presence,0,` row of the plant removed) | exit 0 (missed) | exit 1, "neither cut nor presence failed" |
+  | `avoid-nochecks` (its checks.csv removed) | exit 0 (missed) | exit 1 |
+  | `avoid-cutonly`, `avoid-presenceonly` (one kind of row left) | exit 0 | exit 0 (one is enough) |
+  | `w0-nocut` (control: `w0protoG3`'s cut rows removed) | exit 1 | exit 1 |
+
+**F2: the checks' workers now refuse to serve when they are not sandboxed under the program's real flags** (7.3, 12.7
+G2). New module `lawsearch-sandbox.ts`: `grantsHeld([".", run, out])` in the main thread, after gate 3 (each path-less
+name, and read and write on `.`, the run folder and the dump folder, that read "granted" there; env is already revoked),
+sent in every "universe" message of `lawsearch-par.ts` and in the follow-bar worker's one message; `refusalOf` in the
+worker, which throws (par worker) or answers an error (follow worker) when any of them, or any path-less name, reads
+"granted" in its realm, or when no list came. The env sentences that credited the revoke's order are corrected (7.7,
+12.7 G1 and residual 5, the `readSettings` comment in `lawsearch.ts`; the C4g integrator's G1 text in its report said
+the same and is wrong in the same way).
+- Proof, the real workers under the CI flags (`c4h/f2/drive.ts`, `drive-ci-walk.txt`, `drive-ci-run.txt`; `DENO_WALK
+  --allow-write=<OUT>` and `DENO_RUN`): started with "none", the par worker passes the test (its next, wrong-task job
+  meets its ordinary error) and the follow worker answers; started without "none", each refuses: `… not sandboxed
+  (granted here: read ".", read "<run>", read "<out>", write "<out>"); it must be started with deno: { permissions: "none"
+  }`. A par worker sent no list refuses too.
+- End to end (`c4h/f2/logs/*-final.log`): copies of the final code whose `new Worker` line lost "none" (one copy for
+  the par pool, one for the follow-bar worker), C 7101 `CUT_MAX=1`, W4: both exit 1 with that line, in 21 s (stage 0's
+  first cut run) and 72 s (stage 1's first follow-bar check); neither writes checks.csv or print.txt. With "none" the
+  workers serve: every run of this round.
+- What it cannot see: the worker's own module code runs at its start, before its first message (12.7 residual 5's C4h
+  note).
+
+**F3: each poison and presence unit gets its own read-only copy of the task's avoid table** (7.3 `unitAvoidOf`; 5.3,
+8, 12.2 (2), 12.7 residual 2).
+- Measured cost, the timer (C4b's harness `tb.ts`, unchanged; `c4h/timer/`: `tc4h` = 12ee6d2 + F2 + F3 against
+  `c4g/copies/tc4g` = 12ee6d2, alternated, each on an idle machine, W4; every pair's result sha256 equal). Poison +
+  presence, s per trial:
+
+  | probe group | C4h | 12ee6d2 | C4h − 12ee6d2 |
+  |---|---|---|---|
+  | m15 EF (3 + 3 samples) | 2.907 | 2.900 | +0.2 % |
+  | m15 SB (3 + 3) | 4.140 | 4.285 | −3.4 % |
+  | h1 EF (2 + 2) | 0.876 | 0.853 | +2.6 % |
+  | h1 SB (2 + 2) | 1.291 | 1.345 | −4.0 % |
+
+  Nothing measurable (the spread between repeats of one side is of the same size), so F3 was adopted.
+- What changes: only `avoidStashR3call`'s rows (`c4h/kept/f3-avoid`, the plant on C4g's `plants-c4g` data, W4): 75 of
+  its 77 files equal C4g's run (`c4g/kept/c4gplants-repo`); checks.csv's 12 presence rows and print.txt's
+  `check.presence.detail` line differ; every count halves (8's table) and no (ii) row is left. The cut rows, the poison
+  rows, cut_fail.csv and exit 3 are unchanged. Every file, print.txt included, equals C4g's refuter's run with a copy
+  for presence units only (`c4g/refute-power-4/kept/fresh`), so poison's copy changed nothing.
+- **The task-level objects a probe worker's units share** (one check run in one worker; by the code):
+
+  | object | how it is held | can it carry a value from one unit to a later one? |
+  |---|---|---|
+  | the task (`sealTask`) | frozen; its fields replaced or added: no | no |
+  | its trial list and trials | frozen array of frozen `TrialDef`s, whose fields are all strings and numbers | no |
+  | its avoid table | read-only Set, but `Set.prototype.add.call` writes into it | until C4h, yes (measured: half of `avoidStashR3call`'s presence failures). Since C4h no unit reads it: each gets a copy (the cached `ExclCtx` below is made from it, but units use only its holes) |
+  | poison's cached `ExclCtx` (`UnitCache`, one per timeframe per task) | frozen, its `Holes` frozen, but the holes' typed arrays (`open`, `present`, `hole`) writable | yes, by a write into a typed array (open since C4e: 12.7 residual 8) |
+  | poison's tables (`TABLES`, keyed by the `UnitCache`) | typed arrays (two shifted copies of each series) | yes, by a write |
+  | the universe `u` the probe worker is sent for the run (`shipOf`) | plain objects and typed arrays, not frozen (presence's edited timeframe keeps the other pairs' series objects) | yes, by a write or an added property |
+  | module and realm state of the worker | as 12.7 residual 2 | yes |
+
+  The cut is immune to every row by T order: its pool is made for each cut run and its realm never holds a bar after
+  the current target, so whatever a unit leaves there was made from bars at or before it.
+
+**F4: the graph audit counts re-exports** (7.8 hand step 10; 3). Proof (`c4h/f4/run.sh`, `results.txt`,
+`results-neg3.txt`, `results-new-final.txt`): the yml's graph step on copies of the tree, with 12ee6d2's audit and with
+C4h's:
+
+| case (a line put above the lockdown's import) | 12ee6d2's audit | C4h's audit |
+|---|---|---|
+| clean | exit 0 | exit 0 |
+| `export { followValues as fv } from "./lawsearch-trade.ts";` in the follow worker (C4g's refuter's neg1) | exit 0 (missed) | exit 1 (source text and `deno info`) |
+| `export * from "./lawsearch-trade.ts";` in the follow worker (neg2) | exit 0 (missed) | exit 1 (both) |
+| `export * from "./lawsearch-trade.ts";` in `lawsearch.ts` | exit 0 (missed) | exit 1 (both) |
+| the same with single quotes in the follow worker | exit 0 (missed) | exit 1 (`deno info` only: the source pattern reads double quotes) |
+| `import type { FollowRows as FR0 } from "./lawsearch-trade.ts";` (evaluates nothing) | exit 1 (a false alarm) | exit 0 |
+| `export type { FollowRows } from "./lawsearch-trade.ts";` | exit 0 | exit 0 |
+
+**F5: a change to a module the program shares with other code now runs the cheap audits** (7.8 hand step 13 and
+`lawsearch-audit.yml`). The 42 modules of the four graphs outside `lawsearch.yml`'s paths are listed (`c4h/f5/
+modules.txt`, from `deno info --json`; 67 modules in all with `lawsearch-sandbox.ts`). Proof (`c4h/f5/run.sh`,
+`results-clean.txt`, `results.txt`): `lawsearch-audit.yml`'s steps extracted (as Actions runs them) on copies of the tree,
+then `lawsearch.yml`'s hand step 13:
+- clean: every step exits 0 (`deno check` too, after a type error of C4h's own audit change was fixed; `MODE=hand`
+  103 pass, 0 fail, 41 skip); hand step 13: "67 modules of the graphs, 42 of them matched only by lawsearch-audit.yml's
+  paths: every one is in a push path";
+- `trend-data.ts`'s read put back to `JSON.parse(await Deno.readTextFile(path))` (C4g's refuter's case): the catch step
+  exits 1 (`not audited: research/trend-data.ts: …`), and `research/trend-data.ts` is one of `lawsearch-audit.yml`'s
+  paths, so that push runs it;
+- `research/trend-data.ts` taken out of `lawsearch-audit.yml`'s list: hand step 13 exits 1 in both workflows;
+- a new module imported by `research/lib.ts`: hand step 13 exits 1 in both;
+- a path with a `[` in it: refused (exit 1), not guessed.
+
+**F6** is a wording fix (12.7 residual 6's C4h note).
+
+**F7 (outside T): the main realm freezes `Worker.prototype` and `EventTarget.prototype` and pins `globalThis.Worker`**
+(12.7 G3, residual 10; 7.8 hand step 14).
+- The relay plants (`c4h/f7/mk.py`: C4g's refuter's `plant()` unchanged, the setter variant in its second form; each
+  run with `LS_PLANT=judgeListen2E04`, C 7101, W4; `c4h/logs/f7-*.log`):
+
+  | plant | 12ee6d2 | C4h |
+  |---|---|---|
+  | `post`: a main-realm wrap of `Worker.prototype.postMessage` adds the main run's universes to each "universe" message | exit 0, every check passed, the E04 cuts "0 of 34556 / 30798 / 24274 / 23489 differ" (missed) | exit 1 in 2 s: `TypeError: Cannot assign to read only property 'postMessage' of object '#<Worker>'` |
+  | `setter`: a hook on `Worker.prototype`'s `onmessage` setter posts them with the genuine `postMessage` | exit 0, every check passed, the same four E04 cuts "0 of … differ" (missed; C4g's refuter had run it on its own fixed copy only) | exit 1 in 2 s: `TypeError: Cannot redefine property: onmessage` |
+
+- Hand step 14 (`lawsearch-audit.ts relay`) on C4h's lockdown: exit 0, all four hooks refused; with 12ee6d2's lockdown:
+  exit 1, none refused (`c4h/f7/relay-audit-*.txt`).
+- Neither plant is added to `plants-c4g`: as a run plant it would have to live in the program's code, as the other
+  plants do; hand step 14 tests the freeze itself in seconds instead.
+
+**F8 (outside T)**: the yml's comment above `DENO_WALK` and the smoke step (7.7, 7.8). @@F8@@

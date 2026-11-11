@@ -4,8 +4,10 @@
 #
 #   hand    deno check of research/lawsearch*.ts; stage 0's import graph holds no trade, stats or select module (spec 9);
 #           C4g's static audits (research/lawsearch-audit.ts): every realm's module graph holds the program's own .ts
-#           code only and each entry imports the lockdown first, the source rule (no node:, dynamic import, eval,
-#           Function, Deno internals, shared memory or other worker), and every Deno call inside a try block audited;
+#           code only and each entry requests the lockdown first (C4h: re-exports counted), the source rule (no node:,
+#           dynamic import, eval, Function, Deno internals, shared memory or other worker), and every Deno call inside a
+#           try block audited; C4h: every module of those graphs is in a push path of this workflow or of
+#           lawsearch-audit.yml (which runs these audits and MODE=hand when a module shared with other code changes);
 #           the hand examples in TS (MODE=hand) and in the Python (--hand); every hand-level planted error of
 #           lawsearch-design.md 8 must fail one of its named examples (TS: exit 4; the Python's twins: exit 0 with
 #           one of this step's named examples among the failed ids it prints, C4c and C4d; reasonUsesFuture has no
@@ -94,8 +96,12 @@ env:
   # gate 3 and never again (treeBytes), and keeps the main run's realm apart from every check's computation.
   DENO_RUN: deno run --sloppy-imports --no-config --no-prompt --unstable-worker-options --v8-flags=--max-old-space-size=12288,--disallow-code-generation-from-strings --allow-read=. --allow-write=research/out --allow-env
   # C4g (G1: write narrowed where it can be): DENO_RUN without its write grant. A walkfiles run writes only its own dump
-  # folder, so the steps below add --allow-write=<that folder> (a MODE=syn run still needs research/out: it writes its
-  # run folder, gmo included, then its dumps). Deno's permissions.revoke cannot narrow a grant from inside the program:
+  # folder, and a MODE=syn run only its run folder OUT (its gmo files and manifest.json, then its dumps in OUT/ts), so
+  # every run step below adds --allow-write=<that folder> (C4h, the lead's F8 on C4g's review: C4g's comment here said
+  # a MODE=syn run still needs research/out; it does not: --allow-write=$OUT is enough, measured by C4g's refuter with no
+  # research/out folder at the start). DENO_RUN's broad grant is left to the hand steps (MODE=hand, the hand plants,
+  # the real-mode refusals), which write nothing, and to plants-c4g's gmoWriteR, whose planted write into the run's gmo
+  # folder must happen. Deno's permissions.revoke cannot narrow a grant from inside the program:
   # revoking write (or read) on a path under a granted folder revokes the whole grant of that folder (measured on Deno
   # 2.9.6 by the C4g designer "harden"), so the narrowing is done here, by the flags.
   DENO_WALK: deno run --sloppy-imports --no-config --no-prompt --unstable-worker-options --v8-flags=--max-old-space-size=12288,--disallow-code-generation-from-strings --allow-read=. --allow-env
@@ -121,7 +127,7 @@ jobs:
           deno info --sloppy-imports --no-config research/lawsearch-stage0.ts > /tmp/stage0.txt
           grep -q "lawsearch-select0.ts" /tmp/stage0.txt
           if grep -E "lawsearch-(trade|stats|select)\.ts" /tmp/stage0.txt; then echo "stage 0 imports a trade, stats or select module"; exit 1; fi
-      - name: Every realm's module graph holds the program's own .ts code only, and each entry imports the lockdown first (C4g G3; deno info)
+      - name: Every realm's module graph holds the program's own .ts code only, and each entry requests the lockdown first (C4g G3, C4h F4; deno info)
         # C4g (the lead's G3, from the C4g designer "process"): a worker's module graph is loaded under the read
         # permission of the realm that starts it, not under the worker's own (Deno 2.9.6): a literal import of a data
         # file (a gmo JSON file, a dump under research/out) would be read even by a worker with no permission. So the
@@ -129,10 +135,14 @@ jobs:
         # follow-bar checks' lawsearch-follow-worker.ts, and the flip judgement's lawsearch-flip.ts) must hold
         # TypeScript modules of the repository only: no JSON or other data module, nothing under research/out or
         # research/ledger, no remote, npm: or node: module, no dynamic import (literal or not), and every dependency a
-        # module of the graph. Each entry's first two imports are lawsearch-lockdown.ts and lawsearch-frozen.ts (so
-        # they are evaluated before any other module of its realm); lawsearch-lockdown.ts imports nothing, and
-        # lawsearch-frozen.ts's graph holds no lawsearch module but lawsearch-const.ts, lawsearch-rules.ts and
-        # lawsearch-types.ts. And the check-only modules the main thread's checks run (trend-stats.ts' shuffle and
+        # module of the graph. Each entry's first two module requests are lawsearch-lockdown.ts and lawsearch-frozen.ts,
+        # counted as an ES module evaluates them: every value request in source order, re-exports included (import …
+        # from, import "…", export … from, export * from; import type and export type skipped), read from the source text
+        # and from deno info's own parse, which must agree (C4h, the lead's F4: until C4h only the import lines counted,
+        # so a re-export above the lockdown ran its whole graph first, unseen; C4g's review, events.ts then captured
+        # CacheStorage). lawsearch-lockdown.ts imports nothing, so it is evaluated before any other module of the realm;
+        # then lawsearch-frozen.ts's graph, which holds no lawsearch module but lawsearch-const.ts, lawsearch-rules.ts
+        # and lawsearch-types.ts. And the check-only modules the main thread's checks run (trend-stats.ts' shuffle and
         # mulberry32, bigflow-lib.ts' donchianState) are imported by lawsearch-checks.ts alone, so no main-run module can
         # keep state in their instances (research/lawsearch-design.md 12, the table of the checks).
         run: |
@@ -164,6 +174,23 @@ jobs:
         # in the four graphs above is listed in research/lawsearch-audit.ts (CATCH_ALLOW) with what a refusal (or any
         # error) does there; a new one fails this step until it is audited and listed.
         run: deno run --no-config --allow-read=.,/tmp research/lawsearch-audit.ts catch /tmp
+      - name: Every module of the four graphs is in a push path of this workflow or lawsearch-audit.yml (C4h F5)
+        # C4h (the lead's F5 on C4g's review): this workflow runs only on a change to research/lawsearch*,
+        # research/money-stats.ts or itself, but C4g's guarantees rest on the text of modules the program shares with
+        # other code (trend-data.ts's src.read line, ownerhold-data.ts's Source, CATCH_ALLOW's pinned lines, who imports
+        # trend-stats.ts and bigflow-lib.ts, quotes.ts' frozen maps). .github/workflows/lawsearch-audit.yml runs the
+        # audits above and MODE=hand on a push that changes any of them; this step fails when a module of the four graphs
+        # (the graph-*.json files above) is matched by neither workflow's push paths, so that list cannot go stale.
+        run: deno run --no-config --allow-read=.,/tmp research/lawsearch-audit.ts trigger /tmp
+      - name: The main realm's freeze refuses the relay hooks (C4h F7; outside the threat model, defense in depth)
+        # C4h (the lead's F7 on C4g's review): lawsearch-lockdown.ts freezes Worker.prototype and EventTarget.prototype and
+        # pins globalThis.Worker in the main realm, so a main-run module cannot wrap Worker.prototype.postMessage or hook
+        # the onmessage setter to add the main run's later bars to what a cut worker is sent (C4g's refuter's two relays,
+        # which hid the cut on C4g's code; on C4h's code each stops with a TypeError when it installs its hook, exit 1).
+        # This step evaluates the lockdown and wants each such hook refused with a TypeError (the graph audit above shows
+        # the lockdown is the first module request of every entry). It costs seconds; the relay plants themselves are
+        # not in the program (C4h ran them on copies: research/lawsearch-design.md 12.9).
+        run: deno run --no-config research/lawsearch-audit.ts relay
       - name: The hand examples (TS)
         env:
           MODE: hand
@@ -756,7 +783,11 @@ jobs:
           [ ! -e $d/print.txt ] || { echo "$p: print.txt was written"; bad=1; }
           p=avoidStashR3call; d=$r/plant-$p
           plant $p plant-$p 4 "$DENO_WALK --allow-write=$d"; want $p $code 3
-          grep -E ",(cut|presence),0," $d/checks.csv | cut -c1-160 || { echo "$p: neither cut nor presence failed"; bad=1; }
+          # C4h (C4g's review, F1): grep's own status decides. A step with no shell: runs as bash -e, without pipefail, so
+          # in C4g's `grep … | cut -c1-160 || {…}` the status was cut's (always 0) and this test could never fail. The
+          # rows are printed after the test, as information.
+          grep -q -E ",(cut|presence),0," $d/checks.csv || { echo "$p: neither cut nor presence failed"; bad=1; }
+          grep -E ",(cut|presence),0," $d/checks.csv | cut -c1-160
           closed2 $d
           p=lenmemoEntryEarly; d=$r/plant-$p
           plant $p plant-$p 4 "$DENO_WALK --allow-write=$d"; want $p $code 3
@@ -842,7 +873,9 @@ jobs:
           SEED: ${{ matrix.seed }}
           STRENGTH: ${{ vars.LS_SMOKE_STRENGTH }}
           OUT: research/out/lawsearch/smoke-${{ matrix.seed }}
-        run: $DENO_RUN research/lawsearch.ts || true
+        # C4h (the lead's F8): the run may write its own run folder only, as every other run step (until C4h this step
+        # alone used DENO_RUN's grant on research/out)
+        run: $DENO_WALK --allow-write=$OUT research/lawsearch.ts || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:

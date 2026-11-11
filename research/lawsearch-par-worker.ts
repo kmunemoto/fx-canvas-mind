@@ -1,9 +1,14 @@
 // 法則探し (docs §8.136): one worker of research/lawsearch-par.ts (C4b, the speed-up "par"; C4g, the lead's G2: the
 // checks' realms). It holds one universe and one task at a time (both sent again at each run of its pool) and answers
 // each job with lawsearch-checks.ts' runUnitJob. C4g:
-//   * it is started with deno: { permissions: "none" }: no file, no environment, no net, run, ffi or sys (and refuses
-//     to serve when any of them is granted: notSandboxed below, so a Deno that ignored the option fails closed);
-//   * its first two imports are lawsearch-lockdown.ts (the permission-free channels between realms deleted) and
+//   * it is started with deno: { permissions: "none" }: no file, no environment, no net, run, ffi or sys. C4h (the
+//     lead's F2): it refuses to serve when it is not sandboxed under the program's real flags: each "universe" message
+//     carries the grants the main thread holds (lawsearch-sandbox.ts grantsHeld: read and write on ".", the run folder
+//     and the dump folder, and every path-less name, each that reads "granted" there), and if any of them, or any
+//     path-less name, reads "granted" in this realm (refusalOf), it throws before it takes the universe, so the run
+//     stops (exit 1). C4g's test queried without a path, which reads "prompt" in a worker that inherited
+//     --allow-read=. too, so it served (C4g's review);
+//   * its first two module requests are lawsearch-lockdown.ts (the permission-free channels between realms deleted) and
 //     lawsearch-frozen.ts (the rule constants frozen), evaluated before any module that holds main-run code;
 //   * a cut run's universe arrives without bars and grows job by job (applyGrow): the bars of every pair of the task's
 //     timeframe with T up to the job's one target, so the realm never holds a bar after the target it decides;
@@ -16,26 +21,19 @@
 import "./lawsearch-lockdown.ts";
 import "./lawsearch-frozen.ts";
 import { runUnitJob, sealTask } from "./lawsearch-checks.ts";
+import { refusalOf } from "./lawsearch-sandbox.ts";
 import type { UnitCache, UnitJob, UnitTask } from "./lawsearch-checks.ts";
 import type { Universe } from "./lawsearch-types.ts";
 
 type Grow = { to: number[]; data: Float64Array };
 type Msg =
-  | { t: "universe"; u: Universe; keys?: string[] }
+  | { t: "universe"; u: Universe; keys?: string[]; grants: Deno.PermissionDescriptor[] }
   | { t: "task"; tid: number; task: UnitTask }
   | { t: "job"; tid: number; seq: number; job: UnitJob; grow?: Grow | null };
 
-// a worker started with permissions "none" reports "prompt" for each (Deno 2.9.6); "granted" means the option was
-// ignored or widened: refuse to serve
-const notSandboxed = (): string | null => {
-  const bad: string[] = [];
-  for (const name of ["env", "read", "write", "net", "run", "ffi", "sys"] as const) {
-    const state = Deno.permissions.querySync({ name } as Deno.PermissionDescriptor).state;
-    if (state === "granted") bad.push(`${name} ${state}`);
-  }
-  return bad.length === 0 ? null : `lawsearch-par worker: not sandboxed (${bad.join(", ")}); it must be started with deno: { permissions: "none" }`;
-};
-const SANDBOX = notSandboxed();
+// C4h (F2): set by the first "universe" message whose grants all read other than "granted" here (refusalOf); until
+// then no task or job is taken
+let sandboxed = false;
 
 let u: Universe | null = null;
 let task: UnitTask | null = null;
@@ -79,15 +77,24 @@ const applyGrow = (g: Grow) => {
 
 const scope = globalThis as unknown as { onmessage: ((e: MessageEvent) => void) | null; postMessage: (m: unknown) => void };
 scope.onmessage = (e: MessageEvent) => {
-  if (SANDBOX !== null) throw new Error(SANDBOX);
   const m = e.data as Msg;
   if (m.t === "universe") {
+    // C4h (F2): a worker that holds any of the main thread's grants (it was not started with permissions "none", or the
+    // option was ignored) serves nothing: the error ends the run (lawsearch-par.ts onerror)
+    const why = refusalOf("lawsearch-par worker", m.grants);
+    if (why !== null) {
+      sandboxed = false;
+      throw new Error(why);
+    }
+    sandboxed = true;
     u = m.u;
     keys = m.keys ?? null;
     grown = new Map();
     task = null;
     tid = 0;
     cache = {};
+  } else if (!sandboxed) {
+    throw new Error(`lawsearch-par worker: a ${m.t} message before a universe it may serve`);
   } else if (m.t === "task") {
     // C4f (the lead's H2): the clone made read-only again (frozen task and trials, read-only avoid table)
     task = sealTask(m.task);

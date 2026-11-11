@@ -12,7 +12,10 @@
 // (WORKERS=0 means one worker in each pool), and every worker is started with deno: { permissions: "none" } (no file,
 // no environment, no net, run, ffi or sys; Deno 2.9.6 needs --unstable-worker-options for it and refuses the Worker
 // without it, so a run without the flag stops at its first check run: fail closed). Its entry,
-// lawsearch-par-worker.ts, imports lawsearch-lockdown.ts and lawsearch-frozen.ts first. Two kinds of pool:
+// lawsearch-par-worker.ts, imports lawsearch-lockdown.ts and lawsearch-frozen.ts first. C4h (the lead's F2): each
+// "universe" message carries the grants the main thread holds (lawsearch-sandbox.ts grantsHeld, given to checkPools),
+// and a worker that holds any of them refuses to serve, so a worker started without "none" (or a Deno that ignored the
+// option) stops the run at its first message (exit 1). Two kinds of pool:
 //   * cut: a pool made for each cut run (one timeframe of one cut check) and ended with it ("fresh"); one target per
 //     job; the jobs sent in the order of their target's close T (ties: the check's order); DELTAS: a worker first
 //     gets the universe without bars (skeletonOf) and then, with each job, only the bars of the task's timeframe
@@ -138,12 +141,16 @@ export class WorkerPool implements UnitRunner {
   private onReply: ((slot: Slot, m: Reply) => void) | null = null;
   private onFail: ((e: Error) => void) | null = null;
   private broken: Error | null = null;
+  // C4h (F2): the main thread's grants, sent with every "universe" message (the worker refuses to serve if it holds one)
+  private readonly grants: Deno.PermissionDescriptor[];
 
   // kind "cut": fresh workers for every run, cut tasks only; "probe": workers kept for the run, poison and presence only
-  constructor(size: number, kind: "cut" | "probe") {
+  constructor(size: number, kind: "cut" | "probe", grants: readonly Deno.PermissionDescriptor[]) {
     if (!(Number.isInteger(size) && size >= 1)) throw new Error(`WorkerPool: ${size} workers`);
+    if (grants.length === 0) throw new Error("WorkerPool: no grant of the main thread to test the workers against");
     this.size = size;
     this.kind = kind;
+    this.grants = grants.map((d) => ({ ...d }));
   }
 
   private spawn() {
@@ -255,9 +262,9 @@ export class WorkerPool implements UnitRunner {
           // this run's universe and task, before the worker's first job of the run (a cut worker: no bar yet)
           if (slot.tid !== tid) {
             if (cutSet !== null) {
-              slot.w.postMessage({ t: "universe", u: skeletonOf(u), keys: cutKeys });
+              slot.w.postMessage({ t: "universe", u: skeletonOf(u), keys: cutKeys, grants: this.grants });
               slot.held = cutSet.pairs.map(() => 0);
-            } else slot.w.postMessage({ t: "universe", u: shipOf(u) });
+            } else slot.w.postMessage({ t: "universe", u: shipOf(u), grants: this.grants });
             slot.w.postMessage({ t: "task", tid, task });
             slot.tid = tid;
           }
@@ -311,11 +318,12 @@ export class WorkerPool implements UnitRunner {
 }
 
 // The checks' runners of one run (lawsearch.ts): a cut pool and a probe pool of max(1, WORKERS) workers each; run()
-// sends a cut task to the cut pool and poison's and presence's to the probe pool; close() ends both.
-export function checkPools(workers: number): UnitRunner & { close(): void; size: number } {
+// sends a cut task to the cut pool and poison's and presence's to the probe pool; close() ends both. grants: the
+// permissions the main thread holds (lawsearch-sandbox.ts grantsHeld; C4h, F2), which no worker may hold.
+export function checkPools(workers: number, grants: readonly Deno.PermissionDescriptor[]): UnitRunner & { close(): void; size: number } {
   const size = Math.max(1, workers);
-  const cut = new WorkerPool(size, "cut");
-  const probe = new WorkerPool(size, "probe");
+  const cut = new WorkerPool(size, "cut", grants);
+  const probe = new WorkerPool(size, "probe", grants);
   return {
     size,
     run: (u, task, next, done) => (task.kind === "cut" ? cut : probe).run(u, task, next, done),

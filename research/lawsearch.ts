@@ -30,15 +30,19 @@
 // C4g (the lead's T and G1–G4; research/lawsearch-design.md 12): the checks must catch ACCIDENTAL look-ahead in
 // main-run code written in good faith, state kept across calls included (module memos, globalThis tables, the
 // environment, files, the timing of loads, state left in long-lived workers). So, besides H1's separation of objects:
-//   * G1: this module's first two imports are lawsearch-lockdown.ts and lawsearch-frozen.ts; main() reads every
-//     setting and then revokes the environment (readSettings) before any worker exists (a worker made before the
-//     revoke would keep env); gate 3 reads the run's gmo files ONCE (treeBytes: the manifest's tree digest is taken of
-//     exactly those bytes), and the three stages' universes are loaded from those bytes (memSourceOf) before any
-//     main-run code runs; the retrace reads them too. Nothing reads a gmo file from the disk after gate 3.
+//   * G1: this module's first two module requests are lawsearch-lockdown.ts and lawsearch-frozen.ts; main() reads every
+//     setting and then revokes the environment (readSettings), which closes env for this thread (C4h: the checks'
+//     workers never hold env, because they are started with permissions "none", not because of when the revoke runs;
+//     C4g's "a worker made before the revoke would keep env" was wrong); gate 3 reads the run's gmo files ONCE
+//     (treeBytes: the manifest's tree digest is taken of exactly those bytes), and the three stages' universes are
+//     loaded from those bytes (memSourceOf) before any main-run code runs; the retrace reads them too. Nothing reads a
+//     gmo file from the disk after gate 3.
 //   * G2: every check computation that runs shared code runs in a worker started with no permission, never in this
 //     thread: the units of cut (a pool made for each cut run, deltas, T order), of poison and presence (one pool kept
 //     for the run), and the follow-bar checks (a worker per call, given the rows' coordinates only). The checks left
-//     in this thread compare plain data or run check-only code (design 12, the table of the checks).
+//     in this thread compare plain data or run check-only code (design 12, the table of the checks). C4h (F2): every
+//     such worker is sent this thread's grants and refuses to serve if it holds one (lawsearch-sandbox.ts), so a worker
+//     that was not started with permissions "none" stops the run (exit 1).
 //   * G4: H1, its allow-list for every check run's task (assertTaskAllowed), H2 and H3 (exit 7) are kept.
 //
 // Exit codes (design 2.3): 0 every check passed; 2 refused by a gate; 3 a spec 2 / 15 check failed or a STOP was
@@ -78,6 +82,7 @@ import type { Stage2In } from "./lawsearch-select.ts";
 import { assertApart, assertTaskAllowed, checkRulesFiles, ctxOfUniverse, cutCheck, cutStatsText, cutTargets, dataCheck, digestDiff, h1OnlyCheck, poisonCheck, presenceCheck, printCheck, reachOf, retraceCheck, sameFirstHalfCheck, sampleOf, snapshotOf, universeDigest } from "./lawsearch-checks.ts";
 import type { CheckInputs, UnitRunner, UnitTask } from "./lawsearch-checks.ts";
 import { checkPools, poolStats } from "./lawsearch-par.ts";
+import { grantsHeld, grantsText } from "./lawsearch-sandbox.ts";
 import { indsOf, runStage0 } from "./lawsearch-stage0.ts";
 import type { Stage0Out } from "./lawsearch-stage0.ts";
 import { checksRows, dumpBlind, dumpChecks, dumpConfig, dumpCutFail, dumpLoad, dumpMeasures, dumpStage1, dumpStage2, dumpSuspect, dumpTrades } from "./lawsearch-dump.ts";
@@ -232,8 +237,14 @@ const checksOkOf = (cs: Tagged[]) => {
 // first statement, and then the environment is closed for the whole process (Deno.permissions.revokeSync, the stable
 // API): the main thread and every worker started AFTER the revoke get NotCapable for any Deno.env call, so no code of
 // the run can keep a value in an environment variable for another to read (C4f's review: rp2EnvE04 hid a look-ahead
-// that way at every WORKERS). The order matters: a worker made BEFORE the revoke keeps env (measured by the C4g judge
-// on Deno 2.9.6), and no worker exists before this. Refusals and their messages are unchanged: only the reads moved.
+// that way at every WORKERS). Refusals and their messages are unchanged: only the reads moved.
+// C4h (C4g's review, F2; measured on Deno 2.9.6 by C4g's refuter, c4g/refute-power-2): the revoke closes env for this
+// thread, and at once for any worker that inherited this thread's permissions (one already running and reading env
+// gets NotCapable at the revoke). The checks' workers never hold env at all: they are started with permissions "none"
+// (lawsearch-par.ts, followInWorker), which gives NotCapable for env whenever the worker is made, even with no revoke.
+// So the ORDER of this revoke and the workers' start is not what keeps env from the checks (C4g said a worker made
+// before the revoke keeps env: that was code that ran before the revoke statement, not a worker keeping it); what keeps
+// it is "none", which lawsearch-sandbox.ts now tests in every worker (a worker that holds a grant refuses to serve).
 const ENV_NAMES = ["MODE", "LS_PLANT", "CUT_MAX", "WORKERS", "HAND_IDS", "TRIALS", "OUT", "GEN", "SEED", "FLIP", "STRENGTH", "RUN", "G_FILE", "KAPPA_DELTA", "KAPPA_PL"] as const;
 type EnvName = (typeof ENV_NAMES)[number];
 let SETTINGS: ReadonlyMap<string, string> | null = null;
@@ -303,6 +314,8 @@ interface RunCtx {
   // C4g (G1): the run's gmo files as read once at gate 3 (checked against the manifest), by their path relative to
   // <run>/gmo; the three loads and the retrace read these bytes, never the disk
   bytes: ReadonlyMap<string, Uint8Array>;
+  // C4h (F2): the permissions this thread holds (lawsearch-sandbox.ts grantsHeld), which no check's worker may hold
+  grants: readonly Deno.PermissionDescriptor[];
 }
 
 // C4g (G1, from the C4g designer "harden"): a file of the run as Deno.readTextFile would give it, from the bytes read at
@@ -321,7 +334,7 @@ const memSourceOf = (dir: string, bytes: ReadonlyMap<string, Uint8Array>): Sourc
 // table's rows only (lawsearch-trade.ts followRowsOf: pair, T, j, x, direction), never the main run's m, h or PL, and
 // answers the recomputed values; the comparison with the table is made here (followCompare), so the CheckResult is
 // the one the single loop gave before C4g.
-const followInWorker = (set: TfSet, table: BlindTable): Promise<CheckResult> => new Promise((resolve, reject) => {
+const followInWorker = (set: TfSet, table: BlindTable, grants: readonly Deno.PermissionDescriptor[]): Promise<CheckResult> => new Promise((resolve, reject) => {
   const t0 = Date.now();
   const w = new Worker(new URL("./lawsearch-follow-worker.ts", import.meta.url).href, { type: "module", deno: { permissions: "none" } } as WorkerOptions);
   w.onmessage = (e: MessageEvent) => {
@@ -346,8 +359,9 @@ const followInWorker = (set: TfSet, table: BlindTable): Promise<CheckResult> => 
     w.terminate();
     reject(new Error("lawsearch: the follow-bar check's worker: a message could not be read"));
   };
-  // the timeframe without its higher bars (the check reads the pairs' bars only)
-  w.postMessage({ set: { tf: set.tf, step: set.step, htfStep: set.htfStep, pairs: set.pairs, htf: [], g: [] }, rows: followRowsOf(table) });
+  // the timeframe without its higher bars (the check reads the pairs' bars only); C4h (F2): with this thread's grants,
+  // which the worker tests first (it answers an error, and serves nothing, if it holds one of them)
+  w.postMessage({ set: { tf: set.tf, step: set.step, htfStep: set.htfStep, pairs: set.pairs, htf: [], g: [] }, rows: followRowsOf(table), grants });
 });
 
 const setOf = (u: Universe, tf: TfKey) => (tf === "m15" ? u.m15 : u.h1);
@@ -586,7 +600,7 @@ async function pipeline(c: RunCtx): Promise<number> {
       tables[tf] = { t, late };
       await dumpBlind(dir, t);
       await dumpBlind(dir, late);
-      tagged.push({ stage: "stage1", r: await followInWorker(setOf(k1, tf), t) });
+      tagged.push({ stage: "stage1", r: await followInWorker(setOf(k1, tf), t, c.grants) });
     }
     const trOf = new Map<string, TrialRows>();
     const rowsOf = (t: TrialDef) => {
@@ -721,7 +735,7 @@ async function pipeline(c: RunCtx): Promise<number> {
       tables[tf] = { t, late };
       await dumpBlind(dir, t);
       await dumpBlind(dir, late);
-      tagged.push({ stage: "stage2", r: await followInWorker(setOf(k2, tf), t) });
+      tagged.push({ stage: "stage2", r: await followInWorker(setOf(k2, tf), t, c.grants) });
     }
     const sigOf2 = new Map<string, TrialSignals>();
     const sig2 = (t: TrialDef) => {
@@ -830,7 +844,7 @@ async function readManifest(run: string): Promise<GenManifest> {
 async function main(): Promise<number> {
   // C4g (G1): the settings, then the environment closed (before any worker exists)
   readSettings();
-  console.error(`[lawsearch] lockdown: removed ${LOCKDOWN.removed.join(" ")}; ${FROZEN_CONSTANTS} constant objects frozen; env read and revoked`);
+  console.error(`[lawsearch] lockdown: removed ${LOCKDOWN.removed.join(" ")}; frozen ${LOCKDOWN.frozen.join(", ") || "nothing"}; ${FROZEN_CONSTANTS} constant objects frozen; env read and revoked`);
   const mode = env("MODE") ?? "";
   // real data: refused before any read
   if (REAL_MODES.includes(mode)) {
@@ -921,12 +935,16 @@ async function main(): Promise<number> {
   // C4g (G2): the checks' pools (lawsearch-par.ts): the cut's made for each cut run, poison's and presence's kept for
   // the run, max(1, WORKERS) workers each, every one with no permission; their workers start at the first check run
   // that uses them. No unit runs in this thread at any WORKERS.
-  const pools = checkPools(workers);
-  console.error(`[lawsearch] the checks' units run on ${workers > 0 ? `${workers} workers` : "one worker (WORKERS=0)"} per pool (WORKERS), no permission`);
+  // C4h (the lead's F2): the grants this thread holds (each path-less name, and read and write on ".", the run folder and
+  // the dump folder, that read "granted" here); every check's worker is sent them and refuses to serve if it holds one
+  // (lawsearch-sandbox.ts), so a worker that was not started with permissions "none" stops the run
+  const grants = grantsHeld([".", run, out]);
+  const pools = checkPools(workers, grants);
+  console.error(`[lawsearch] the checks' units run on ${workers > 0 ? `${workers} workers` : "one worker (WORKERS=0)"} per pool (WORKERS), no permission; every worker must not hold: ${grantsText(grants)}`);
   // C4f (H1, H3): every check run goes through the guard (lawsearch.ts Guard)
   const guard = new Guard();
   try {
-    return await pipeline({ mode: mode as "syn" | "walkfiles", run, out, trials, all, plant, manifest, cfg, cutMax: cutMax ?? undefined, runner: guard.runner(pools), chkTrials, guard, times, cutFails: [], bytes: tree.bytes });
+    return await pipeline({ mode: mode as "syn" | "walkfiles", run, out, trials, all, plant, manifest, cfg, cutMax: cutMax ?? undefined, runner: guard.runner(pools), chkTrials, guard, times, cutFails: [], bytes: tree.bytes, grants });
   } catch (e) {
     // H3: a universe changed after its load: the run's dump folder (made by this run, which removed any older one at
     // its start) is removed, so no file of a run whose inputs changed under it is left; exit 7 (6 until C4g)

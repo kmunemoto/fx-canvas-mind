@@ -1,20 +1,37 @@
 // 法則探し (docs §8.136; C4g, the lead's G3): the static audits of the program's realms, run by the yml's hand job
 // (.github/workflows/lawsearch.yml). It is not part of the program (no module of the program imports it) and reads only
 // the module graphs `deno info --json` wrote for the entry points (<dir>/graph-<entry>.json) and the graphs' source
-// files. Usage: deno run --no-config --allow-read=.,<dir> research/lawsearch-audit.ts <graph|source|catch> <dir>
+// files. Usage: deno run --no-config --allow-read=.,<dir> research/lawsearch-audit.ts <graph|source|catch|trigger> <dir>,
+// or deno run --no-config research/lawsearch-audit.ts relay
 // Exit 0 when the audit holds, 1 when it does not (each offending module or line printed), 2 on a wrong call.
 //
 //   graph   every module of the graphs of the realms' entry points (lawsearch.ts, lawsearch-par-worker.ts,
 //           lawsearch-follow-worker.ts, lawsearch-flip.ts) is a TypeScript file of the repository, not under research/out
 //           or research/ledger, with no dynamic import and every dependency a module of the graph (a worker's graph is
 //           loaded under the read permission of the realm that starts it, Deno 2.9.6: a literal import of a data file
-//           would be read even by a worker with no permission); each entry's first two imports are
-//           lawsearch-lockdown.ts and lawsearch-frozen.ts; lawsearch-lockdown.ts imports nothing; lawsearch-frozen.ts's
+//           would be read even by a worker with no permission); each entry's first two module requests are
+//           lawsearch-lockdown.ts and lawsearch-frozen.ts (C4h, the lead's F4 on C4g's review: every value module
+//           request counts, in source order, re-exports included: import … from, import "…", export … from and export *
+//           from, which an ES module evaluates in that order; only import type and export type are skipped; read twice,
+//           from the source text and from deno info's own parse of the entry, and both must agree; until C4h only the
+//           import lines were read, so a re-export above the lockdown ran its whole graph before it unseen);
+//           lawsearch-lockdown.ts imports nothing; lawsearch-frozen.ts's
 //           graph holds no lawsearch module but lawsearch-const.ts, lawsearch-rules.ts and lawsearch-types.ts; and
 //           trend-stats.ts and bigflow-lib.ts (the main thread's check-only code) are imported by lawsearch-checks.ts alone
 //   source  the source rule: no code line of those graphs holds node:, import(, eval, Function( / new Function, Deno[ /
 //           Deno.internal, SharedArrayBuffer / Atomics or new Worker, but the lines of SOURCE_ALLOW
 //   catch   every Deno call inside a try block, or on a line with .catch(, in those graphs is one of CATCH_ALLOW
+//   trigger (C4h, the lead's F5 on C4g's review) every module of those graphs is matched by a push path of
+//           .github/workflows/lawsearch.yml or .github/workflows/lawsearch-audit.yml, so a push that changes any of them
+//           runs this file's audits (lawsearch-audit.yml runs them on a change to a module the program shares with
+//           other code: C4g's guarantees rest on the text of some of them, e.g. trend-data.ts's src.read line and
+//           CATCH_ALLOW's pinned lines). A module of the graphs that no path matches fails the step, so the list cannot
+//           go stale; a path of lawsearch-audit.yml that matches no module is printed (information)
+//   relay   (C4h, the lead's F7; outside the threat model) the main realm's freeze of lawsearch-lockdown.ts holds: after
+//           the lockdown is evaluated in this (main) realm, wrapping Worker.prototype.postMessage, redefining its
+//           onmessage setter, replacing globalThis.Worker and wrapping EventTarget.prototype.addEventListener each throw
+//           a TypeError (the two relays C4g's refuter built, c4g/refute-power-3, need the first two). The graph audit
+//           shows that the lockdown is the first module request of every entry, so these hold in the program's main realm
 
 const ENTRIES = ["lawsearch.ts", "lawsearch-par-worker.ts", "lawsearch-follow-worker.ts", "lawsearch-flip.ts"];
 
@@ -49,16 +66,51 @@ const CATCH_ALLOW: ReadonlyArray<readonly [string, string, string]> = [
 ];
 
 const [what, dir] = Deno.args;
-if (!["graph", "source", "catch"].includes(what) || !dir) {
-  console.log("usage: lawsearch-audit.ts <graph|source|catch> <dir of graph-<entry>.json>");
+if (what === "relay") {
+  // C4h (F7): the lockdown, evaluated here as the first module of an entry would be (this file is not in any graph)
+  await import("./lawsearch-lockdown.ts");
+  const tries: Array<[string, () => void]> = [
+    ["wrap Worker.prototype.postMessage", () => {
+      (Worker.prototype as unknown as { postMessage: unknown }).postMessage = () => {};
+    }],
+    ["redefine Worker.prototype's onmessage setter", () => {
+      Object.defineProperty(Worker.prototype, "onmessage", { set() {} });
+    }],
+    ["replace globalThis.Worker", () => {
+      (globalThis as unknown as { Worker: unknown }).Worker = class {};
+    }],
+    ["wrap EventTarget.prototype.addEventListener", () => {
+      (EventTarget.prototype as unknown as { addEventListener: unknown }).addEventListener = () => {};
+    }],
+  ];
+  let open = 0;
+  for (const [name, f] of tries) {
+    try {
+      f();
+      open++;
+      console.log(`${name}: NOT refused`);
+    } catch (e) {
+      console.log(`${name}: refused (${e instanceof TypeError ? "TypeError" : "other error"}: ${(e as Error).message})`);
+      if (!(e instanceof TypeError)) open++;
+    }
+  }
+  console.log(`the main realm's freeze: ${open === 0 ? "every hook refused" : `BAD: ${open} not refused with a TypeError`}`);
+  Deno.exit(open === 0 ? 0 : 1);
+}
+if (!["graph", "source", "catch", "trigger"].includes(what) || !dir) {
+  console.log("usage: lawsearch-audit.ts <graph|source|catch|trigger> <dir of graph-<entry>.json> | relay");
   Deno.exit(2);
 }
 const root = `file://${Deno.cwd()}/`;
 const relOf = (s: string): string | null => (s.startsWith(root) ? s.slice(root.length) : null);
+// where deno info found a module request in its module's source (0-based line and character)
+interface Span {
+  start: { line: number; character: number };
+}
 interface Dep {
   specifier: string;
   isDynamic?: boolean;
-  code?: { specifier?: string };
+  code?: { specifier?: string; span?: Span };
   type?: { specifier?: string };
 }
 interface Mod {
@@ -69,6 +121,19 @@ interface Mod {
   dependencies?: Dep[];
 }
 const graphOf = (e: string): Mod[] => (JSON.parse(Deno.readTextFileSync(`${dir}/graph-${e}.json`)) as { modules: Mod[] }).modules;
+// C4h (F4): an entry's value module requests in source order, as deno info parsed them: the entry module's dependencies
+// that have a code specifier (a type-only import has none), by the position of that request in the source
+const firstRequestsOf = (e: string): string[] => {
+  const g = JSON.parse(Deno.readTextFileSync(`${dir}/graph-${e}.json`)) as { roots: string[]; modules: Mod[] };
+  const root = g.modules.find((m) => m.specifier === g.roots[0]);
+  if (root === undefined) return [];
+  const deps = (root.dependencies ?? []).filter((d) => d.code?.specifier !== undefined && d.code.span !== undefined);
+  deps.sort((a, b) => a.code!.span!.start.line - b.code!.span!.start.line || a.code!.span!.start.character - b.code!.span!.start.character);
+  return deps.map((d) => d.specifier);
+};
+// C4h (F4): the same from the source text: every import … from "…", import "…", export … from "…" and export * from "…"
+// that starts a line, but import type and export type (the refuter's form, c4g/refute-ci-docs-2/keep/audit-fixed.ts)
+const SOURCE_REQUEST = /^(?:import|export)\b(?!\s+type\b)[^;]*?\bfrom\s+"([^"]+)"|^import\s+"([^"]+)"/gm;
 let bad = 0;
 const fail = (line: string) => {
   bad = 1;
@@ -106,9 +171,11 @@ if (what === "graph") {
       if (why.length > 0) fail(`${e}: ${r ?? m.specifier}: ${why.join("; ")}`);
     }
     const src = Deno.readTextFileSync(`research/${e}`);
-    const first = [...src.matchAll(/^import\b[^;]*?from\s+"([^"]+)"|^import\s+"([^"]+)"/gm)].map((x) => x[1] ?? x[2]).slice(0, 2);
-    if (first[0] !== "./lawsearch-lockdown.ts" || first[1] !== "./lawsearch-frozen.ts") fail(`${e}: its first two imports are ${first.join(", ")}, not ./lawsearch-lockdown.ts and ./lawsearch-frozen.ts`);
-    console.log(`${e}: ${mods.length} modules; first imports ${first.join(", ")}`);
+    const first = [...src.matchAll(SOURCE_REQUEST)].map((x) => x[1] ?? x[2]).slice(0, 2);
+    const firstG = firstRequestsOf(e).slice(0, 2);
+    if (first[0] !== "./lawsearch-lockdown.ts" || first[1] !== "./lawsearch-frozen.ts") fail(`${e}: its first two module requests (source text) are ${first.join(", ")}, not ./lawsearch-lockdown.ts and ./lawsearch-frozen.ts`);
+    if (firstG[0] !== "./lawsearch-lockdown.ts" || firstG[1] !== "./lawsearch-frozen.ts") fail(`${e}: its first two module requests (deno info) are ${firstG.join(", ")}, not ./lawsearch-lockdown.ts and ./lawsearch-frozen.ts`);
+    console.log(`${e}: ${mods.length} modules; first module requests ${first.join(", ")} (deno info: ${firstG.join(", ")})`);
   }
   const lock = graphOf("lawsearch-lockdown.ts").map((m) => relOf(m.specifier));
   if (lock.length !== 1 || lock[0] !== "research/lawsearch-lockdown.ts") fail(`lawsearch-lockdown.ts imports something: ${lock.join(", ")}`);
@@ -124,6 +191,61 @@ if (what === "graph") {
     }
   }
   console.log(`the module graphs: ${bad ? "BAD (the lines above)" : "every condition holds"}`);
+} else if (what === "trigger") {
+  // C4h (F5): a workflow's on.push.paths (the plain list form these two files use: `on:`, then `push:`, then `paths:`
+  // with one `- <pattern>` per line); GitHub's filter patterns: * any characters but /, ** any characters; a pattern with
+  // any other special character ([, ], ?, +, !) is refused here, so the matching below is GitHub's
+  const pathsOf = (file: string): string[] => {
+    const lines = Deno.readTextFileSync(file).split("\n");
+    const out: string[] = [];
+    let inOn = false;
+    let inPush = -1;
+    let inPaths = -1;
+    for (const line of lines) {
+      if (/^\s*(#.*)?$/.test(line)) continue;
+      const ind = line.length - line.trimStart().length;
+      if (ind === 0) {
+        inOn = line.trim() === "on:";
+        inPush = -1;
+        inPaths = -1;
+        continue;
+      }
+      if (!inOn) continue;
+      if (inPaths >= 0 && ind > inPaths) {
+        const m = /^\s*-\s+(.+?)\s*$/.exec(line);
+        if (m === null) fail(`${file}: a line of push.paths that is not a list item: ${line.trim()}`);
+        else out.push(m[1].replace(/^(["'])(.*)\1$/, "$2"));
+        continue;
+      }
+      inPaths = -1;
+      if (line.trim() === "push:") inPush = ind;
+      else if (inPush >= 0 && ind > inPush && line.trim() === "paths:") inPaths = ind;
+      else if (ind <= inPush) inPush = -1;
+    }
+    if (out.length === 0) fail(`${file}: no on.push.paths found`);
+    return out;
+  };
+  const reOf = (pat: string): RegExp => {
+    if (/[[\]?+!]/.test(pat)) {
+      fail(`a push path with a special character this audit does not match as GitHub does: ${pat}`);
+      return /(?!)/;
+    }
+    const body = pat.split("**").map((part) => part.split("*").map((x) => x.replace(/[.^$|(){}\\/]/g, "\\$&")).join("[^/]*")).join(".*");
+    return new RegExp(`^${body}$`);
+  };
+  const own = pathsOf(".github/workflows/lawsearch.yml");
+  const audit = pathsOf(".github/workflows/lawsearch-audit.yml");
+  const pats = [...own.map((p) => ({ p, from: "lawsearch.yml", re: reOf(p), used: false })), ...audit.map((p) => ({ p, from: "lawsearch-audit.yml", re: reOf(p), used: false }))];
+  const files = filesOf();
+  let shared = 0;
+  for (const f of files) {
+    const hit = pats.filter((x) => x.re.test(f));
+    for (const x of hit) x.used = true;
+    if (hit.length === 0) fail(`not in the push paths of lawsearch.yml or lawsearch-audit.yml: ${f}`);
+    else if (!hit.some((x) => x.from === "lawsearch.yml")) shared++;
+  }
+  for (const x of pats) if (x.from === "lawsearch-audit.yml" && !x.used && !x.p.startsWith(".github/")) console.log(`not found (lawsearch-audit.yml path that matches no module of the graphs): ${x.p}`);
+  console.log(`${files.length} modules of the graphs, ${shared} of them matched only by lawsearch-audit.yml's paths: ${bad ? "BAD (the lines above)" : "every one is in a push path"}`);
 } else if (what === "source") {
   const pat = /node:|\bimport\s*\(|\beval\b|\bFunction\s*\(|\bnew\s+Function\b|\bDeno\s*\[|\bDeno\.internal\b|\bSharedArrayBuffer\b|\bAtomics\b|\bnew\s+Worker\b/;
   const allow = new Map(SOURCE_ALLOW.map(([f, l]) => [`${f}\t${l}`, false]));

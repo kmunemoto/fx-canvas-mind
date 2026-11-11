@@ -11,16 +11,27 @@
 // run's answer is not in the realm that recomputes it). It answers the recomputed values; lawsearch.ts compares them
 // with the table in the main thread (lawsearch-trade.ts followCompare), so the CheckResult is the one followBarChecks
 // gave before C4g, byte for byte.
+// C4h (the lead's F2 on C4g's review: this worker had no run-time test at all): the message carries the grants the
+// main thread holds (lawsearch-sandbox.ts grantsHeld: read and write on ".", the run folder and the dump folder, and
+// every path-less name, each that reads "granted" there); if any of them, or any path-less name, reads "granted" in this
+// realm (refusalOf: it was not started with permissions "none", or the option was ignored), it answers an error and
+// computes nothing, so the run stops (exit 1).
 import "./lawsearch-lockdown.ts";
 import "./lawsearch-frozen.ts";
 import { followValues } from "./lawsearch-trade.ts";
+import { refusalOf } from "./lawsearch-sandbox.ts";
 import type { FollowRows } from "./lawsearch-trade.ts";
 import type { TfSet } from "./lawsearch-types.ts";
 
 const scope = globalThis as unknown as { onmessage: ((e: MessageEvent) => void) | null; postMessage: (m: unknown) => void };
 scope.onmessage = (e: MessageEvent) => {
   scope.onmessage = null;
-  const m = e.data as { set: TfSet; rows: FollowRows };
+  const m = e.data as { set: TfSet; rows: FollowRows; grants: Deno.PermissionDescriptor[] };
+  const why = refusalOf("lawsearch-follow worker", m.grants);
+  if (why !== null) {
+    scope.postMessage({ err: why });
+    return;
+  }
   try {
     scope.postMessage({ ok: followValues(m.set, m.rows) });
   } catch (x) {

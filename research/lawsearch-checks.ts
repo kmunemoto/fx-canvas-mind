@@ -332,8 +332,20 @@ export interface UnitOut {
 // poison's uncut holes per timeframe (exclCtxOf of the uncut timeframe of the thread's own copy of the universe, made
 // once per timeframe and task: a function of the universe, avoid and plant only, which do not change within a task).
 // C4f (the lead's H1): poisonCheck takes no ExclCtx any more (stage 0 used to pass the main run's), so poison's holes
-// are always made here, from the universe and the avoid table the check was given.
+// are always made here, from the universe and the avoid table the check was given. C4h (F3): a poison unit reads the
+// cached ExclCtx's holes only; its avoid table is the unit's own copy (unitAvoidOf below).
 export type UnitCache = Partial<Record<TfKey, ExclCtx>>;
+
+// C4h (the lead's F3 on C4g's review): each poison and presence unit gets its own read-only copy of the task's avoid
+// table. The task's table is read-only through its own add, delete and clear (readOnlySet), but Set.prototype.add.call
+// writes into any Set; until C4h every poison and presence unit of a check run in a probe worker shared the task's one
+// table, so a unit could leave a value there for a later unit of the same worker and run (C4g's review, measured: half
+// of the plant avoidStashR3call's presence failures were variant (ii) reading variant (i)'s answer from it; with a
+// copy per unit every count halves and the run still exits 3). A unit's writes now go to its own copy, which is
+// dropped with the unit. The cut is left as it was: its units are fed in T order to workers made for the cut run
+// (deltas), so its task's table can only hold entries made from bars at or before the current target. The copy holds
+// the same entries (111 avoided slots in the ledger's table), so no decision changes.
+const unitAvoidOf = (avoid: ReadonlySet<string>): ReadonlySet<string> => readOnlySet(new Set(avoid), "the avoid table");
 
 // Runs the jobs of one task on universe u: next() gives the jobs in order (null: no more); done(out) is called with
 // the answers in that same order, whatever order they finish in; the promise ends when every job given was answered
@@ -492,11 +504,13 @@ export function runUnitJob(u: Universe, task: UnitTask, job: UnitJob, cache: Uni
       const trial = task.trials[job.ti];
       const set = trial.tf === "m15" ? u.m15 : u.h1;
       const ctx = cache[trial.tf] ??= exclCtxOf(set, task.avoid, u.fromMs, u.toMs, null, task.plant);
-      for (let q = 0; q < job.limit; q++) put(q, poisonGotAt(set, trial, ctx, job.pis[q], job.is[q], task, tablesOf(cache)));
+      // C4h (F3): the cached holes, with the unit's own copy of the avoid table
+      for (let q = 0; q < job.limit; q++) put(q, poisonGotAt(set, trial, exclCtxFrom(ctx.tf, ctx.step, ctx.holes, unitAvoidOf(task.avoid), null, task.plant), job.pis[q], job.is[q], task, tablesOf(cache)));
     } else {
       const trial = task.trials[job.ti];
       const set = trial.tf === "m15" ? u.m15 : u.h1;
-      for (let x = 0; x < job.limit; x++) put(x, presenceGotAt(u, set, trial, task.avoid, job.pis[x >> 1], job.is[x >> 1], (x & 1) === 0 ? "i" : "ii", task));
+      // C4h (F3): each unit (variant (i) and (ii) of a probe bar are two units) with its own copy of the avoid table
+      for (let x = 0; x < job.limit; x++) put(x, presenceGotAt(u, set, trial, unitAvoidOf(task.avoid), job.pis[x >> 1], job.is[x >> 1], (x & 1) === 0 ? "i" : "ii", task));
     }
   } catch (e) {
     out.err = e instanceof Error ? e.message : String(e);
