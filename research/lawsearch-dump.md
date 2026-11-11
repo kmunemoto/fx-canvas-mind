@@ -102,6 +102,15 @@ the "meaning" columns are the spec's.
     exit 1 and leave `config.json` alone. CI checks their exit, their console line, and that no folder (or no
     print.txt) is left. The plant
     `chosenCutSecondDiff` writes every file, as any run that withholds stage 2's numbers does (11.14 (b)).
+  - (C4g, 2026-11-10; `lawsearch-design.md` 8, 7.8) `seriesStashE04` now exits 7. The C4g plants run in a CI job of
+    their own (`plants-c4g`), on a C 7101 run that the job makes. The Python never sees them.
+    - `rp2EnvE04` exits 1 and leaves `config.json` alone.
+    - `avoidStashR3call`, `lenmemoEntryEarly`, `judgeListen2E04`, `judgeCacheCarryE04` and `w0protoG3` exit 3 and
+      write their files as any failing run does.
+    - `gmoWriteR` exits 0 and writes every file: the clean run's files but its mode, plant and time lines. During the
+      run it rewrites one close of the run's own `gmo/` in stage 0, and writes the original bytes back in stage 2. A
+      run that stopped before stage 2 would leave the file changed; C 7101 reaches stage 2. It is the one run that
+      writes into a `<RUN>/gmo` after the manifest was made. CI checks that the file is the same bytes after the run.
 
 ## 3. Formats (every CSV)
 
