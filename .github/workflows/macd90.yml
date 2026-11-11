@@ -1,0 +1,113 @@
+# The owner (2026-11-11): when the 1-hour MACD line comes into 90% of its pane, ride the flow; how often does it go on
+# to 96%? research/macd90.ts (the rule and output: research/macd90-spec.md), and the Python written apart from it
+# (research/macd90-check.py): the numbers are printed only when every row and number agree.
+#
+#   syn   two seeded walks (the 95% entry against the email's own code, the look-ahead check, the counts); then the
+#         first walk written as GMO's files, the study read from them, and the Python on the same files
+#   real  GMO's real 1-hour bars (research/.cache, fetched when missing), after syn passed
+#
+# GitHub's runners reach GMO's public price API, which the development container cannot. Read-only: public files
+# fetched, a report printed; it writes nothing to the repository and holds no secret.
+name: Research macd90
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/macd90*.ts
+      - research/macd90-check.py
+      - .github/workflows/macd90.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  START: "2024-01-01T00:00:00Z"
+  END: "2026-11-10T21:00:00Z"
+  LOAD_FROM: "2023-10-01T00:00:00Z"
+
+jobs:
+  syn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      LOAD_FROM: "2024-01-01T00:00:00Z"
+      START: "2024-03-01T00:00:00Z"
+      END: "2024-07-01T00:00:00Z"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: Two walks (the 95% entry against the email's code, the look-ahead check, the counts)
+        env:
+          MODE: synthetic
+          SEEDS: "1,2"
+        run: >
+          deno run --v8-flags=--max-old-space-size=8192
+          --allow-read=. --allow-write=research/out --allow-env
+          research/macd90.ts
+      - name: The first walk as GMO's files, the study read from them, and the Python on the same files
+        env:
+          MODE: walkfiles
+          SEEDS: "1"
+          OUT: research/out/macd90-walk
+        run: |
+          deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/macd90.ts
+          python3 -I research/macd90-check.py --cache $OUT/gmo --out $OUT
+
+  real:
+    needs: [syn]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      OUT: research/out/macd90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      # GMO's day files never change once the day has rolled; each restore only adds files (the 1-hour ones are
+      # trend's and macdlive's)
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-trend-none
+          restore-keys: gmo-trend-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-macdlive-none
+          restore-keys: gmo-macdlive-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-macd90-none
+          restore-keys: gmo-macd90-
+      - name: The study (its numbers go to files; none printed here)
+        env:
+          MODE: real
+        run: |
+          mkdir -p $OUT
+          deno run --v8-flags=--max-old-space-size=8192 \
+            --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env \
+            research/macd90.ts
+          ls -la $OUT
+          sha256sum $OUT/rows.csv $OUT/summary.json
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache
+          key: gmo-macd90-${{ github.run_id }}
+      - name: The Python on the same files and rows
+        run: python3 -I research/macd90-check.py --cache research/.cache --out $OUT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macd90-${{ github.run_id }}
+          path: research/out/macd90
+      - name: The numbers (the Python agreed)
+        env:
+          MODE: print
+        run: deno run --allow-read=. --allow-env research/macd90.ts
