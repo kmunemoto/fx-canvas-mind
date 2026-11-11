@@ -30,6 +30,14 @@ the "meaning" columns are the spec's.
   - A TS run that ends with exit 1 writes no `checks.csv` and no `print.txt`; the files written before the error stay
     in its folder. Exit 1 comes from a crash, from the TS guard's `SHARED` line, or from a write into a frozen or
     read-only object.
+  - (C4g, 2026-11-10; `lawsearch-design.md` 2.3) The TS's code for the first ending is now **7**, not 6. So the TS's
+    exits (0–4 and 7) and the comparator's own 5 and 6 (10) no longer share a number. The ending is otherwise the
+    same. Exit 1
+    also covers a refused permission (`NotCapable`), for example a read of the environment, which the TS revokes after
+    reading its settings.
+- (C4g, 2026-11-10; `lawsearch-design.md` 7.7) The TS reads `<RUN>/gmo` once, at its gate 3, and computes treeSha256
+  over exactly the bytes it read. It loads every stage from those bytes and never reads a gmo file from the disk again.
+  The digest and the stop on a mismatch are as described below. Nothing in the files the Python reads changes.
 
 - A day file is one JSON object `{"status":0,"data":[{"openTime":"<ms>","open":"<dec>","high":"<dec>","low":"<dec>",
   "close":"<dec>"},…]}`. A day without bars has `"data":[]`. The prices have 3 decimals on the yen pairs and 5 on the
