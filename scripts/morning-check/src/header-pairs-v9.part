@@ -1,0 +1,12 @@
+-- pairs-v9.sql  (task #397)  -  the morning check of the MACD ride's e-mails for the FIVE PAIRS (USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD), rule v9.
+-- ONE read-only statement (WITH ... SELECT) for mcp__Supabase__execute_sql. Replace the two markers START_MS and END_MS (each written once, in double curly braces, in the first CTE) by the epoch
+-- milliseconds of the range: bars are judged by their OPEN time, START_MS <= open < END_MS; the Routine's day is (X-2d) 21:00 UTC .. (X-1d) 21:00 UTC,
+-- END_MS = START_MS + 86400000. Nothing else is to be edited. Bars that opened before 2026-11-12 07:00 UTC (1794466800000) were judged by the v8 rule (pairs-v8.sql) or an earlier one: see README.md v9.1 for the file of each day.
+-- It recounts the MACD ride (signal-alerts v39, #397, docs 8.150; supabase/functions/_shared/macd-ride.ts): at a 1-hour bar's close the MACD line (blue) came into the top / bottom 90% band of the
+-- MACD pane of the newest 120 bars (the bar before outside it) = email 1, a BUY on the top side and a SELL on the bottom side (rule id macdx_12_26_9_w600_1h_ride90to96of120_in_v9), or, when the
+-- line is already at 96% there, a notice and no ride (..._at_v9); the ride is held until the line touches 96% of the same edge = email 2 (..._out_v9; its row's bar is the ride's ENTRY bar).
+-- From public.gmo_kline_files as production reads the data (closes, and each bar's high and low for the touch), compared with public.macd_rides (the rides), public.macd_ride_state (the state
+-- production kept for each bar) and public.signal_alerts (kind signal, interval 1h, the three rule ids).
+-- It reads no user_id / event_id / e-mail address and writes nothing.
+-- Result: columns row_type (RUN | SUMMARY | LINE), instrument, bar_open_utc, side, verdict, data (json). See README.md v9 for every field.
+-- Written to be run in well under a minute (one day: about 1 second).

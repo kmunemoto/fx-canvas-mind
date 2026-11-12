@@ -1,0 +1,45 @@
+-- gold has ONE stored row (the latest read of Twelve Data); the sweep replaces it at every read, so older versions of the row do not exist
+grow0 as (
+  select f.bars, f.fetched_at, floor(extract(epoch from f.fetched_at) * 1000)::bigint as fetched_ms
+  from public.live_chart_fallback f where f.pair = 'XAU/USD' and f.interval = '1h'
+),
+-- every bar of the row in the row's own order; datetime = the bar's OPEN, 'YYYY-MM-DD HH:MM:SS' UTC
+braw as (
+  select e.ord as pos, e.x ->> 'datetime' as dt_s, e.x ->> 'close' as c_s, e.x ->> 'high' as h_s, e.x ->> 'low' as l_s, g.fetched_ms
+  from grow0 g
+  cross join lateral jsonb_array_elements(case when jsonb_typeof(g.bars) = 'array' then g.bars else '[]'::jsonb end) with ordinality as e(x, ord)
+),
+bgold as (
+  select pos, fetched_ms, coalesce(dt_s ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$' and c_s ~ '^[0-9]+(\.[0-9]+)?$', false) as ok, dt_s, c_s,
+         case when h_s ~ '^[0-9]+(\.[0-9]+)?$' then h_s::float8 end as hi, case when l_s ~ '^[0-9]+(\.[0-9]+)?$' then l_s::float8 end as lo
+  from braw
+),
+bgold2 as (
+  select pos, fetched_ms, ok,
+         case when ok then floor(extract(epoch from (dt_s::timestamp at time zone 'UTC')) * 1000)::bigint end as ot,
+         case when ok then c_s::float8 end as cl, hi, lo
+  from bgold
+),
+-- closedOf / closedBy: a stored bar counts as closed only when its end is not after the moment the row was read (a bar still forming then is left out).
+-- seq = the place of the bar in the row: production keeps the row's order (closedOf only filters). The stored bars already passed parseCandles (every price > 0,
+-- coherent bar, sorted, one bar per time), so cl > 0 drops nothing a stored row can hold.
+us as (
+  select y.symbol, b.ot, b.pos as seq, b.cl as m8, y.d, b.hi as h8, b.lo as l8
+  from bgold2 b cross join syms y
+  where b.ok and b.ot + 3600000 <= b.fetched_ms and b.cl > 0
+),
+-- v9: the highs and lows a ride's touch is read from, per bar of the range (unrounded; BACK 1 rounds them as the chart draws them). Gold has two sources:
+--   twelve = the stored bar's own high and low (what a close's catch-up reads: rideCatchUp on the stored Twelve Data bars);
+--   ticks  = the highest high and the lowest low of the hour's recorded minutes (public.gold_tick_bars, Swissquote's mid: what the minute's check reads, goldHourExtremes; the
+--            table keeps two days, so a run long after the day finds none).
+-- A ride is reached in the first bar either of them touches in.
+hsrc as (
+  select symbol, ot, 'twelve'::text as src, h8, l8, d from us where ot >= (select start_ms from pp) and ot < (select end_ms from pp)
+  union all
+  select y.symbol, (floor(extract(epoch from g.minute) / 3600) * 3600000)::bigint as ot, 'ticks'::text, max(g.high)::float8, min(g.low)::float8, y.d
+  from public.gold_tick_bars g cross join syms y cross join pp
+  where g.minute >= to_timestamp(pp.start_ms / 1000.0) and g.minute < to_timestamp(pp.end_ms / 1000.0)
+  group by y.symbol, y.d, 2
+),
+-- v9: what a ride pays at a bar's close: gold has one price, the bar's close (BACK 2 takes the recount's close when these are null)
+paid as (select symbol, ot, null::float8 as paid_buy, null::float8 as paid_sell from us where false),

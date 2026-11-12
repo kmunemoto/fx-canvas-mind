@@ -5,6 +5,7 @@
 #   v6 (#362: rule macdx_12_26_9_w600_1h_z95of120_v6, signal-alerts v30, bars opened from 2026-10-19 21:00 to 2026-10-26 20:00 UTC): pairs-v6.sql, gold-v6.sql and their .min.sql
 #   v7 (#384: rule macdx_12_26_9_w600_15min_z95of120_v7, signal-alerts v31, the 15-minute chart, GMO days from key 20261026, the switch day, see ../README.md v7.1): pairs-v7.sql, gold-v7.sql and their .min.sql
 #   v8 (#386: rule macdx_12_26_9_w600_1h_z95of120_v8, signal-alerts v33, the 1-hour chart again, GMO days from key 20261030, the switch day back, see ../README.md v8.1): pairs-v8.sql, gold-v8.sql and their .min.sql
+#   v9 (#397: the MACD ride, rule ids macdx_12_26_9_w600_1h_ride90to96of120_{in,at,out}_v9, signal-alerts v39, GMO days from key 20261112, the switch day, see ../README.md v9.1): pairs-v9.sql, gold-v9.sql and their .min.sql
 # The .sql files keep the comments; the .min.sql files are the same statement without comments and indentation (shorter to paste into one tool call).
 # Nothing is edited by hand in the deliverables: change a part, run this, run the tests (see ../README.md).
 #   bash build.sh
@@ -50,6 +51,19 @@ $A $O/pairs-v8.sql           header-pairs-v8.part    head.part syms-pairs-v8.par
 $A $O/pairs-v8.min.sql                               head.part syms-pairs-v8.part front-pairs.part engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v8.part guard-pairs.part dayend-pairs-v4.part back2-v8.part --sub SQLNAME=pairs.sql --strip
 $A $O/gold-v8.sql            header-gold-v8.part     head.part syms-gold-v8.part  front-gold.part  engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v8.part guard-gold.part  dayend-gold-v4.part  back2-v8.part --sub SQLNAME=gold.sql
 $A $O/gold-v8.min.sql                                head.part syms-gold-v8.part  front-gold.part  engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v8.part guard-gold.part  dayend-gold-v4.part  back2-v8.part --sub SQLNAME=gold.sql --strip
+
+# ---- v9 (#397: the MACD ride, signal-alerts v39, rule ids macdx_12_26_9_w600_1h_ride90to96of120_{in,at,out}_v9, GMO days from key 20261112, the switch day, see ../README.md v9.1;
+#      the head, the engine, the guards and the day's end are the parts v8 uses; new: header, syms, front (the pairs' high / low and the two closes), back1 and back2) ----
+$A $O/pairs-v9.sql           header-pairs-v9.part    head.part syms-pairs-v9.part front-pairs-v9.part engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v9.part guard-pairs.part dayend-pairs-v4.part back2-v9.part run-v9.part --sub SQLNAME=pairs.sql
+$A $O/pairs-v9.min.sql                               head.part syms-pairs-v9.part front-pairs-v9.part engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v9.part guard-pairs.part dayend-pairs-v4.part back2-v9.part run-v9.part --sub SQLNAME=pairs.sql --strip
+$A $O/gold-v9.sql            header-gold-v9.part     head.part syms-gold-v9.part  front-gold-v9.part  engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v9.part guard-gold.part  dayend-gold-v4.part  back2-v9.part run-v9.part --sub SQLNAME=gold.sql
+$A $O/gold-v9.min.sql                                head.part syms-gold-v9.part  front-gold-v9.part  engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v9.part guard-gold.part  dayend-gold-v4.part  back2-v9.part run-v9.part --sub SQLNAME=gold.sql --strip
+
+# ---- v9, the function form (README v9.7): the same statements with the two markers as the parameters p_start / p_end and the RUN row's md5 read from pg_proc (run-v9-fn.part),
+#      and the migration that installs them as mc.pairs_v9 / mc.gold_v9 (generated: never edited by hand) ----
+$A $O/pairs-v9.fn.sql        head.part syms-pairs-v9.part front-pairs-v9.part engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v9.part guard-pairs.part dayend-pairs-v4.part back2-v9.part run-v9-fn.part --sub SQLNAME=pairs.sql --sub START_MS=p_start --sub END_MS=p_end --sub FN=mc.pairs_v9 --sub FNFILE=pairs-v9.fn.sql --strip
+$A $O/gold-v9.fn.sql         head.part syms-gold-v9.part  front-gold-v9.part  engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v9.part guard-gold.part  dayend-gold-v4.part  back2-v9.part run-v9-fn.part --sub SQLNAME=gold.sql --sub START_MS=p_start --sub END_MS=p_end --sub FN=mc.gold_v9 --sub FNFILE=gold-v9.fn.sql --strip
+python3 -I mkfn.py ../../../supabase/migrations/20261112130000_morning_check_v9.sql fn-header-v9.part mc.pairs_v9 $O/pairs-v9.fn.sql mc.gold_v9 $O/gold-v9.fn.sql
 
 # ---- v3 must be unchanged ----
 md5sum -c v3.md5

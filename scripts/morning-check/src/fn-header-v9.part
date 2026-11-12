@@ -1,0 +1,18 @@
+-- #397 (docs §8.150): the morning check of the MACD ride's e-mails (scripts/morning-check, v9) as two read-only functions.
+--
+-- The check's statements (scripts/morning-check/pairs-v9.min.sql and gold-v9.min.sql) are some 43,000 and 40,000 characters: too long to be typed into a tool call every
+-- morning without slips (v8's were 25,000). Kept in the database as functions they are called with one short line:
+--   select * from mc.pairs_v9(START_MS, END_MS)      select * from mc.gold_v9(START_MS, END_MS)
+-- The functions are the statements themselves (scripts/morning-check/pairs-v9.fn.sql and gold-v9.fn.sql, built by scripts/morning-check/src/build.sh from the same parts as
+-- the .min.sql files; the two markers are the parameters). Their RUN row says md5(prosrc), to be compared with the md5 of the repository's file.
+--
+-- Read only: language sql, stable, one WITH ... SELECT each. They read public.gmo_kline_files, public.live_chart_fallback, public.gold_tick_bars, public.twelve_data_usage,
+-- public.signal_alerts (kind, pair, interval, rule, side, bar_time, status, sent_at, closed_at, entry: no user_id, no event_id, no e-mail address),
+-- public.signal_alert_subscriptions (pair, interval, rule: a count), public.macd_rides and public.macd_ride_state (neither has a user column). They write nothing.
+-- The schema mc is not one the API serves, and nobody but the owner (postgres) may use it or run the functions: anon and authenticated have no right on either.
+-- To take them away again: drop schema mc cascade;
+--
+-- THIS FILE IS GENERATED (scripts/morning-check/src/build.sh, mkfn.py): do not edit it by hand.
+
+create schema if not exists mc;
+revoke all on schema mc from public, anon, authenticated;
