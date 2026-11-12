@@ -9,6 +9,9 @@ reached とする。入り方は2つ:
   moment: Zp(i) がその側の 90% にない足 i の中で、90% に触れた最初の分。その分の終値で入り、次の分から追う。
 追い方（どちらも）: 分が 96% に触れたら reached（その1分足の終値で出る）。足 j の確定では macd90 と同じく、
 A は Z(j) が 90% の外、B は線が 0 の線かその向こうで failed（その1時間足の終値で出る）。どちらもなければ open。
+C（オーナー、2026-11-12: 「96%に届くまで持ち続ける」）: failed は無く、96% に触れた最初の分で reached、読み込んだ
+最後の足までに触れなければ open。持っている間（同じ入り方・通貨・向きで、前に取った入りの出る時 T より前の入り、
+または前に取った入りが open）の入りは skipped（取引なし。T0 == T は取る）。already の入りは何も始めず、何も止めない。
 分の値段は、上の側は中値の高値 hi = round_chart((bh + ah) / 2)、下の側は中値の安値 lo = round_chart((bl + al) / 2)。
 
 research/macd90.ts・research/macd90m.ts（TypeScript の側）は読まずに、spec と、spec が名前を出す本番のエンジン
@@ -22,6 +25,8 @@ prep・decide（作りかけの足の 599 番だけを足し直す形。TS と�
   - 分の線（準備した 598 番の状態に x を足したもの）が、x で窓を組み直した zoneAt のそのまま写し（zone_ref）と
     同じ（moment の入りの分・reached の分すべてと、SAMPLE_EVERY 分に1つ）。
   - 入り方ごとに、A の reached なら B も同じ時に reached。数が足し合う。
+  - C: 取った C が reached で A（B）も reached なら、T・pips・mae が同じ。C の T は A・B の T より前にならない。
+    同じ入り方・通貨・向きの取った C は重ならない。reached + open + skipped + already = entries。
 
 使い方:
   [START=… END=… LOAD_FROM=…] python3 -I research/macd90m-check.py --cache DIR --out OUT
@@ -66,6 +71,7 @@ S_GO = m90.S_GO                  # 0.96
 A12, A26, A9 = m90.A12, m90.A26, m90.A9
 B12, B26, B9 = m90.B12, m90.B26, m90.B9
 REL = m90.REL
+INF = m90.INF
 MAX_DIFF_LINES = m90.MAX_DIFF_LINES
 SAMPLE_EVERY = 4999              # 分の線を組み直した窓で確かめる（この数に1つと、入り・reached の分すべて）
 DEFAULTS = m90.DEFAULTS
@@ -74,10 +80,17 @@ WAYS = ('A', 'B')
 WAY_COLS = ['result', 'T', 'exit', 'pips', 'mae', 'minutes', 'share']
 COLS = ['way', 'pair', 'open', 'T0', 'side', 'entry', 'share0', 'already'] + \
        [w + '_' + c for w in WAYS for c in WAY_COLS]
-SHARE_COLS = {'share0', 'A_share', 'B_share'}
+C_COLS = ['C_' + c for c in WAY_COLS]                # way C（96% に届くまで持つ）: B_share の後ろの7つの欄
+COLS = COLS + C_COLS
+SHARE_COLS = {'share0', 'A_share', 'B_share', 'C_share'}
 W_KEYS = ['reached', 'failed', 'open', 'rate', 'pipsSum', 'pipsMean', 'pipsMedian', 'reachedPipsMean',
           'failedPipsMean', 'maeMedian', 'maeMax', 'minutesMedian', 'minutesMax', 'openPipsSum', 'openPipsWorst']
 W_NEAR = {'rate', 'pipsMean', 'pipsMedian', 'reachedPipsMean', 'failedPipsMean', 'maeMedian', 'minutesMedian'}
+C_KEYS = ['reached', 'open', 'skipped', 'plus', 'minus', 'pipsSum', 'pipsMean', 'pipsMedian', 'pipsMin',
+          'maeMedian', 'maeP90', 'maeMax', 'minutesMedian', 'minutesP90', 'minutesMax', 'within60', 'within1440',
+          'within10080', 'openPipsSum', 'openPipsWorst', 'openMaeMax', 'openMinutesMax']
+C_NEAR = {'pipsMean', 'pipsMedian', 'maeMedian', 'minutesMedian'}     # ほか（数え方・和・最小・最大・P90）は同じ数
+C_WITHIN = (60, 1440, 10080)
 G_KEYS = ['entries', 'already']
 GROUPS = ['all'] + PAIRS + ['BUY', 'SELL']
 PAIR_KEYS = ['bars', 'minutes', 'close', 'moment']
@@ -268,6 +281,7 @@ def compute_pair(cache, pi, pair, start, end, load_from, ld, chk, log):
                     fl |= B96
             flags[k] = fl
     t_min = time.time() - t_pair - t_zone
+    go96 = {1: [k for k in range(nm) if flags[k] & T96], -1: [k for k in range(nm) if flags[k] & B96]}
 
     def minute_line(sd, k):
         j = mbar[k]
@@ -318,8 +332,9 @@ def compute_pair(cache, pi, pair, start, end, load_from, ld, chk, log):
         return res
 
     def fill(r, sd, res, T0, pe, k_lo):
-        """1つの入りの A・B の欄。mae は分 k_lo から出る分まで（足の確定で出るときは、その足の確定より前の最後の分）。"""
-        for w in WAYS:
+        """1つの入りの、res にある道（A・B、または C）の欄。mae は分 k_lo から出る分まで（足の確定で出るときは、
+        その足の確定より前の最後の分）。"""
+        for w in res:
             kind, what, idx = res[w]
             if what == 'min':
                 k = idx
@@ -349,13 +364,37 @@ def compute_pair(cache, pi, pair, start, end, load_from, ld, chk, log):
             r[w + '_minutes'] = d // MIN if d % MIN == 0 else d / MIN
             r[w + '_share'] = share
             r['_' + w + '_Tms'] = Tx
+
+    held = {}                                        # (入り方, 向き) → 最後に取った C の出る時（open は INF）
+
+    def trade(r, sd, jb, k_start, T0, entry):
+        """already でない入り1つ: A・B を追い、C は持っていなければ取る（k_start から最初の 96% の分。無ければ open）"""
+        pe = P(entry)
+        res = follow(sd, jb, k_start)
+        fill(r, sd, res, T0, pe, k_start)
         if res['A'][0] == 'reached' and (res['B'][0] != 'reached' or r['A_T'] != r['B_T']):
             chk['aNotB'].append(f'{pair} {r["way"]} {r["open"]}')
+        key = (r['way'], sd)
+        last = held.get(key)
+        if last is not None and T0 < last:           # 持っている間（open は INF）: 取らない
+            r['C_result'] = 'skipped'
+            return
+        q = bisect.bisect_left(go96[sd], k_start)
+        ev = ('reached', 'min', go96[sd][q]) if q < len(go96[sd]) else ('open', 'bar', n - 1)
+        fill(r, sd, {'C': ev}, T0, pe, k_start)
+        held[key] = r['_C_Tms'] if ev[0] == 'reached' else INF
+        where = f'{pair} {r["way"]} {r["open"]}'
+        for w in WAYS:
+            if r['_C_Tms'] < r['_' + w + '_Tms']:
+                chk['cBefore'].append(f'{where}: C out before {w}')
+            if r[w + '_result'] == 'reached' and not (
+                    ev[0] == 'reached' and all(r['C_' + col] == r[w + '_' + col] for col in WAY_COLS)):
+                chk['cNotSame'].append(f'{where}: {w} reached, C not the same trade')
 
     def row(way, i, T0, sd, entry, share0, already):
         r = dict(way=way, wi=WAYS_IN.index(way), pair=pair, pi=pi, _T0=T0, open=fc.iso(t[i]), T0=fc.iso(T0),
                  side='BUY' if sd > 0 else 'SELL', entry=entry, share0=share0, already=1 if already else 0)
-        for w in WAYS:
+        for w in WAYS + ('C',):
             for col in WAY_COLS:
                 r[w + '_' + col] = None
         return r
@@ -382,8 +421,7 @@ def compute_pair(cache, pi, pair, start, end, load_from, ld, chk, log):
             already = in_band(sd, S_GO, *Z[i])
             r = row('close', i, T, sd, entry, share_of(sd, Z[i]), already)
             if not already:
-                fill(r, sd, follow(sd, i + 1, ms[i + 1] if i + 1 < n else nm), T, P(entry),
-                     ms[i + 1] if i + 1 < n else nm)
+                trade(r, sd, i + 1, ms[i + 1] if i + 1 < n else nm, T, entry)
             rows.append(r)
             n_close += 1
         # moment: Zp(i) がその側の 90% にない足の、90% に触れた最初の分（両方に触れる分は上の側で読む）
@@ -405,7 +443,7 @@ def compute_pair(cache, pi, pair, start, end, load_from, ld, chk, log):
             already = bool(fl & (T96 if sd > 0 else B96))
             r = row('moment', i, T0, sd, entry, share_of(sd, minute_line(sd, k)[2]), already)
             if not already:
-                fill(r, sd, follow(sd, i, k + 1), T0, P(entry), k + 1)
+                trade(r, sd, i, k + 1, T0, entry)
             rows.append(r)
             n_moment += 1
             break
@@ -426,14 +464,46 @@ def compute_pair(cache, pi, pair, start, end, load_from, ld, chk, log):
 
 def compute(cache, start, end, load_from, log):
     ld = fc.LoadStats()
-    chk = dict(minutesChecked=0, orphan=0, mismatch=[], both=[], bothMinute=[], aNotB=[])
+    chk = dict(minutesChecked=0, orphan=0, mismatch=[], both=[], bothMinute=[], aNotB=[], cOverlap=[], cBefore=[],
+               cNotSame=[])
     rows, pairs = [], []
     for pi, pair in enumerate(PAIRS):
         r, info = compute_pair(cache, pi, pair, start, end, load_from, ld, chk, log)
         rows.extend(r)
         pairs.append(info)
     rows.sort(key=lambda r: (r['_T0'], r['pi'], r['wi']))
+    chk['cOverlap'] = c_overlaps(rows)
     return rows, pairs, ld, chk
+
+
+def c_overlaps(rows):
+    """取った C（reached・open）を、入り方・通貨・向きごとに入りの時の順に見て、前の取引の出る時より前に始まるもの、
+    open の後に始まるもの、取るはずなのに skipped のもの（前に取った取引が無い・もう出ている）を並べる。
+    行だけから数え直す（skip を決めた状態は使わない）。"""
+    bad = []
+    last = {}                                        # (入り方, 通貨, 向き) → (出る時, open か)
+    for r in rows:                                   # 行は入りの時の順
+        if r['already']:
+            if r['C_result'] is not None:
+                bad.append(f'{r["pair"]} {r["way"]} {r["open"]}: an already row with a C result')
+            continue
+        key = (r['way'], r['pair'], r['side'])
+        prev = last.get(key)
+        holding = prev is not None and (prev[1] or r['_T0'] < prev[0])
+        where = f'{r["pair"]} {r["way"]} {r["open"]} {r["side"]}'
+        if r['C_result'] == 'skipped':
+            if not holding:
+                bad.append(f'{where}: skipped, but no trade of its way in, pair and side is held at T0')
+            if any(r['C_' + col] is not None for col in WAY_COLS[1:]):
+                bad.append(f'{where}: skipped, but C cells are filled')
+            continue
+        if r['C_result'] not in ('reached', 'open'):
+            bad.append(f'{where}: C result {r["C_result"]!r}')
+            continue
+        if holding:
+            bad.append(f'{where}: taken while the trade before it is held')
+        last[key] = (r['_C_Tms'], r['C_result'] == 'open')
+    return bad
 
 
 # ---------------------------------------------------------------- 数
@@ -458,9 +528,40 @@ def way_stats(rows, w):
                 openPipsSum=fc.add_in_order(ops) if ops else None, openPipsWorst=min(ops) if ops else None)
 
 
+def p90(xs):
+    """n 個の値の P90: 小さい順の (9n + 9) // 10 番目（1 から数える。0.9 n の切り上げ）。無ければ None"""
+    if not xs:
+        return None
+    return sorted(xs)[(9 * len(xs) + 9) // 10 - 1]
+
+
+def c_stats(rows):
+    """way C の数（行の順）。reached の行・open の行それぞれの数。値が無ければ None（和も）。"""
+    rc = [r for r in rows if r['C_result'] == 'reached']
+    op = [r for r in rows if r['C_result'] == 'open']
+    pips = [r['C_pips'] for r in rc]
+    maes = [r['C_mae'] for r in rc]
+    mins = [r['C_minutes'] for r in rc]
+    ops = [r['C_pips'] for r in op]
+    n = len(rc)
+    s = fc.add_in_order(pips)
+    out = dict(reached=n, open=len(op), skipped=sum(1 for r in rows if r['C_result'] == 'skipped'),
+               plus=sum(1 for v in pips if v > 0), minus=sum(1 for v in pips if v < 0),
+               pipsSum=s if n else None, pipsMean=s / n if n else None, pipsMedian=fc.median(pips),
+               pipsMin=min(pips) if n else None,
+               maeMedian=fc.median(maes), maeP90=p90(maes), maeMax=max(maes) if n else None,
+               minutesMedian=fc.median(mins), minutesP90=p90(mins), minutesMax=max(mins) if n else None)
+    for lim in C_WITHIN:
+        out[f'within{lim}'] = sum(1 for v in mins if v <= lim)
+    out.update(openPipsSum=fc.add_in_order(ops) if ops else None, openPipsWorst=min(ops) if ops else None,
+               openMaeMax=max(r['C_mae'] for r in op) if op else None,
+               openMinutesMax=max(r['C_minutes'] for r in op) if op else None)
+    return {k: out[k] for k in C_KEYS}
+
+
 def group(rows):
     return dict(entries=len(rows), already=sum(r['already'] for r in rows), A=way_stats(rows, 'A'),
-                B=way_stats(rows, 'B'))
+                B=way_stats(rows, 'B'), C=c_stats(rows))
 
 
 def groups_of(rows):
@@ -485,6 +586,9 @@ def counts_add_up(summ):
                 s = g[w]
                 if s['reached'] + s['failed'] + s['open'] + g['already'] != g['entries']:
                     bad.append(f'ways.{wi}.{name}.{w}: reached + failed + open + already != entries')
+            s = g['C']
+            if s['reached'] + s['open'] + s['skipped'] + g['already'] != g['entries']:
+                bad.append(f'ways.{wi}.{name}.C: reached + open + skipped + already != entries')
     return bad
 
 
@@ -602,7 +706,17 @@ def compare_summary(C, mine, S):
                         continue
                     C.num(f'ways.{wi}.{g}.{w}.{k}', mg[w][k], tw[k], k in W_NEAR)
                 skipped += [f'ways.{wi}.{g}.{w}.{k}' for k in tw if k not in W_KEYS]
-            skipped += [f'ways.{wi}.{g}.{k}' for k in th if k not in G_KEYS + list(WAYS)]
+            tc = th.get('C')
+            if not isinstance(tc, dict):
+                C.bad(f'ways.{wi}.{g}.C: missing in summary.json')
+            else:
+                for k in C_KEYS:
+                    if k not in tc:
+                        C.bad(f'ways.{wi}.{g}.C.{k}: missing in summary.json')
+                        continue
+                    C.num(f'ways.{wi}.{g}.C.{k}', mg['C'][k], tc[k], k in C_NEAR)
+                skipped += [f'ways.{wi}.{g}.C.{k}' for k in tc if k not in C_KEYS]
+            skipped += [f'ways.{wi}.{g}.{k}' for k in th if k not in G_KEYS + list(WAYS) + ['C']]
         known = set(GROUPS) | {p.replace('/', '_') for p in PAIRS}
         for k in tg:
             if k not in known:
@@ -625,6 +739,11 @@ def group_line(wi, name, g):
         rate = '-' if s['rate'] is None else f'{s["rate"]:.2f}%'
         out += (f'; {w}: reached {s["reached"]}, failed {s["failed"]}, open {s["open"]}, rate {rate}, '
                 f'pips sum {fmt(s["pipsSum"])} / mean {fmt(s["pipsMean"])}')
+    s = g['C']
+    out += (f'; C: reached {s["reached"]} (plus {s["plus"]}, minus {s["minus"]}), open {s["open"]}, skipped '
+            f'{s["skipped"]}, pips sum {fmt(s["pipsSum"])} / mean {fmt(s["pipsMean"])} / min {fmt(s["pipsMin"])}, '
+            f'mae max {fmt(s["maeMax"])}, minutes median {fmt(s["minutesMedian"])} / max {fmt(s["minutesMax"])}, '
+            f'open pips {fmt(s["openPipsSum"])}')
     return out
 
 
@@ -674,9 +793,13 @@ def main():
           f'({chk["minutesChecked"]} minute lines): mismatches {len(chk["mismatch"])}; A reached without B at the '
           f'same moment {len(chk["aNotB"])}; close entries in both bands {len(chk["both"])}; moment minutes touching '
           f'both sides {len(chk["bothMinute"])}; counts not adding up {len(sums)}')
+    print(f'  checks, way C: A or B reached and C not the same trade {len(chk["cNotSame"])}; C out before A or B '
+          f'{len(chk["cBefore"])}; taken while held, or skipped while nothing is held (from the rows alone) '
+          f'{len(chk["cOverlap"])}')
     problems = (['minute/bar line: ' + m for m in chk['mismatch']] +
                 ['A reached, B not at the same moment: ' + m for m in chk['aNotB']] +
-                ['both bands at a close: ' + m for m in chk['both']] + sums)
+                ['both bands at a close: ' + m for m in chk['both']] + sums +
+                ['way C: ' + m for m in chk['cNotSame'] + chk['cBefore'] + chk['cOverlap']])
     for m in chk['bothMinute'][:5]:
         print('  note: a moment minute touching both sides (read on the top side if it may enter there): ' + m)
 

@@ -86,6 +86,43 @@ summary.json: `{ meta, pairs: [{ pair, bars, minutes, close, moment }], ways: { 
 GROUPS as research/macd90-spec.md's `groups` (all, each pair, BUY, SELL), each W with `barsMedian, barsMax` replaced by
 `minutesMedian, minutesMax`. `minutes` in pairs: 1-minute bars loaded.
 
+## Way C: held until it gets there (the owner, 2026-11-12)
+
+The owner, asked what the email should do when the line leaves the 90% band before 96%: 「96%に届くまで持ち続ける」
+(no stop, no notice), and while a trade is held no new entry of the same pair and side is mailed. So a third way out,
+**C**, beside A and B, for both ways in:
+
+- **reached**: as A and B (the first minute after the entry that touches 96% on the entry's side; out at that
+  minute's close). No failure: a trade not reached by the last bar loaded is **open**, valued at its close.
+- **skipped**: within one way in, one pair and one side, the entries are taken in time order; an entry (not
+  already) whose entry moment `T0` is before the moment out `T` of the last entry of that way in, pair and side that
+  was not skipped (or that entry is open) is skipped: no trade. An entry at `T0 >= T` is taken. Already entries start
+  no trade and skip nothing.
+- Numbers of a C trade as A's and B's: `T`, `exit`, `pips`, `mae`, `minutes`, `share`.
+
+rows.csv gains seven columns after `B_share`: `C_result` (reached / open / skipped; empty on an already row), `C_T`,
+`C_exit`, `C_pips`, `C_mae`, `C_minutes`, `C_share` (empty when skipped or already).
+
+summary.json: every group gains `"C"`:
+
+```
+C = { "reached", "open", "skipped",
+      "plus", "minus",                                   // reached trades with pips > 0, with pips < 0
+      "pipsSum", "pipsMean", "pipsMedian", "pipsMin",   // over reached
+      "maeMedian", "maeP90", "maeMax",                  // over reached
+      "minutesMedian", "minutesP90", "minutesMax",      // over reached
+      "within60", "within1440", "within10080",          // reached with minutes <= 60, <= 1440, <= 10080
+      "openPipsSum", "openPipsWorst", "openMaeMax", "openMinutesMax" }   // over open
+```
+
+P90 of n values: the value at rank `(9 * n + 9) // 10` (1-based, whole-number division: the ceiling of 0.9 n) of the
+values in ascending order. Null where there is
+no value (a sum over no trade included).
+
+Checks on the walks: a C trade that is reached and whose A is reached has the same `T`, pips and mae as A; a C trade's
+`T` is never before its A's or B's; no two taken C trades of one way in, pair and side overlap; the look-ahead check
+covers C (the future after its `T` rewritten: the row's C cells stay).
+
 ## Checks (on seeded walks, before the real run)
 
 - The line at a minute, computed from the prepared state, equals `zoneAt` on the window rebuilt with that price
