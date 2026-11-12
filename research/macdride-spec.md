@@ -202,8 +202,18 @@ and 5, gold from a minute after the hour while its bar is not judged), with `i` 
 4. **Entry** at bar `i`, while it closed at most `freshFor("1h")` (30 minutes) ago: `rideCloseStep`, on the ride
    rows as they stand after step 3 (a ride reached there counts as reached in its `reached_bar`). `in`: insert the
    ride row (`on_conflict=pair,side,entry_bar`, duplicates ignored), then read it back; mail email 1 only when the
-   row for this bar exists (inserted now or by an earlier run). `at`: mail the notice. `skip`, `quiet`: no mail; the
-   run's record says which.
+   row for this bar exists (inserted now or by an earlier run) and is still **open**: once the bar's own ride has
+   reached 96% it is over, and email 1 is mailed to nobody any more (the record says `over`; a follower who has no
+   email 1 gets email 2 alone). `at`: mail the notice. `skip`, `quiet`: no mail; the run's record says which.
+   A bar has **one decision, the first**: while the bar's own ride row is there the step is `in` whatever a later
+   read of the bar says (`rideCloseStep`), and a bar whose notice has a row is not opened as a ride by a later read
+   (`step: at`, `kept`). The feeds are not known to give a just-closed bar two closes; the guard costs one small
+   read at a new entry.
+
+A ridden chart is held judged by an instance only when the ride's work on the bar finished (the rows read, every
+write made, no exception): otherwise the same instance judges the bar again the next time the chart is due inside
+the fresh window, as a fresh instance would. A follower left without a mail does not make the bar unsettled here
+(as for every other rule, that mail is tried again only when the bar is judged again).
 
 **B. Each minute** (beside the spike block, after the closes of this run were judged, so a ride opened in this run
 is followed in this run): read `macd_rides` rows that are open or were reached in the last 30 minutes (one small
@@ -229,7 +239,11 @@ back: another run did it; read the row. Email 2 is written from the **row**, so 
 Then, for every ride reached in the last 30 minutes (B's read), email 2 to each follower with no out row for it yet
 (the rows already there are read first and left out before any lookup, as the spike block does); the claim's key
 keeps two runs from both mailing. A send that failed is not sent again (as every email here); a follower whose
-lookup failed is tried again by the next run within the 30 minutes.
+lookup failed is tried again by the next run within the 30 minutes. "Lookup failed" is the plan read failing **or
+the address lookup failing** (an answer that is neither 200 nor "no such user", or an unreadable body): no row is
+claimed then (`lookup_failed` in the run's counts, `unsent` in the record), where a follower who truly has no
+address gets one row marked failed. (Before v39 the indicators' mailer claimed a row on a failed address lookup and
+marked it failed for good; the change is in the shared mailer, so it holds for every rule mailed through it.)
 
 **The run's record** (`summary.reads`, read by the morning Routine from `net._http_response`): the judged chart's
 entry keeps its shape and gains `ride` (`rows`: `ok` / `unread`; `state`: `ok` / `short`; `step`: `in` / `at` /
@@ -242,8 +256,19 @@ written into the record or the log.
 
 **Unwatched time** (said in section 10): the hours the function does not run (the weekend gate, market closed), an
 hour whose state could not be made (GMO late at 0, 3 and 5; gold's first hour after its daily break and the first
-minutes of every hour), a failed run. A touch in them is seen by the next close's catch-up, and its email 2 says it
-was seen late, in which bar, and the price now.
+minutes of every hour), a failed run. Two such hours recur every week by construction, on every pair: the week's
+first hour (the bar opened Sunday 22:00 UTC: the state of a forming bar is made by a judged close of the bar before
+it, and the bar before it is Friday's, which is not judged), and, in winter, Friday 21:00 to 22:00 UTC (the weekend
+gate starts at 21:00, GMO trades to 22:00); gold's first hour of the week likewise. A touch in them is seen by the
+next close's catch-up, and its email 2 says it was seen late, in which bar, and the price now. On gold the minutes
+read one feed (Swissquote's recorded prices) and the catch-up another (Twelve Data's closed bar), so a watched hour
+can also end this way: the mail's late sentence says only what is known, 「毎分の確認では見えず、確定した足で見つけ
+ました」.
+
+A chart nobody follows under the rule is not read: its open ride stays open, is caught up (late) when the chart is
+followed again if the reach is inside the newest 100 closed bars, and otherwise waits for the next reach, its
+email 2 then giving the result against the old entry's price; until then no email 1 of that side is mailed. The
+settings notes say so.
 
 ## 6. The shares (the "stocks" run)
 
@@ -261,7 +286,10 @@ minutes of the window, as a fresh instance does):
    `n`'s close.
 3. Entry at `n`, while it ended at most `STOCK_FRESH_MS` (45 minutes) ago: `rideCloseStep`, as section 5 A.4.
 4. Email 2 for the rides reached in the last 45 minutes to the followers with no out row yet (a ride reached in
-   step 2 is mailed at once, before step 3's email 1).
+   step 2 is mailed at once, before step 3's email 1). A share is read only while a close is due (30 minutes from
+   it, `STOCK_POLL_MS`), so a follower left without email 2 is tried again in those minutes, and at a later close's
+   reads while the reach is at most 45 minutes old (a Tokyo close seen 15 minutes late and the next close an hour
+   on); between them nothing is read.
 
 No state rows, no minute reads. Both sides can be open on one share; a SELL on a share is a short sale and the mail
 says so.
@@ -272,8 +300,12 @@ The same closed bar is judged again and again (the pairs at 0, 3 and 5 on a fres
 29, a share some 30 times a window), and a ride often ends within a minute of its entry. Required, and to be shown
 by tests that replay a run several times over the same fake tables:
 
-- re-judging an entry bar whose ride is already open, or already reached: no second ride, no second email 1 to a
-  follower who has one, email 1 still goes to a follower whose earlier lookup failed;
+- re-judging an entry bar whose ride is already open: no second ride, no second email 1 to a follower who has one,
+  email 1 still goes to a follower whose earlier lookup failed (the plan read or the address lookup);
+- re-judging an entry bar whose ride is already reached: no second ride and no email 1 to anybody (an entry signal
+  after the ride's email 2 would be for a trade that is over);
+- a bar read again with another close: its first decision stands (no notice on top of an email 1, no email 1 and
+  no ride on top of a notice);
 - re-judging after an older ride of that side was reached in a later bar: still skipped;
 - two runs reaching the same ride: one transition, the same numbers in both mails, one email 2 a follower;
 - a ride reached in bar `k`, and bar `k` closing as a new entry on that side: email 2, then email 1 for the new
@@ -306,17 +338,25 @@ to stop, the disclaimer (as today).
 no entry is sent; the three numbers.
 
 **Email 2** says: the first email's bar, side and price; that the blue line reached 96% of the top (bottom), seen
-at (JST) — or, late, 「〔その足〕の間に届いていました。その時は読めず、今見つけました」; the price now and the profit or
-loss since the first email (section 2), with its sign; how long it was held; and that this email reports the line
+at (JST) — or, late, 「〔その足〕の間に届いていました。毎分の確認では見えず、確定した足で見つけました」 (the shares,
+judged at closes only: 「〔…に始まった足〕の終わりで、もう96%以上でした。その時は読めず、今見つけました」, the bar
+named by its open, which the row keeps); the price now and the profit or loss against the first email's price
+(section 2; 「1通目の値段からの損益」), with its sign; the time since the entry bar closed (「1通目の足の確定からの
+時間」: email 1 can leave minutes after that close, gold's always does); and that this email reports the line
 reaching 96%, **not** that the trade is at a profit (「損益はプラスとは限りません」). The word 「利確」 / "take-profit" is
 not used for it as a fact, and 「必ず戻る」 / "always comes back" is written nowhere.
 
-**The measured paragraph** (email 1 and the settings notes; the numbers of docs §8.149, as constants in one place):
-the five pairs, 2024-01 to 2026-11-10, after the spread: 801 entries, 800 reached 96%, of them 360 at a profit and
-429 at a loss, +0.43 pips an entry on average, the worst −323.6 pips, the largest loss on the way 558.8 pips, the
-longest about 28 days, 1 not reached yet (−6.1 pips); the reach rate is high by construction (no stop); the
-function reads GMO's 1-hour bar each minute, the study read 1-minute bars, and that difference is measured by the
-replay (section 9) or said not to be. Gold: 「金では測っていません」 before the pairs' numbers. Shares: 「株では測って
+**The measured paragraph** (email 1 and the settings notes; constants in one place, `RIDE_MEASURED`): the numbers
+of the replay with the function's own reading (section 9's R2; docs §8.150; Actions run 43154699969): the five
+pairs, 2024-01 to 2026-11-10, after the spread: 801 entries, 800 reached 96%, of them 358 at a profit, 431 at a
+loss and 11 at zero, +0.19 pips an entry on average, the worst −323.6 pips, the largest loss on the way 558.8 pips,
+the longest about 28 days, 1 not reached yet (−6.1 pips), 714 notices sent (36 more bars were already at 96% with
+no notice: quiet), 30 entries skipped; the reach rate is high by construction (no stop). Beside them the study's
+reading (R1 = docs §8.149: 360 at a profit, 429 at a loss, +0.43 pips an entry), with what differs: 7 of the 801
+reach 96% earlier under the function's reading. Still said not to be measured: the function reads once a minute
+and prices email 2 at that read, the replay leaves at the close of the minute of the reach. The sales page (`lp`)
+quotes no number (src/test/landing.test.tsx): it says the numbers are in the app's notes and that more of the
+reached entries ended at a loss than at a profit. Gold: 「金では測っていません」 before the pairs' numbers. Shares: 「株では測って
 いません」 and no numbers (docs §8.133's belong to the rule replaced); a Tokyo share keeps the 15-minute sentence.
 
 **No stop or target** is printed or stored for these mails (ULTRA's numbers go; `sl` and `tps` null).
@@ -324,7 +364,11 @@ replay (section 9) or said not to be. Gold: 「金では測っていません」
 **The screen.** The settings' intro and notes of both tabs describe this rule and its measured numbers (ja and en
 keep the same keys and array lengths). The recent list tells the three apart from the full rule id (`_in_`, `_at_`,
 `_out_`): in as an entry (green / red as today), out as 「96%に届いた（買いの分）」 and at as 「知らせ（もう96%）」 in a
-neutral colour, the out row's two prices labelled the first email's and the one when seen. FAQ answers that say
+neutral colour, the out row's two prices labelled the first email's and the one when seen. A row of the MACD rules
+that is not a ride's (the 95% email's, with its stop and target, and older ones) keeps its side, colour and plan
+line under the tag 「MACD・前の決まり」 / "MACD, earlier rule" (shares: 「株の MACD・前の決まり」). Until the screen
+is published the old screen shows email 2 and the notice as plain BUY / SELL rows (it knows no ride): publish right
+after the deploy. FAQ answers that say
 the MACD email "is not measured" or "arrives minutes after the bar closes" are corrected. Nothing new is drawn on
 the chart.
 
@@ -349,10 +393,14 @@ the chart.
 
 - The function sees a touch when a run reads it (seconds to a minute after), and prices email 2 then; the study
   left at the touching minute's close.
-- R2's reading against R1's (section 9), measured by the replay.
+- R2's reading against R1's (section 9), measured by the replay (run 43154699969): the same 801 trades; 794 out
+  at the same minute, 7 earlier under R2, none later; no entry differs in what the close does with it; the sum of
+  pips 153.8 against 343.3 (EUR/JPY alone 1109.9 against 1277.5: the mean rests on very few trades); the catch-up
+  found nothing under either reading.
 - Catch-up bars older than the newest closed one: EMA seeds up to 100 bars later than the study's (under 1e-12).
-- Unwatched time (section 5): a touch seen late; a touch in a bar that has left the newest 100 closed bars
-  unseen (the function not running for over four trading days) is never seen, and the ride waits for the next.
+- Unwatched time (section 5): a touch seen late — every week the first hour and, in winter, Friday's last; a
+  touch in a bar that has left the newest 100 closed bars unseen (the function not running, or the chart followed
+  by nobody, for over four trading days) is never seen, and the ride waits for the next.
 - An entry bar that could not be judged in its 30 (45) minutes starts no ride; the stored rides are what the
   function goes by.
 - Gold: the state from Twelve Data's closes, the minute's price from Swissquote's mid, no bid and ask: **not
@@ -366,6 +414,9 @@ the chart.
 
 `FUNCTION_VERSION` raised (pinned in six test files). Order: the migration applied → the merge (deploys
 signal-alerts and live-chart from source) → econ-calendar deployed by name (the footer's tab name) → the screen
-published. The merge in minutes 30 to 59 of an hour (no pair or gold bar is being judged) and outside the 45
-minutes after any share close, so no bar is mailed by both versions. The morning check (scripts/morning-check) and
+published. The rule is on the **deploy**, not the merge (the deploy job runs six other functions first; the one
+recorded deploy answered as the new version 40 to 90 seconds after the merge): merge in minutes 30 to 50 of an hour
+(no pair or gold bar is being judged) and outside the 45 minutes after any share close, then see in
+`net._http_response` that the new version answers before minute 59 — else read nothing into that hour's close and
+check its rows for a bar mailed by both versions. The morning check (scripts/morning-check) and
 the Routine's prompt are rebuilt for the new ids at the same time; its earlier files stay byte for byte.

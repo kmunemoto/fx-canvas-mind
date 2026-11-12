@@ -538,7 +538,7 @@ describe("#397 the three mails on a share (stocks.ts renderStockMail; spec secti
     expect(t).toContain("2通目は、1時間足が確定するたびに見て、青い線が同じ端（枠の上の端）の96%以上にいた最初の足で送ります。FX のメールと違い、足の途中は見ません");
     expect(t).toContain("損切りも目標もありません。青い線が90%の帯から出ても、何も送りません。2通目を送るまで、この株の同じ向き（買い）の新しい1通目は送りません。");
     // not measured on shares, and no number of any study
-    expect(t).toContain("\n\nこの決まりは、株では測っていません。FX の5ペアで測った数字（docs §8.149）は、株には当てはまりません。損切りをしないので、96%に届くまで、含み損のまま持ち続けることがあります。\n\n");
+    expect(t).toContain("\n\nこの決まりは、株では測っていません。FX の5ペアで測った数字（docs §8.150）は、株には当てはまりません。損切りをしないので、96%に届くまで、含み損のまま持ち続けることがあります。\n\n");
     expect(t).toContain("足と値段は Yahoo Finance の公開データ（公式の配信ではないため、止まることがあります）で、アプリの株のチャートと同じです。取引時間の最後の足は、引けの値段で判定します。");
     expect(t).toContain("取引時間の最後の足の終値では、次に取引が始まるまで売買できず、その時の値段は違うことがあります。");
     expect(t).toContain("https://fx-tactical.jp/");
@@ -547,7 +547,7 @@ describe("#397 the three mails on a share (stocks.ts renderStockMail; spec secti
     // a BUY on a US share at a bar inside the session: no short sale, no Tokyo, no "last bar" line
     for (const no of ["空売り", "東証の値段", "この足は、", "昼休み"]) expect(t, no).not.toContain(no);
     // no stop, no targets, nothing of the 95% email, none of docs §8.133's or §8.149's numbers
-    for (const no of ["損切り 1", "利確", "エントリー ≈", "95%", "山・谷", "§8.133", "§8.119", "22銘柄", "1,696", "99.36", "1,837.40", "801回", "360回", "429回", "pips", "必ず戻"]) expect(t, no).not.toContain(no);
+    for (const no of ["損切り 1", "利確", "エントリー ≈", "95%", "山・谷", "§8.133", "§8.119", "22銘柄", "1,696", "99.36", "1,837.40", "801回", "358回", "431回", "360回", "429回", "pips", "必ず戻"]) expect(t, no).not.toContain(no);
   });
 
   it("email 1 for a SELL: the pane's BOTTOM, said to be a short sale, and at a session's last bar that its close cannot be traded until the next session; in English the same", () => {
@@ -577,7 +577,7 @@ describe("#397 the three mails on a share (stocks.ts renderStockMail; spec secti
     expect(t).toContain(`\nThis bar's close: $${closes[I_LAST].toFixed(2)}\nThis is the session's last bar: this close cannot be traded until the next session opens, and the price then may differ\n\n`);
     expect(t).toContain("This is the rule of the app's MACD ride email on currency pairs (Sextant's own rule, docs §8.150), on the share's 1-hour bars. Email 2 is sent at the first later 1-hour close at which the blue line is at 96% or more of the same edge (the pane's bottom). Unlike the pairs' email it is looked for at closes only");
     expect(t).toContain("There is no stop and no target. Nothing is sent if the line leaves the 90% band, and no new email 1 for this share and side (SELL) is sent until email 2 has been.");
-    expect(t).toContain("\n\nThis rule has not been measured on shares. The numbers measured on the five currency pairs (docs §8.149) do not apply to shares. With no stop, a trade can stay at a loss until the line reaches 96%.\n\n");
+    expect(t).toContain("\n\nThis rule has not been measured on shares. The numbers measured on the five currency pairs (docs §8.150) do not apply to shares. With no stop, a trade can stay at a loss until the line reaches 96%.\n\n");
     expect(t).toContain("The bars and the price are Yahoo Finance's public data (not an official feed; it may stop), the same as the app's stock chart; a session's last bar is judged on its closing price. The close of a session's last bar cannot be traded until the market opens again, and the price then may differ.");
     expect(t).toContain("untick the share under Stock MACD");
     for (const no of ["Stop ", "TP1", "take-profit", "take profit", "95%", "peak/valley", "always comes back", "No stop or target is given", "§8.133", "801 entries", "15 minutes late"]) expect(t, no).not.toContain(no);
@@ -642,21 +642,21 @@ describe("#397 the three mails on a share (stocks.ts renderStockMail; spec secti
     expect(t).toContain(`\n今の値段: ${closes[J_BUY].toFixed(2)}ドル（最新の確定足の終値）`);
     // 217.45 against 216.44: +1.01 dollars, 0.47% of the entry
     expect([closes[I_BUY], closes[J_BUY]]).toEqual([216.44, 217.45]);
-    expect(t).toContain("\n1通目からの損益: +1.01ドル（+0.47%）。終値と終値の比べです");
-    expect(t).toContain("\n1通目からの時間: 20時間0分（取引していない時間も入れています）");
+    expect(t).toContain("\n1通目の値段からの損益: +1.01ドル（+0.47%）。終値と終値の比べです");
+    expect(t).toContain("\n1通目の足の確定からの時間: 20時間0分（取引していない時間も入れています）");
     expect(t).toContain("このメールは、青い線が96%に届いたことの知らせです。損益はプラスとは限りません。損益は、1通目の足の終値と、最新の確定足の終値を比べたものです。手数料などの費用は入れていません。実際に売買できる値段は、違うことがあります。この決まりは、株では測っていません。");
     expect(t).toContain("96%に届いたかは、1時間足が確定するたびに、その足の終値で見ています（足の途中は見ていません）。");
     expect(t).toContain("「株の MACD」でチェックを外してください");
     for (const no of ["その時は読めず", "空売り", "東証の値段", "この足は、", "pips", "利確", "必ず戻"]) expect(t, no).not.toContain(no);
     // a loss (the minus as the chart's), and exactly zero
-    expect(renderIndicatorMail(outSig({ seen_price: 215 }), "ja").text).toContain("\n1通目からの損益: −1.44ドル（−0.67%）。終値と終値の比べです");
-    expect(renderIndicatorMail(outSig({ seen_price: 216.44 }), "ja").text).toContain("\n1通目からの損益: ±0.00ドル（±0.00%）。終値と終値の比べです");
+    expect(renderIndicatorMail(outSig({ seen_price: 215 }), "ja").text).toContain("\n1通目の値段からの損益: −1.44ドル（−0.67%）。終値と終値の比べです");
+    expect(renderIndicatorMail(outSig({ seen_price: 216.44 }), "ja").text).toContain("\n1通目の値段からの損益: ±0.00ドル（±0.00%）。終値と終値の比べです");
     // a SELL (a short sale) gains when the price fell, on the pane's bottom
     const sell = renderIndicatorMail(outSig({ side: "SELL", seen_price: 215 }), "ja");
     expect(sell.subject).toBe("【Sextant】アップル（AAPL） 1時間足 96%に届きました（株の MACD・2通目、売りの分）");
     expect(sell.text).toContain("枠の下の端の96%に届きました（株の MACD の2通目。売り（SELL）の分）。");
     expect(sell.text).toContain("に確定した足で売り（SELL、空売り）。その足の終値 216.44ドル");
-    expect(sell.text).toContain("\n1通目からの損益: +1.44ドル（+0.67%）。終値と終値の比べです");
+    expect(sell.text).toContain("\n1通目の値段からの損益: +1.44ドル（+0.67%）。終値と終値の比べです");
     expect(sell.text).toContain("手数料などの費用（空売りにかかる費用も）は入れていません。");
     // the numbers behind the text
     expect(stockRidePnl(SYM, "BUY", 216.44, 217.45)).toEqual({ value: 1.01, pct: (101 / 21644) * 100 });
@@ -670,12 +670,12 @@ describe("#397 the three mails on a share (stocks.ts renderStockMail; spec secti
     expect(ja).toContain("\n2026-05-20 22:30（日本時間）に始まった足の終わりで、もう96%以上でした。その時は読めず、今見つけました（2026-05-21 00:30、日本時間）");
     expect(ja).not.toContain("届いたのを見た時刻");
     expect(ja).toContain(`\n今の値段: ${closes[J_BUY + 1].toFixed(2)}ドル（最新の確定足の終値）`);
-    expect(ja).toContain("\n1通目からの損益: +0.82ドル（+0.38%）。終値と終値の比べです");
-    expect(ja).toContain("\n1通目からの時間: 21時間0分");
+    expect(ja).toContain("\n1通目の値段からの損益: +0.82ドル（+0.38%）。終値と終値の比べです");
+    expect(ja).toContain("\n1通目の足の確定からの時間: 21時間0分");
     const en = renderIndicatorMail(late, "en").text;
     expect(en).toContain("\nThe line was already at 96% or more at the close of the bar that opened 2026-05-20 13:30 UTC (2026-05-20 22:30 JST). It could not be read then and was found now (2026-05-20 15:30 UTC, 2026-05-21 00:30 JST)");
     expect(en).toContain(`\nPrice now: $${closes[J_BUY + 1].toFixed(2)} (the newest closed 1-hour bar's close)`);
-    expect(en).toContain("\nProfit or loss since email 1: +$0.82 (+0.38%), close to close");
+    expect(en).toContain("\nProfit or loss against email 1's price: +$0.82 (+0.38%), close to close");
     // a Tokyo share's late email 2 does not say it was sent 15 minutes after the close
     const tokyo = renderStockMail(toyotaOut({ late: true }), "ja").text;
     expect(tokyo).toContain("東証の値段は Yahoo では約15分遅れて届きます（2026-11-06 に測りました）。");
@@ -691,21 +691,21 @@ describe("#397 the three mails on a share (stocks.ts renderStockMail; spec secti
     expect(t).toContain("Email 1: a BUY at the bar closed 2026-05-19 18:30 UTC (2026-05-20 03:30 JST), that bar's close $216.44");
     expect(t).toContain("\nSeen at 2026-05-20 14:30 UTC (2026-05-20 23:30 JST), on the close of the newest closed 1-hour bar");
     expect(t).toContain("\nPrice now: $217.45 (the newest closed 1-hour bar's close)");
-    expect(t).toContain("\nProfit or loss since email 1: +$1.01 (+0.47%), close to close");
-    expect(t).toContain("\nTime since email 1: 20 hours 0 minutes (the hours the market was shut are in it)");
+    expect(t).toContain("\nProfit or loss against email 1's price: +$1.01 (+0.47%), close to close");
+    expect(t).toContain("\nTime since the entry bar closed: 20 hours 0 minutes (the hours the market was shut are in it)");
     expect(t).toContain("This email reports that the line reached 96%. It does not say the trade is at a profit: the result can be a loss. The result compares the close of email 1's bar with the newest closed bar's close; it holds no commission or other cost, and the prices you can trade at may differ. This rule has not been measured on shares.");
     expect(t).toContain("Whether the line is at 96% is looked at when each 1-hour bar closes, on that bar's close, not while a bar forms.");
     expect(t).toContain("untick the share under Stock MACD");
-    expect(renderIndicatorMail(outSig({ seen_price: 215 }), "en").text).toContain("\nProfit or loss since email 1: −$1.44 (−0.67%), close to close");
+    expect(renderIndicatorMail(outSig({ seen_price: 215 }), "en").text).toContain("\nProfit or loss against email 1's price: −$1.44 (−0.67%), close to close");
     // Toyota, a SELL from 3070.0 seen at 3102.5 at the 15:00 bar's close (the session's last): a loss of 32.5 yen, 1.06%
     const ja = renderStockMail(toyotaOut(), "ja");
     expect(ja.subject).toBe("【Sextant】トヨタ自動車（7203.T） 1時間足 96%に届きました（株の MACD・2通目、売りの分）");
     expect(ja.text).toContain("1通目: 2026-11-02 11:30（日本時間）に確定した足で売り（SELL、空売り）。その足の終値 3070.0円");
     expect(ja.text).toContain("\n届いたのを見た時刻: 2026-11-02 15:45（日本時間）。その時の最新の確定足の終値で見ました");
-    expect(ja.text).toContain("\n今の値段: 3102.5円（最新の確定足の終値）\nこの足は、取引時間の最後の足です。この値段では、次の取引時間が始まるまで売買できず、その時の値段は違うことがあります\n1通目からの損益: −32.5円（−1.06%）。終値と終値の比べです");
+    expect(ja.text).toContain("\n今の値段: 3102.5円（最新の確定足の終値）\nこの足は、取引時間の最後の足です。この値段では、次の取引時間が始まるまで売買できず、その時の値段は違うことがあります\n1通目の値段からの損益: −32.5円（−1.06%）。終値と終値の比べです");
     const en = renderStockMail(toyotaOut(), "en").text;
     expect(en).toContain("Email 1: a SELL (a short sale) at the bar closed 2026-11-02 02:30 UTC (2026-11-02 11:30 JST), that bar's close 3070.0 yen");
-    expect(en).toContain("\nPrice now: 3102.5 yen (the newest closed 1-hour bar's close)\nThis is the session's last bar: this price cannot be traded until the next session opens, and the price then may differ\nProfit or loss since email 1: −32.5 yen (−1.06%), close to close");
+    expect(en).toContain("\nPrice now: 3102.5 yen (the newest closed 1-hour bar's close)\nThis is the session's last bar: this price cannot be traded until the next session opens, and the price then may differ\nProfit or loss against email 1's price: −32.5 yen (−1.06%), close to close");
     expect(en).toContain("it holds no commission or other cost (a short sale has its own), and the prices you can trade at may differ.");
   });
 
@@ -852,6 +852,8 @@ const world = {
   // followers whose plan lookup fails (a 503); how the rides' table answers (200; 404 when it is not there), and the
   // shares it fails for alone
   failPlanFor: new Set<string>(),
+  // followers whose address lookup answers this status (503: the lookup failed)
+  failAuthFor: new Map<string, number>(),
   ridesStatus: 200,
   ridesFailFor: new Set<string>(),
   // the rides' table refuses a new row (a 500)
@@ -867,6 +869,7 @@ const resetWorld = () => {
   Object.assign(world, { subs: [], rides: [], alerts: [], sent: [], yahooLag: 0, yahooStatus: 200, yahoo: [], ridesStatus: 200, ridesNoInsert: false, onRidePatch: null, reads: [], unrouted: [], ids: 0 });
   world.wicks.clear();
   world.failPlanFor.clear();
+  world.failAuthFor.clear();
   world.ridesFailFor.clear();
 };
 let clock = 0;
@@ -972,6 +975,8 @@ const fakeFetch = async (input: string | URL | Request, init?: RequestInit): Pro
   }
   if (url.startsWith(`${SB}/auth/v1/admin/users/`)) {
     const uid = decodeURIComponent(url.split("/").pop()!);
+    const failed = world.failAuthFor.get(uid);
+    if (failed !== undefined) return reply({ message: "boom" }, failed);
     return reply({ id: uid, email: `${uid}@example.test` });
   }
   if (!url.startsWith(`${SB}/rest/v1/`)) {
@@ -1151,7 +1156,7 @@ describe("#397 the shares' run: the real index.ts replayed over fake tables (spe
     clean();
   });
 
-  it("the reach by the CLOSE, not by the high: reached at the first later close at 96%, by one patch of a row still open; email 2 from the row to every follower once, a follower whose lookup failed within the 45 minutes after, not later", async () => {
+  it("the reach by the CLOSE, not by the high: reached at the first later close at 96%, by one patch of a row still open; email 2 from the row to every follower once, a follower whose lookup failed while the share is still read for that close (and at a later read while the reach is at most 45 minutes old), not later", async () => {
     world.subs = [follow("userA"), follow("userB")];
     // bar I_BUY + 1's high touches 96% (the pairs' ride would be reached there); its close does not
     world.wicks.set(times[I_BUY + 1], { high: WICK });
@@ -1187,7 +1192,7 @@ describe("#397 the shares' run: the real index.ts replayed over fake tables (spe
     expect(text).toContain(`1通目: 2026-05-20 03:30（日本時間）に確定した足で買い（BUY）。その足の終値 ${closes[I_BUY].toFixed(2)}ドル`);
     expect(text).toContain("\n届いたのを見た時刻: 2026-05-20 23:30（日本時間）。その時の最新の確定足の終値で見ました");
     expect(text).toContain("\n今の値段: 217.45ドル（最新の確定足の終値）");
-    expect(text).toContain("\n1通目からの損益: +1.01ドル（+0.47%）。終値と終値の比べです");
+    expect(text).toContain("\n1通目の値段からの損益: +1.01ドル（+0.47%）。終値と終値の比べです");
     // a minute later, a fresh instance, the lookup working: the ride is reached already; the follower left gets the
     // same mail, from the row
     world.failPlanFor.clear();
@@ -1282,7 +1287,7 @@ describe("#397 the shares' run: the real index.ts replayed over fake tables (spe
     expect(mails()).toEqual([`userA: ${IN_SUBJECT("売り（SELL）")}`, `userA: ${OUT_SUBJECT("売り")}`]);
     // a SELL from 197.80 seen at 197.23: +0.57 dollars
     expect([closes[I_SELL], closes[J_SELL]]).toEqual([197.8, 197.23]);
-    expect(world.sent[1].text).toContain("\n1通目からの損益: +0.57ドル（+0.29%）。終値と終値の比べです");
+    expect(world.sent[1].text).toContain("\n1通目の値段からの損益: +0.57ドル（+0.29%）。終値と終値の比べです");
     clean();
   });
 
@@ -1413,7 +1418,7 @@ describe("#397 the shares' run: the real index.ts replayed over fake tables (spe
     const pnl = stockRidePnl(T.sym, e.side, T.closes[i], T.closes[j]);
     const sign = pnl.value > 0 ? "+" : pnl.value < 0 ? "−" : "±";
     expect(world.sent[1].text).toContain(`\n今の値段: ${T.closes[j].toFixed(1)}円（最新の確定足の終値）`);
-    expect(world.sent[1].text).toContain(`\n1通目からの損益: ${sign}${Math.abs(pnl.value).toFixed(1)}円（${sign}${Math.abs(pnl.pct).toFixed(2)}%）。終値と終値の比べです`);
+    expect(world.sent[1].text).toContain(`\n1通目の値段からの損益: ${sign}${Math.abs(pnl.value).toFixed(1)}円（${sign}${Math.abs(pnl.pct).toFixed(2)}%）。終値と終値の比べです`);
     expect(world.sent[1].text).not.toContain("その時は読めず");
     expect(alertsOf(STOCKMACD_OUT_RULE_ID)[0]).toMatchObject({ pair: T.sym, bar_time: iso(T.times[i]), entry: T.closes[i], target: T.closes[j] });
     clean();
@@ -1472,6 +1477,81 @@ describe("#397 the shares' run: the real index.ts replayed over fake tables (spe
     world.yahooStatus = 429;
     expect((await fresh(after(I_BUY, 0))).reads).toEqual([{ pair: SYM, error: "yahoo_429" }]);
     expect(world.rides).toEqual([]);
+  });
+
+  // the review's finding A3: a share's newest bar is read again every minute of its half hour; should Yahoo give the
+  // bar another close on a later read, the bar keeps its FIRST decision
+  it("a bar has one decision, the first: read later with another close, an entry gets no notice on top of its email 1, and a notice gets no email 1 (and no ride)", async () => {
+    // (a) I_BUY is an entry; the smallest higher close at which the line is already at 96%
+    const orig = closes[I_BUY];
+    let moved = orig;
+    for (let n = 1; n < 3000; n++) {
+      moved = Number((orig + n * 0.01).toFixed(2));
+      if (rideEntryAt([...closes.slice(I_BUY - 599, I_BUY), moved])?.already) break;
+    }
+    expect(rideEntryAt([...closes.slice(I_BUY - 599, I_BUY), moved])).toMatchObject({ side: "BUY", already: true });
+    world.subs = [follow("userA"), follow("userB")];
+    world.failPlanFor.add("userB");
+    expect(readOf(await fresh(after(I_BUY, 0)))).toMatchObject({ signals: ["stockmacd:BUY"], ride: { step: "in" } });
+    world.failPlanFor.clear();
+    closes[I_BUY] = moved;
+    try {
+      const a1 = await fresh(after(I_BUY, 1));
+      expect(readOf(a1)).toMatchObject({ signals: ["stockmacd:BUY"], ride: { step: "in" } });
+      expect(mails()).toEqual([`userA: ${IN_SUBJECT("買い（BUY）")}`, `userB: ${IN_SUBJECT("買い（BUY）")}`]);
+      // (the price is the row's: the first read's close; the MACD numbers printed are those of the read that mailed)
+      expect(world.sent[1].text).toContain(`\nこの足の終値: ${orig.toFixed(2)}ドル`);
+      expect(mails().some((m) => m.endsWith(AT_SUBJECT))).toBe(false);
+      expect(alertsOf(STOCKMACD_AT_RULE_ID)).toEqual([]);
+      expect(world.rides).toHaveLength(1);
+    } finally {
+      closes[I_BUY] = orig;
+    }
+    // (b) I_NOTICE is already at 96% (a SELL's side); a close a little higher at which it is an entry that is not
+    resetWorld();
+    const first = closes[I_NOTICE];
+    let back = first;
+    for (let n = 1; n < 3000; n++) {
+      back = Number((first + n * 0.01).toFixed(2));
+      const e = rideEntryAt([...closes.slice(I_NOTICE - 599, I_NOTICE), back]);
+      if (e !== null && !e.already) break;
+    }
+    expect(rideEntryAt([...closes.slice(I_NOTICE - 599, I_NOTICE), back])).toMatchObject({ side: "SELL", already: false });
+    world.subs = [follow("userA")];
+    expect(readOf(await fresh(after(I_NOTICE, 0)))).toMatchObject({ signals: ["stockmacd-at:SELL"], ride: { step: "at" } });
+    closes[I_NOTICE] = back;
+    try {
+      const b1 = await fresh(after(I_NOTICE, 1));
+      expect(readOf(b1)).toMatchObject({ signals: [], ride: { step: "at", kept: true } });
+      expect(world.rides).toEqual([]);
+      expect(mails()).toEqual([`userA: ${AT_SUBJECT}`]);
+      expect(alertsOf(STOCKMACD_RULE_ID)).toEqual([]);
+    } finally {
+      closes[I_NOTICE] = first;
+    }
+  });
+
+  // the review's finding A1: an ADDRESS lookup that fails is not "no address": no row is claimed (a row would be marked
+  // failed for good), the bar is not settled, and the same instance's next run mails the follower
+  it("an instance kept warm: a follower whose address lookup failed has no row, the bar stays unsettled, and the next run mails them", async () => {
+    world.subs = [follow("userA"), follow("userB")];
+    world.failAuthFor.set("userB", 503);
+    const h = await instance();
+    const s0 = await run(h, after(I_BUY, 0));
+    expect(readOf(s0)).toMatchObject({ judged: true, signals: ["stockmacd:BUY"], ride: { step: "in", unsent: ["in(lookup_failed)"] } });
+    expect(s0).toMatchObject({ sent: 1, lookup_failed: 1 });
+    expect(mails()).toEqual([`userA: ${IN_SUBJECT("買い（BUY）")}`]);
+    expect(alertsOf(STOCKMACD_RULE_ID).map((r) => `${r.user_id} ${r.status}`)).toEqual(["userA sent"]);
+    world.failAuthFor.clear();
+    const s1 = await run(h, after(I_BUY, 1));
+    expect(readOf(s1)).toMatchObject({ judged: true, signals: ["stockmacd:BUY"], ride: { step: "in" } });
+    expect(readOf(s1)!.ride).not.toHaveProperty("unsent");
+    expect(mails()).toEqual([`userA: ${IN_SUBJECT("買い（BUY）")}`, `userB: ${IN_SUBJECT("買い（BUY）")}`]);
+    expect(world.sent[1].text).toBe(world.sent[0].text);
+    // settled now: Yahoo is left alone for the rest of the half hour
+    for (const m of [2, 10]) expect((await run(h, after(I_BUY, m))).reads).toEqual([]);
+    expect(world.yahoo).toHaveLength(2);
+    expect(world.rides).toHaveLength(1);
   });
 
   it("an instance kept warm: a bar is held judged (and Yahoo left alone) only once nothing is left to try again — a follower whose lookup failed is mailed by the same instance's next run", async () => {

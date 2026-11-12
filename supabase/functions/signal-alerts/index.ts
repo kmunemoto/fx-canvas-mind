@@ -526,11 +526,22 @@ Deno.serve(async (req: Request) => {
       if (!res.ok) console.error("insert failed:", res.status, await res.text().catch(() => ""));
       return Array.isArray(rows) && rows.length > 0 && isRecord(rows[0]) && typeof rows[0].id === "string" ? rows[0].id : null;
     };
-    const userEmail = async (userId: string): Promise<string | null> => {
+    // A follower's address as the auth service gives it. `ok` false: the
+    // lookup itself failed (an answer that is neither 200 nor "no such
+    // user", or a body that cannot be read). That is not a follower with no
+    // address: the indicators' mailer claims no row then, so that a later
+    // run that offers the same mail tries again (#397)
+    const userEmailRead = async (userId: string): Promise<{ ok: boolean; email: string | null }> => {
       const res = await fetch(`${supabaseUrl}/auth/v1/admin/users/${encodeURIComponent(userId)}`, { headers: serviceHeaders });
-      const body = res.ok ? await res.json().catch(() => null) : null;
-      return isRecord(body) && typeof body.email === "string" && body.email.length > 0 ? body.email : null;
+      if (!res.ok) {
+        await res.body?.cancel();
+        return { ok: res.status === 404, email: null };
+      }
+      const body = await res.json().catch(() => null);
+      if (!isRecord(body)) return { ok: false, email: null };
+      return { ok: true, email: typeof body.email === "string" && body.email.length > 0 ? body.email : null };
     };
+    const userEmail = async (userId: string): Promise<string | null> => (await userEmailRead(userId)).email;
     // One row per signal, whoever follows the chart. The unique key makes a
     // second sweep that sees the same bar a no-op; either way the id comes back.
     const eventId = async (row: JsonRecord): Promise<string | null> => {
@@ -606,18 +617,28 @@ Deno.serve(async (req: Request) => {
     // the video's way) to each of `subs` following its chart under its rule,
     // once (the claim's unique key); what happened, counted into `counts`
     const mailerFor = (subs: IndicatorSub[], counts: Record<string, number>) => {
-      const access = new Map<string, { allowed: boolean; email: string | null }>();
+      const access = new Map<string, { allowed: boolean; email: string | null; unread: boolean }>();
       return async (sigs: IndicatorSignal[]) => {
         for (const sig of sigs) {
           for (const sub of subs.filter((x) => x.pair === sig.pair && x.interval === sig.interval && x.rule === sig.rule)) {
             let who = access.get(sub.user_id);
             if (!who) {
-              const [plan, email] = await Promise.all([planOf(sub.user_id), userEmail(sub.user_id)]);
-              who = { allowed: alertsAllowed(plan, email), email };
+              const [plan, address] = await Promise.all([planOf(sub.user_id), userEmailRead(sub.user_id)]);
+              who = { allowed: alertsAllowed(plan, address.email), email: address.email, unread: !address.ok };
               access.set(sub.user_id, who);
             }
             if (!who.allowed) {
               counts.not_allowed = (counts.not_allowed ?? 0) + 1;
+              continue;
+            }
+            // #397: the address could not be looked up (the lookup failed,
+            // which is not "no address"). No row is claimed: a row would be
+            // marked failed for good and keep every later run from mailing
+            // this follower. Counted, so the run's record says it; a later
+            // run that offers the mail again (the bar judged again; a ride's
+            // mails and the sharp rise's while they are offered) tries again
+            if (who.unread) {
+              counts.lookup_failed = (counts.lookup_failed ?? 0) + 1;
               continue;
             }
             // #397: the bar, the side, the prices and the rule id as the
@@ -764,17 +785,30 @@ Deno.serve(async (req: Request) => {
       )).map((r) => String(r.user_id)));
       const left = subs.filter((x) => x.rule === sig.rule && x.pair === sig.pair && x.interval === sig.interval && !done.has(x.user_id));
       if (left.length === 0) return { made: 0, had: done.size, why: "" };
-      const these: Record<string, number> = { sent: 0, failed: 0, not_configured: 0, duplicate: 0, not_allowed: 0 };
+      const these: Record<string, number> = { sent: 0, failed: 0, not_configured: 0, duplicate: 0, not_allowed: 0, lookup_failed: 0 };
       try {
         await mailerFor(left, these)([sig]);
       } finally {
-        for (const [k, v] of Object.entries(these)) counts[k] = (counts[k] ?? 0) + v;
+        for (const [k, v] of Object.entries(these)) if (v > 0 || k in counts) counts[k] = (counts[k] ?? 0) + v;
       }
       return {
         made: these.sent + these.failed + these.not_configured,
         had: done.size,
-        why: ["not_allowed", "duplicate"].filter((k) => these[k] > 0).join(","),
+        why: ["not_allowed", "lookup_failed", "duplicate"].filter((k) => these[k] > 0).join(","),
       };
+    };
+
+    // Whether a mail of a ride (as a signal) has a row for anybody. A bar's
+    // first decision stands: a bar whose notice is out is not opened as a
+    // ride by a later read of it whose close has moved under the 96% line
+    // (the other way round the ride's own row says so: rideCloseStep)
+    const rideMailThere = async (sig: IndicatorSignal): Promise<boolean> => {
+      const row = signalRow(sig);
+      const e = encodeURIComponent;
+      const rows = await readRows(
+        `signal_alerts?kind=eq.signal&pair=eq.${e(sig.pair)}&interval=eq.${e(sig.interval)}&bar_time=eq.${e(row.bar_time)}&side=eq.${row.side}&rule=eq.${e(row.rule)}&select=user_id&limit=1`,
+      );
+      return rows.length > 0;
     };
 
     const nowMs = Date.now();
@@ -1058,6 +1092,14 @@ Deno.serve(async (req: Request) => {
         // the mail, written from the row
         let own = rides.find((x) => x.side === entry.side && x.entryBar === newest) ?? null;
         if (own === null) {
+          // the bar's first decision stands: its notice is out (an earlier
+          // read of this bar had the line at 96% already), so no ride is
+          // opened on a read whose close has moved; nothing more is mailed
+          if (await rideMailThere(rideCloseSignal("macdx", pair, "1h", "at", entry, { openMs: newest, closeMs: newest + HOUR, mid: last.close, paid: last.close }))) {
+            out.ride.step = "at";
+            out.ride.kept = true;
+            return;
+          }
           const paid = gold ? last.close : quote ? ridePaidAt(entry.side, quote) : Number.NaN;
           if (!Number.isFinite(paid)) {
             out.ride.opened = "no_price";
@@ -1075,6 +1117,14 @@ Deno.serve(async (req: Request) => {
         }
         if (own === null) {
           out.ride.opened = "no_row";
+          return;
+        }
+        // the bar judged again after its ride has reached 96%: the ride is
+        // over, and an entry signal now would be for a trade that has
+        // ended, with an email 2 that will not come again. Email 1 is not
+        // mailed any more (a follower who has none gets email 2 alone)
+        if (own.status !== "open") {
+          out.ride.over = true;
           return;
         }
         await sendRide(rideCloseSignal("macdx", pair, "1h", "in", entry, { openMs: own.entryBar, closeMs: own.entryClosedAt, mid: own.entryMid, paid: own.entryPrice }), out);
@@ -1121,6 +1171,19 @@ Deno.serve(async (req: Request) => {
             said.ride.error = "failed";
           }
           if (said.unsent.length > 0) said.ride.unsent = said.unsent;
+          // The ride's work on this bar did not finish (its rows unread, a
+          // write that failed, an exception): this instance does not hold
+          // the bar judged, so the chart is read and judged again the next
+          // time it is due inside the bar's fresh window, as a fresh instance
+          // would (minutes 3 and 5; gold each minute to :29). Judging again
+          // sends nothing twice: the other rules' mails are claimed by their
+          // rows, and the ride's by its row. A follower left without a mail
+          // (a lookup that failed) does not make the bar unsettled here: as
+          // for every other rule, that mail is tried again only when the bar
+          // is judged again
+          const unsettled = said.ride.error !== undefined || said.ride.rows === "unread" || said.ride.stored === false || said.ride.opened !== undefined ||
+            (Array.isArray(said.ride.caught) && said.ride.caught.some((c) => isRecord(c) && c.error !== undefined));
+          if (unsettled) judgedBar.delete(`${pair}|${interval}`);
         }
         return {
           pair,
@@ -1515,7 +1578,7 @@ Deno.serve(async (req: Request) => {
             for (const [k, v] of Object.entries(these)) counts[k] = (counts[k] ?? 0) + v;
             const made = these.sent + these.failed + these.not_configured;
             if (made > 0) fired.push(x);
-            const why = ["not_allowed", "duplicate"].filter((k) => these[k] > 0).join(",");
+            const why = ["not_allowed", "lookup_failed", "duplicate"].filter((k) => these[k] > 0).join(",");
             mailed.push(`spike:${x.side}${x.spike?.forming ? "" : "@close"}${made > 0 ? "" : `:unsent${why ? `(${why})` : ""}`}`);
           }
         }
@@ -1819,26 +1882,47 @@ Deno.serve(async (req: Request) => {
           // email 1: the ride's row first (a share has one price: the price
           // paid is the bar's close), then the mail, written from the row
           let own = rides.find((x) => x.side === entry.side && x.entryBar === newest.open_ms) ?? null;
-          if (own === null) {
-            own = await openRide({
-              pair: sym,
-              side: entry.side,
-              entryBar: newest.open_ms,
-              entryClosedAt: newest.end,
-              entryPrice: newest.close,
-              entryMid: newest.close,
-              share0: shareOf(entry.z, entry.zside),
-            });
-          }
-          if (own === null) {
-            out.ride.opened = "no_row";
-            written = false;
+          if (
+            own === null &&
+            (await rideMailThere(rideCloseSignal("stockmacd", sym, "1h", "at", entry, { openMs: newest.open_ms, closeMs: newest.end, mid: newest.close, paid: newest.close })))
+          ) {
+            // the bar's first decision stands: its notice is out (an
+            // earlier read of this bar had the line at 96% already), so no
+            // ride is opened on a read whose close has moved; nothing more
+            // is mailed
+            out.ride.step = "at";
+            out.ride.kept = true;
           } else {
-            await sendRide(rideCloseSignal("stockmacd", sym, "1h", "in", entry, { openMs: own.entryBar, closeMs: own.entryClosedAt, mid: own.entryMid, paid: own.entryPrice }), out);
+            if (own === null) {
+              own = await openRide({
+                pair: sym,
+                side: entry.side,
+                entryBar: newest.open_ms,
+                entryClosedAt: newest.end,
+                entryPrice: newest.close,
+                entryMid: newest.close,
+                share0: shareOf(entry.z, entry.zside),
+              });
+            }
+            if (own === null) {
+              out.ride.opened = "no_row";
+              written = false;
+            } else if (own.status !== "open") {
+              // the bar judged again after its ride has reached 96%: the
+              // ride is over; email 1 is not mailed any more (a follower who
+              // has none gets email 2 alone)
+              out.ride.over = true;
+            } else {
+              await sendRide(rideCloseSignal("stockmacd", sym, "1h", "in", entry, { openMs: own.entryBar, closeMs: own.entryClosedAt, mid: own.entryMid, paid: own.entryPrice }), out);
+            }
           }
         }
         // email 2 for the rides reached in the last STOCK_FRESH_MS by an
-        // earlier run, to the followers who have no row for it yet
+        // earlier run, to the followers who have no row for it yet. (A share
+        // is read only while a close is due, STOCK_POLL_MS from it: such a
+        // follower is tried again in those minutes, and at a later close's
+        // reads while the reach is at most STOCK_FRESH_MS old; between them
+        // nothing is read)
         for (const r of rides) {
           if (mailed.has(r) || r.status !== "reached" || r.reachedAt === null || r.reachedAt < nowMs - STOCK_FRESH_MS) continue;
           const sig = rideOutSignal("stockmacd", "1h", r);

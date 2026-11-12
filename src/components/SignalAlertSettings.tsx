@@ -116,7 +116,11 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
     if (r.ride === "out" && r.side) return `${r.pair ?? ""} ${tf} ${a.rideOut[r.side]}`.trim() + (a.ruleTag[r.rule] ?? "");
     if (r.ride === "at") return `${r.pair ?? ""} ${tf} ${a.rideAt}`.trim() + (a.ruleTag[r.rule] ?? "");
     if (r.rule === "spike") return `${r.pair ?? ""} ${tf} ${r.side === "BUY" ? a.spikeUp : r.side === "SELL" ? a.spikeDown : ""}`.trim();
-    return `${r.pair ?? ""} ${tf} ${r.side ? a.sides[r.side] : ""}`.trim() + (r.strong ? a.strongTag : "") + (a.ruleTag[r.rule] ?? "");
+    // #397: a row of the MACD rules that is not a ride's (the 95% email's, stopped when the ride took its place, and
+    // older ones) keeps its side, its colour and its plan line, under a tag that does not call it the ride: that
+    // email had a stop and a target, and its side was the other way round
+    const tag = (r.rule === "macdx" || r.rule === "stockmacd") && r.ride === null ? a.ruleTagEarlier[r.rule] ?? "" : a.ruleTag[r.rule] ?? "";
+    return `${r.pair ?? ""} ${tf} ${r.side ? a.sides[r.side] : ""}`.trim() + (r.strong ? a.strongTag : "") + tag;
   };
   const statusLabel = (r: AlertRow) =>
     r.status === "skipped" && r.skipReason ? a.skipReasons[r.skipReason] ?? a.status.skipped : a.status[r.status];

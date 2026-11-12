@@ -879,7 +879,7 @@ export const signalRow = (s: IndicatorSignal): {
 export const rideSignalTag = (s: Pick<IndicatorSignal, "rule" | "side" | "ride">): string =>
   `${s.rule}${s.ride && s.ride.mail !== "in" ? `-${s.ride.mail}` : ""}:${s.side}`;
 
-// Profit or loss since email 1 (research/macdride-spec.md section 2): the
+// Profit or loss against email 1's price (research/macdride-spec.md section 2): the
 // price when seen less the entry for a BUY, the entry less it for a SELL. A
 // pair's in pips (0.01 on a yen pair, 0.0001 on the others) and gold's in
 // dollars, worked in whole points of the price's decimals so that a
@@ -1587,37 +1587,45 @@ const macdNumbers = (pair: string, end: number | null): ((v: number | null) => s
   return (v: number | null) => (v !== null && Number.isFinite(v) ? v.toFixed(md).replace(/^-/, "−") : "—");
 };
 
-// #397 (docs §8.149): the ride as measured, on the five pairs' bars only
-// (research/macd90m-spec.md way C: in at the 1-hour close, out at the close
-// of the first 1-minute bar that touches 96%, held until then; GMO's bars,
-// the entries closing 2024-01-01 to 2026-11-10, the spread paid; the Python
-// written apart agreed on every row, run 43134981457). `entries`: the trades;
-// `reached` of them got to 96%, `plus` at a profit, `minus` at a loss and
+// #397: what was measured of the ride (docs §8.150), the one place the mails
+// take it from. The five pairs' 1-hour bars, 2024-01-01 to 2026-11-10, after
+// the spread, by research/macdride-replay.ts (Actions run 43154699969): the
+// shared code this function runs (_shared/macd-ride.ts) driven bar by bar and
+// minute by minute with the function's own reading of an hour's high and low
+// so far (GMO's forming 1-hour bar). `entries` the trades taken; `reached`
+// those that reached 96%, of them `plus` at a profit, `minus` at a loss and
 // `zero` at none; `perTrade` their mean and `worst` the lowest, pips; `maeMax`
 // the largest loss on the way, pips; `longestDays` the longest held
 // (40,141 minutes); `open` not reached by the end, at `openPips`; `notices`
-// the bars already at 96% at their close (no trade) and `skipped` the entries
-// while a ride of the side was held; half of those reached were reached
-// within a minute of the entry (the median). Gold and the shares are not
-// measured, nor the function's own reading (GMO's 1-hour bar each minute
-// where the study read 1-minute bars)
+// the notices sent (bars already at 96% at their close: no trade) and `quiet`
+// the like bars whose notice is not sent (a ride of the side reached 96% in
+// that very bar); `skipped` the entries while a ride of the side was held;
+// half of those reached were reached within a minute of the entry (the
+// median). `study`: the same 801 trades read as the study read them (the
+// highest 1-minute mid high so far, the lowest low; docs §8.149), under which
+// `earlier` of them reach 96% later than under the function's reading. Not
+// measured: gold, the shares, and that the function reads once a minute and
+// prices email 2 at that read (the replay leaves at the close of the minute
+// of the reach)
 export const RIDE_MEASURED = {
   from: "2024-01",
   to: "2026-11-10",
   entries: 801,
   reached: 800,
-  plus: 360,
-  minus: 429,
+  plus: 358,
+  minus: 431,
   zero: 11,
-  perTrade: 0.43,
+  perTrade: 0.19,
   worst: -323.6,
   maeMax: 558.8,
   longestDays: 28,
   open: 1,
   openPips: -6.1,
-  notices: 750,
+  notices: 714,
+  quiet: 36,
   skipped: 30,
   medianMinutes: 1,
+  study: { plus: 360, minus: 429, zero: 11, perTrade: 0.43, earlier: 7 },
 } as const;
 // the measured paragraph of email 1 (gold's says first that gold is not measured)
 const rideMeasuredLine = (pair: string, lang: Lang): string => {
@@ -1632,10 +1640,10 @@ const rideMeasuredLine = (pair: string, lang: Lang): string => {
   const gold = isGold(pair);
   if (lang === "en") {
     return (gold ? "This rule has not been measured on gold; the numbers that follow are the five pairs'. " : "") +
-      `Measured on the 1-hour bars of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD and AUD/USD (${m.from} to ${m.to}, after the spread; docs §8.149): ${m.entries} entries, of which ${m.reached} reached ${RIDE_OUT_PCT}% — ${m.plus} of them at a profit, ${m.minus} at a loss and ${m.zero} at zero — ${sg(m.perTrade)} pips an entry on average, the worst ${sg(m.worst)} pips, the largest loss on the way ${m.maeMax} pips, the longest held about ${m.longestDays} days, and ${m.open} not reached yet (${sg(m.openPips)} pips). ${m.notices} more bars were a notice only (already at ${RIDE_OUT_PCT}%), and ${m.skipped} entries were skipped while a ride of the same side was held. Half of those reached were reached within ${m.medianMinutes} minute of the entry. There is no stop, so the share that reaches ${RIDE_OUT_PCT}% is high by construction. On the five pairs the function reads GMO's 1-hour bar each minute where the study read 1-minute bars; that difference has not been measured.`;
+      `Measured on the 1-hour bars of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD and AUD/USD (${m.from} to ${m.to}, after the spread; docs §8.150): ${m.entries} entries, of which ${m.reached} reached ${RIDE_OUT_PCT}% — ${m.plus} of them at a profit, ${m.minus} at a loss and ${m.zero} at zero — ${sg(m.perTrade)} pips an entry on average, the worst ${sg(m.worst)} pips, the largest loss on the way ${m.maeMax} pips, the longest held about ${m.longestDays} days, and ${m.open} not reached yet (${sg(m.openPips)} pips). ${m.notices} more bars were a notice only (already at ${RIDE_OUT_PCT}%), and ${m.skipped} entries were skipped while a ride of the same side was held. Half of those reached were reached within ${m.medianMinutes} minute of the entry. There is no stop, so the share that reaches ${RIDE_OUT_PCT}% is high by construction. These numbers are a replay with this email's own reading (the high and low so far of GMO's 1-hour bar). Read on 1-minute bars (docs §8.149) the same entries gave ${m.study.plus} at a profit, ${m.study.minus} at a loss and ${sg(m.study.perTrade)} pips an entry: ${m.study.earlier} of the ${m.entries} reach ${RIDE_OUT_PCT}% earlier under the email's reading. The email reads once a minute and takes the price of that read, where the replay took the close of the minute of the reach; that difference has not been measured.`;
   }
   return (gold ? "金では、この決まりを測っていません。次の数字は5ペアのものです。" : "") +
-    `ドル/円・ユーロ/円・豪ドル/円・ユーロ/ドル・豪ドル/ドルの1時間足で測ると（${dayJa(m.from)}〜${dayJa(m.to)}、スプレッドを引いたあと。docs §8.149）、入る合図は${m.entries}回で、${m.reached}回が${RIDE_OUT_PCT}%に届きました。届いた時の損益は、プラスが${m.plus}回、マイナスが${m.minus}回、ちょうど0が${m.zero}回で、1回あたり平均 ${sg(m.perTrade)} pips、最悪 ${sg(m.worst)} pips でした。持っている間の含み損は最大 ${m.maeMax} pips、一番長く持ったのは約${m.longestDays}日で、${m.open}回はまだ届いていません（含み損 ${sg(m.openPips)} pips）。このほかに、知らせだけの足（確定でもう${RIDE_OUT_PCT}%）が${m.notices}回、同じ向きを持っている間で見送った入りが${m.skipped}回ありました。届いた取引の半分は、入ってから${m.medianMinutes}分以内に届いています。損切りをしないので、届く割合は作りの上で高く出ます。5ペアのメールは GMO の1時間足を毎分読んで${RIDE_OUT_PCT}%を見ますが、測った時は1分足で見ました。この違いは測っていません。`;
+    `ドル/円・ユーロ/円・豪ドル/円・ユーロ/ドル・豪ドル/ドルの1時間足で測ると（${dayJa(m.from)}〜${dayJa(m.to)}、スプレッドを引いたあと。docs §8.150）、入る合図は${m.entries}回で、${m.reached}回が${RIDE_OUT_PCT}%に届きました。届いた時の損益は、プラスが${m.plus}回、マイナスが${m.minus}回、ちょうど0が${m.zero}回で、1回あたり平均 ${sg(m.perTrade)} pips、最悪 ${sg(m.worst)} pips でした。持っている間の含み損は最大 ${m.maeMax} pips、一番長く持ったのは約${m.longestDays}日で、${m.open}回はまだ届いていません（含み損 ${sg(m.openPips)} pips）。このほかに、知らせだけの足（確定でもう${RIDE_OUT_PCT}%）が${m.notices}回、同じ向きを持っている間で見送った入りが${m.skipped}回ありました。届いた取引の半分は、入ってから${m.medianMinutes}分以内に届いています。損切りをしないので、届く割合は作りの上で高く出ます。これは、このメールと同じ見方（GMO の1時間足の、その時までの高値・安値）で測り直した数字です。1分足の値で見た時（docs §8.149）は、プラス${m.study.plus}回・マイナス${m.study.minus}回、平均 ${sg(m.study.perTrade)} pips でした。違いは${m.entries}回のうち${m.study.earlier}回で、メールの見方の方が早く届きます。メールは毎分1回読んで、その時の値段で損益を出しますが、測り直しは届いた分の終値で出しました。この違いは測っていません。`;
 };
 
 // #397: how long a ride was held, as email 2 says it (logic.ts rideHeldText: the pairs', gold's and the shares' mails
@@ -1693,11 +1701,11 @@ const renderRideMail = (s: IndicatorSignal, lang: Lang): Mail => {
         [
           `Email 1: a ${side} at the bar closed ${clock(entryClose, 0)} UTC (${clock(entryClose, 9)} JST), ${paid} ${px(f?.entryPrice)}`,
           late && Number.isFinite(reachedBar)
-            ? `It had reached ${RIDE_OUT_PCT}% during the bar ${clock(reachedBar, 0)}–${clock(reachedBar + step, 0).slice(11)} UTC (${clock(reachedBar, 9)}–${clock(reachedBar + step, 9).slice(11)} JST). It could not be read then and was found now (${clock(seen, 0)} UTC, ${clock(seen, 9)} JST)`
+            ? `It had reached ${RIDE_OUT_PCT}% during the bar ${clock(reachedBar, 0)}–${clock(reachedBar + step, 0).slice(11)} UTC (${clock(reachedBar, 9)}–${clock(reachedBar + step, 9).slice(11)} JST). It was not seen by the minute checks and was found on the closed bar (${clock(seen, 0)} UTC, ${clock(seen, 9)} JST)`
             : `Seen at ${clock(seen, 0)} UTC (${clock(seen, 9)} JST)`,
           `Price now: ${px(f?.seenPrice)} (${leave})`,
-          `Profit or loss since email 1: ${result}`,
-          `Time since email 1: ${rideHeldText(seen - entryClose, "en")}`,
+          `Profit or loss against email 1's price: ${result}`,
+          `Time since the entry bar closed: ${rideHeldText(seen - entryClose, "en")}`,
         ].join("\n"),
         `This email reports that the line reached ${RIDE_OUT_PCT}%. It does not say the trade is at a profit: the result can be a loss.` +
           (gold
@@ -1735,7 +1743,7 @@ const renderRideMail = (s: IndicatorSignal, lang: Lang): Mail => {
       ].join("\n"),
       `This is Sextant's own rule (its numbers are the app owner's), not a published indicator (docs §8.150). Email 2 is sent when the blue line reaches ${RIDE_OUT_PCT}% of the same edge (the pane's ${end}). There is no stop and no target. Nothing is sent if the line leaves the ${RIDE_IN_PCT}% band, and no new email 1 for this chart and side (${side}) is sent until email 2 has been. The pane's edges are taken without the margin the chart adds as it draws them.`,
       rideMeasuredLine(s.pair, "en"),
-      `${source}${gold ? " Email 2 is looked for on Swissquote's prices, recorded every minute (another feed than the bars')." : ""} Check the latest state in the app before you place an order:\n${APP_URL}`,
+      `${source}${gold ? ` Email 2 is looked for on Swissquote's prices, recorded every minute (another feed than the bars'); a reach those prices did not show is also found at the next close when the closed bar's (Twelve Data's) high or low is at ${RIDE_OUT_PCT}%.` : ""} Check the latest state in the app before you place an order:\n${APP_URL}`,
       stop,
     ]);
   }
@@ -1756,11 +1764,11 @@ const renderRideMail = (s: IndicatorSignal, lang: Lang): Mail => {
       [
         `1通目: ${clock(entryClose, 9)}（日本時間）に確定した足で${sideJ}。${paid} ${px(f?.entryPrice)}`,
         late && Number.isFinite(reachedBar)
-          ? `${clock(reachedBar, 9)}〜${clock(reachedBar + step, 9).slice(11)}（日本時間）の足の間に届いていました。その時は読めず、今見つけました（${clock(seen, 9)}、日本時間）`
+          ? `${clock(reachedBar, 9)}〜${clock(reachedBar + step, 9).slice(11)}（日本時間）の足の間に届いていました。毎分の確認では見えず、確定した足で見つけました（${clock(seen, 9)}、日本時間）`
           : `届いたのを見た時刻: ${clock(seen, 9)}（日本時間）`,
         `今の値段: ${px(f?.seenPrice)}（${leave}）`,
-        `1通目からの損益: ${result}`,
-        `1通目からの時間: ${rideHeldText(seen - entryClose, "ja")}`,
+        `1通目の値段からの損益: ${result}`,
+        `1通目の足の確定からの時間: ${rideHeldText(seen - entryClose, "ja")}`,
       ].join("\n"),
       `このメールは、青い線が${RIDE_OUT_PCT}%に届いたことの知らせです。損益はプラスとは限りません。` +
         (gold
@@ -1798,7 +1806,7 @@ const renderRideMail = (s: IndicatorSignal, lang: Lang): Mail => {
     ].join("\n"),
     `この決まりは Sextant 独自のもの（数字はアプリのオーナーが決めたもの）で、公開されているインジケーターではありません（docs §8.150）。2通目は、青い線が同じ端（枠の${end}の端）の${RIDE_OUT_PCT}%に届いた時に送ります。損切りも目標もありません。青い線が${RIDE_IN_PCT}%の帯から出ても、何も送りません。2通目を送るまで、このチャートの同じ向き（${buy ? "買い" : "売り"}）の新しい1通目は送りません。枠の端には、チャートが枠を描く時に足す余白は入れていません。`,
     rideMeasuredLine(s.pair, "ja"),
-    `${source}${gold ? "2通目は、Swissquote の値段を毎分記録したもの（足とは別の配信）で見ます。" : ""}注文の前にアプリで最新の状態を確認してください。\n${APP_URL}`,
+    `${source}${gold ? `2通目は、Swissquote の値段を毎分記録したもの（足とは別の配信）で見ます。そこで届いていなくても、確定した足（Twelve Data）の高値・安値が${RIDE_OUT_PCT}%に届いていれば、次の足の確定で2通目を送ります。` : ""}注文の前にアプリで最新の状態を確認してください。\n${APP_URL}`,
     stop,
   ]);
 };

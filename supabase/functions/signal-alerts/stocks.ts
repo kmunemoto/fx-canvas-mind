@@ -292,7 +292,7 @@ export const stockBarBreak = (sym: string, openMs: number): "close" | "lunch" | 
   return l.min === hm(15, 30) ? "close" : null;
 };
 
-// Profit or loss since email 1 on a share (research/macdride-spec.md section 2): the price when seen less the entry
+// Profit or loss against email 1's price on a share (research/macdride-spec.md section 2): the price when seen less the entry
 // for a BUY, the entry less it for a SELL (a short sale), in the share's currency and in percent of the entry. Both
 // prices are closes of Yahoo's bars (close to close). Worked in whole steps of the price's decimals, so that a
 // difference of prices comes out as written
@@ -387,8 +387,8 @@ export const renderStockMail = (s: IndicatorSignal, lang: Lang): Mail => {
             : `Seen at ${clock(seen, 0)} UTC (${clock(seen, 9)} JST), on the close of the newest closed 1-hour bar`,
           `Price now: ${px(seenPrice)} (the newest closed 1-hour bar's close)`,
           ...(brk ? [brkLine] : []),
-          `Profit or loss since email 1: ${result}, close to close`,
-          `Time since email 1: ${rideHeldText(seen - entryClose, "en")} (the hours the market was shut are in it)`,
+          `Profit or loss against email 1's price: ${result}, close to close`,
+          `Time since the entry bar closed: ${rideHeldText(seen - entryClose, "en")} (the hours the market was shut are in it)`,
         ].join("\n"),
         `This email reports that the line reached ${RIDE_OUT_PCT}%. It does not say the trade is at a profit: the result can be a loss. The result compares the close of email 1's bar with the newest closed bar's close; it holds no commission or other cost${buy ? "" : " (a short sale has its own)"}, and the prices you can trade at may differ. ${unmeasured}`,
         `${yahoo} Whether the line is at ${RIDE_OUT_PCT}% is looked at when each 1-hour bar closes, on that bar's close, not while a bar forms. ${shut} ${delay}Check the latest state in the app:\n${APP_URL}`,
@@ -418,7 +418,7 @@ export const renderStockMail = (s: IndicatorSignal, lang: Lang): Mail => {
         ...(brk ? [brkLine] : []),
       ].join("\n"),
       `${same} Email 2 is sent at the first later 1-hour close at which the blue line is at ${RIDE_OUT_PCT}% or more of the same edge (the pane's ${end}). Unlike the pairs' email it is looked for at closes only: a touch of ${RIDE_OUT_PCT}% inside a bar that is gone by its close is not seen. There is no stop and no target. Nothing is sent if the line leaves the ${RIDE_IN_PCT}% band, and no new email 1 for this share and side (${side}) is sent until email 2 has been. The pane's edges are taken without the margin the chart adds as it draws them.`,
-      `${unmeasured} The numbers measured on the five currency pairs (docs §8.149) do not apply to shares. With no stop, a trade can stay at a loss until the line reaches ${RIDE_OUT_PCT}%.`,
+      `${unmeasured} The numbers measured on the five currency pairs (docs §8.150) do not apply to shares. With no stop, a trade can stay at a loss until the line reaches ${RIDE_OUT_PCT}%.`,
       `${yahoo} ${shut} ${delay}Check the latest state in the app before you place an order:\n${APP_URL}`,
       stop,
     ]);
@@ -450,8 +450,8 @@ export const renderStockMail = (s: IndicatorSignal, lang: Lang): Mail => {
           : `届いたのを見た時刻: ${clock(seen, 9)}（日本時間）。その時の最新の確定足の終値で見ました`,
         `今の値段: ${px(seenPrice)}（最新の確定足の終値）`,
         ...(brk ? [brkLine] : []),
-        `1通目からの損益: ${result}。終値と終値の比べです`,
-        `1通目からの時間: ${rideHeldText(seen - entryClose, "ja")}（取引していない時間も入れています）`,
+        `1通目の値段からの損益: ${result}。終値と終値の比べです`,
+        `1通目の足の確定からの時間: ${rideHeldText(seen - entryClose, "ja")}（取引していない時間も入れています）`,
       ].join("\n"),
       `このメールは、青い線が${RIDE_OUT_PCT}%に届いたことの知らせです。損益はプラスとは限りません。損益は、1通目の足の終値と、最新の確定足の終値を比べたものです。手数料などの費用${buy ? "" : "（空売りにかかる費用も）"}は入れていません。実際に売買できる値段は、違うことがあります。${unmeasured}`,
       `${yahoo}${RIDE_OUT_PCT}%に届いたかは、1時間足が確定するたびに、その足の終値で見ています（足の途中は見ていません）。${shut}${delay}アプリで最新の状態を確認してください。\n${APP_URL}`,
@@ -481,7 +481,7 @@ export const renderStockMail = (s: IndicatorSignal, lang: Lang): Mail => {
       ...(brk ? [brkLine] : []),
     ].join("\n"),
     `${same}2通目は、1時間足が確定するたびに見て、青い線が同じ端（枠の${end}の端）の${RIDE_OUT_PCT}%以上にいた最初の足で送ります。FX のメールと違い、足の途中は見ません（途中で${RIDE_OUT_PCT}%に届いても、確定の時に${RIDE_OUT_PCT}%より内側なら見えません）。損切りも目標もありません。青い線が${RIDE_IN_PCT}%の帯から出ても、何も送りません。2通目を送るまで、この株の同じ向き（${buy ? "買い" : "売り"}）の新しい1通目は送りません。枠の端には、チャートが枠を描く時に足す余白は入れていません。`,
-    `${unmeasured}FX の5ペアで測った数字（docs §8.149）は、株には当てはまりません。損切りをしないので、${RIDE_OUT_PCT}%に届くまで、含み損のまま持ち続けることがあります。`,
+    `${unmeasured}FX の5ペアで測った数字（docs §8.150）は、株には当てはまりません。損切りをしないので、${RIDE_OUT_PCT}%に届くまで、含み損のまま持ち続けることがあります。`,
     `${yahoo}${shut}${delay}注文の前にアプリで最新の状態を確認してください。\n${APP_URL}`,
     stop,
   ]);

@@ -277,7 +277,7 @@ describe("#397 the prices and the forming hour (spec sections 2 and 5)", () => {
     expect(rideLeaveAt("SELL", quote)).toBe(150.128);
   });
 
-  it("the profit or loss since email 1: (seen − entry) for a BUY, (entry − seen) for a SELL; pips on a pair, dollars on gold", () => {
+  it("the profit or loss against email 1's price: (seen − entry) for a BUY, (entry − seen) for a SELL; pips on a pair, dollars on gold", () => {
     expect(ridePnl("USD/JPY", "BUY", 150.128, 150.205)).toEqual({ value: 7.7, unit: "pips" });
     expect(ridePnl("USD/JPY", "BUY", 150.128, 150.118)).toEqual({ value: -1, unit: "pips" });
     expect(ridePnl("USD/JPY", "SELL", 150.118, 150.128)).toEqual({ value: -1, unit: "pips" });
@@ -360,12 +360,13 @@ describe("#397 the three mails (spec section 8)", () => {
     expect(t).toContain(`\n買値（この足の終値の買値）: ${ask(closes[I_BUY]).toFixed(3)}`);
     expect(t).toContain("2通目は、青い線が同じ端（枠の上の端）の96%に届いた時に送ります。損切りも目標もありません。青い線が90%の帯から出ても、何も送りません。2通目を送るまで、このチャートの同じ向き（買い）の新しい1通目は送りません。");
     expect(t).toContain("公開されているインジケーターではありません（docs §8.150）。");
-    // the measured paragraph: docs §8.149's numbers, as measured
+    // the measured paragraph: docs §8.150's numbers (the replay with the email's own reading), the study's beside them
     expect(t).toContain(
-      "ドル/円・ユーロ/円・豪ドル/円・ユーロ/ドル・豪ドル/ドルの1時間足で測ると（2024年1月〜2026年11月10日、スプレッドを引いたあと。docs §8.149）、入る合図は801回で、800回が96%に届きました。届いた時の損益は、プラスが360回、マイナスが429回、ちょうど0が11回で、1回あたり平均 +0.43 pips、最悪 −323.6 pips でした。持っている間の含み損は最大 558.8 pips、一番長く持ったのは約28日で、1回はまだ届いていません（含み損 −6.1 pips）。",
+      "ドル/円・ユーロ/円・豪ドル/円・ユーロ/ドル・豪ドル/ドルの1時間足で測ると（2024年1月〜2026年11月10日、スプレッドを引いたあと。docs §8.150）、入る合図は801回で、800回が96%に届きました。届いた時の損益は、プラスが358回、マイナスが431回、ちょうど0が11回で、1回あたり平均 +0.19 pips、最悪 −323.6 pips でした。持っている間の含み損は最大 558.8 pips、一番長く持ったのは約28日で、1回はまだ届いていません（含み損 −6.1 pips）。",
     );
-    expect(t).toContain("知らせだけの足（確定でもう96%）が750回、同じ向きを持っている間で見送った入りが30回ありました。届いた取引の半分は、入ってから1分以内に届いています。損切りをしないので、届く割合は作りの上で高く出ます。");
-    expect(t).toContain("5ペアのメールは GMO の1時間足を毎分読んで96%を見ますが、測った時は1分足で見ました。この違いは測っていません。");
+    expect(t).toContain("知らせだけの足（確定でもう96%）が714回、同じ向きを持っている間で見送った入りが30回ありました。届いた取引の半分は、入ってから1分以内に届いています。損切りをしないので、届く割合は作りの上で高く出ます。");
+    expect(t).toContain("これは、このメールと同じ見方（GMO の1時間足の、その時までの高値・安値）で測り直した数字です。1分足の値で見た時（docs §8.149）は、プラス360回・マイナス429回、平均 +0.43 pips でした。違いは801回のうち7回で、メールの見方の方が早く届きます。");
+    expect(t).toContain("メールは毎分1回読んで、その時の値段で損益を出しますが、測り直しは届いた分の終値で出しました。この違いは測っていません。");
     expect(t).not.toContain("金では");
     expect(t).toContain("価格は GMOコインの公開レート（買値と売値の中間）で、アプリのチャートと同じ足で判定しています。");
     expect(t).toContain("https://fx-tactical.jp/");
@@ -398,26 +399,34 @@ describe("#397 the three mails (spec section 8)", () => {
     expect(t).toContain(`\nBid at this bar's close (the price paid): ${bid(closes[I_SELL]).toFixed(3)}`);
     expect(t).toContain("Email 2 is sent when the blue line reaches 96% of the same edge (the pane's bottom). There is no stop and no target. Nothing is sent if the line leaves the 90% band, and no new email 1 for this chart and side (SELL) is sent until email 2 has been.");
     expect(t).toContain(
-      "Measured on the 1-hour bars of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD and AUD/USD (2024-01 to 2026-11-10, after the spread; docs §8.149): 801 entries, of which 800 reached 96% — 360 of them at a profit, 429 at a loss and 11 at zero — +0.43 pips an entry on average, the worst −323.6 pips, the largest loss on the way 558.8 pips, the longest held about 28 days, and 1 not reached yet (−6.1 pips).",
+      "Measured on the 1-hour bars of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD and AUD/USD (2024-01 to 2026-11-10, after the spread; docs §8.150): 801 entries, of which 800 reached 96% — 358 of them at a profit, 431 at a loss and 11 at zero — +0.19 pips an entry on average, the worst −323.6 pips, the largest loss on the way 558.8 pips, the longest held about 28 days, and 1 not reached yet (−6.1 pips).",
     );
-    expect(t).toContain("750 more bars were a notice only (already at 96%), and 30 entries were skipped while a ride of the same side was held. Half of those reached were reached within 1 minute of the entry. There is no stop, so the share that reaches 96% is high by construction.");
-    expect(t).toContain("On the five pairs the function reads GMO's 1-hour bar each minute where the study read 1-minute bars; that difference has not been measured.");
+    expect(t).toContain("714 more bars were a notice only (already at 96%), and 30 entries were skipped while a ride of the same side was held. Half of those reached were reached within 1 minute of the entry. There is no stop, so the share that reaches 96% is high by construction.");
+    expect(t).toContain("These numbers are a replay with this email's own reading (the high and low so far of GMO's 1-hour bar). Read on 1-minute bars (docs §8.149) the same entries gave 360 at a profit, 429 at a loss and +0.43 pips an entry: 7 of the 801 reach 96% earlier under the email's reading.");
+    expect(t).toContain("The email reads once a minute and takes the price of that read, where the replay took the close of the minute of the reach; that difference has not been measured.");
     expect(t).toContain("untick the chart under MACD ride");
     for (const no of ["Stop ", "TP1", "take-profit", "take profit", "ULTRA", "95%", "peak/valley", "always comes back", "has not been measured on gold"]) expect(t, no).not.toContain(no);
   });
 
-  it("the measured numbers are docs §8.149's, kept in one place", () => {
+  // the review's finding B1: the numbers are those of the replay with the function's own reading (docs §8.150, Actions
+  // run 43154699969: R2), and the study's reading (docs §8.149: R1) is said beside them
+  it("the measured numbers are docs §8.150's (the replay with the email's own reading), the study's beside them, kept in one place", () => {
     expect(RIDE_MEASURED).toEqual({
-      from: "2024-01", to: "2026-11-10", entries: 801, reached: 800, plus: 360, minus: 429, zero: 11, perTrade: 0.43, worst: -323.6,
-      maeMax: 558.8, longestDays: 28, open: 1, openPips: -6.1, notices: 750, skipped: 30, medianMinutes: 1,
+      from: "2024-01", to: "2026-11-10", entries: 801, reached: 800, plus: 358, minus: 431, zero: 11, perTrade: 0.19, worst: -323.6,
+      maeMax: 558.8, longestDays: 28, open: 1, openPips: -6.1, notices: 714, quiet: 36, skipped: 30, medianMinutes: 1,
+      study: { plus: 360, minus: 429, zero: 11, perTrade: 0.43, earlier: 7 },
     });
     expect(RIDE_MEASURED.plus + RIDE_MEASURED.minus + RIDE_MEASURED.zero).toBe(RIDE_MEASURED.reached);
     expect(RIDE_MEASURED.reached + RIDE_MEASURED.open).toBe(RIDE_MEASURED.entries);
+    expect(RIDE_MEASURED.study.plus + RIDE_MEASURED.study.minus + RIDE_MEASURED.study.zero).toBe(RIDE_MEASURED.reached);
+    // (the replay's sums: 153.8 pips over the 801 under the function's reading, 343.3 under the study's)
+    expect(Number((153.8 / 801).toFixed(2))).toBe(RIDE_MEASURED.perTrade);
+    expect(Number((343.3 / 801).toFixed(2))).toBe(RIDE_MEASURED.study.perTrade);
     // typed once: the mail's numbers come from the constant
     const src = readFileSync("supabase/functions/signal-alerts/indicators.ts", "utf8");
     const mailCode = src.slice(src.indexOf("const rideMeasuredLine = "), src.indexOf("export const renderIndicatorMail = "))
       .split("\n").filter((l) => !l.trimStart().startsWith("//")).join("\n");
-    for (const typed of ["801", "800", "360", "429", "0.43", "323.6", "558.8", "750"]) expect(mailCode, typed).not.toContain(typed);
+    for (const typed of ["801", "800", "358", "431", "0.19", "360", "429", "0.43", "323.6", "558.8", "714", "750"]) expect(mailCode, typed).not.toContain(typed);
   });
 
   it("gold's email 1 says first that gold is not measured, gives the bar's close and no pips of its own, and names both feeds", () => {
@@ -427,12 +436,12 @@ describe("#397 the three mails (spec section 8)", () => {
     expect(ja.text).toContain("\n\n金では、この決まりを測っていません。次の数字は5ペアのものです。ドル/円・ユーロ/円・豪ドル/円・ユーロ/ドル・豪ドル/ドルの1時間足で測ると");
     expect(ja.text).toContain(`\nこの足の終値: ${closes[I_BUY].toFixed(2)}`);
     expect(ja.text).not.toContain("買値");
-    expect(ja.text).toContain("足は Twelve Data のもの（金は GMOコインにないため）で、アプリのチャートと同じです。2通目は、Swissquote の値段を毎分記録したもの（足とは別の配信）で見ます。");
+    expect(ja.text).toContain("足は Twelve Data のもの（金は GMOコインにないため）で、アプリのチャートと同じです。2通目は、Swissquote の値段を毎分記録したもの（足とは別の配信）で見ます。そこで届いていなくても、確定した足（Twelve Data）の高値・安値が96%に届いていれば、次の足の確定で2通目を送ります。");
     const en = renderIndicatorMail(s, "en");
     expect(en.subject).toBe("[Sextant] XAU/USD 1-hour BUY entry signal (MACD ride, email 1)");
     expect(en.text).toContain("\n\nThis rule has not been measured on gold; the numbers that follow are the five pairs'. Measured on the 1-hour bars of USD/JPY");
     expect(en.text).toContain(`\nThis bar's close: ${closes[I_BUY].toFixed(2)}`);
-    expect(en.text).toContain("The bars are Twelve Data's (GMO Coin does not carry XAU/USD), as the app's chart draws them. Email 2 is looked for on Swissquote's prices, recorded every minute (another feed than the bars').");
+    expect(en.text).toContain("The bars are Twelve Data's (GMO Coin does not carry XAU/USD), as the app's chart draws them. Email 2 is looked for on Swissquote's prices, recorded every minute (another feed than the bars'); a reach those prices did not show is also found at the next close when the closed bar's (Twelve Data's) high or low is at 96%.");
   });
 
   it("the notice: the line came into the band already at 96%, no entry, the three numbers", () => {
@@ -465,15 +474,15 @@ describe("#397 the three mails (spec section 8)", () => {
     expect(t).toContain("\n届いたのを見た時刻: 2026-10-12 19:04（日本時間）");
     expect(t).toContain(`\n今の値段: ${(paid - 0.023).toFixed(3)}（売値）`);
     // the minus as the chart's
-    expect(t).toContain("\n1通目からの損益: −2.3 pips");
-    expect(t).toContain("\n1通目からの時間: 4分");
+    expect(t).toContain("\n1通目の値段からの損益: −2.3 pips");
+    expect(t).toContain("\n1通目の足の確定からの時間: 4分");
     expect(t).toContain("このメールは、青い線が96%に届いたことの知らせです。損益はプラスとは限りません。");
     expect(t).toContain("96%に届いたかは、1時間足のその時までの高値（買値と売値の中間。アプリのチャートと同じ丸め方）で、毎分見ています。");
     expect(t).toContain("「MACD の流れ」でチェックを外してください");
-    expect(t).not.toContain("その時は読めず");
+    expect(t).not.toContain("毎分の確認では見えず");
     // a profit, and exactly zero
-    expect(renderIndicatorMail(outMail({ seen_price: Number((paid + 0.418).toFixed(3)) }), "ja").text).toContain("\n1通目からの損益: +41.8 pips");
-    expect(renderIndicatorMail(outMail({ seen_price: paid }), "ja").text).toContain("\n1通目からの損益: ±0.0 pips");
+    expect(renderIndicatorMail(outMail({ seen_price: Number((paid + 0.418).toFixed(3)) }), "ja").text).toContain("\n1通目の値段からの損益: +41.8 pips");
+    expect(renderIndicatorMail(outMail({ seen_price: paid }), "ja").text).toContain("\n1通目の値段からの損益: ±0.0 pips");
     // a SELL leaves on the ask (買値) and gains when the price fell
     const sell = outMail({ side: "SELL", entry_price: 150.118, seen_price: 149.9 });
     const st = renderIndicatorMail(sell, "ja");
@@ -481,7 +490,7 @@ describe("#397 the three mails (spec section 8)", () => {
     expect(st.text).toContain("枠の下の端の96%に届きました");
     expect(st.text).toContain("で売り（SELL）。売値 150.118");
     expect(st.text).toContain("\n今の値段: 149.900（買値）");
-    expect(st.text).toContain("\n1通目からの損益: +21.8 pips");
+    expect(st.text).toContain("\n1通目の値段からの損益: +21.8 pips");
     expect(st.text).toContain("その時までの安値");
   });
 
@@ -489,15 +498,15 @@ describe("#397 the three mails (spec section 8)", () => {
     const found = times[I_BUY] + 3 * H + 1_000;
     const late = outMail({ late: true, reached_bar: pg(times[I_BUY] + H), reached_at: pg(found), seen_price: 150.3 });
     const ja = renderIndicatorMail(late, "ja").text;
-    expect(ja).toContain("\n2026-10-12 19:00〜20:00（日本時間）の足の間に届いていました。その時は読めず、今見つけました（2026-10-12 21:00、日本時間）");
+    expect(ja).toContain("\n2026-10-12 19:00〜20:00（日本時間）の足の間に届いていました。毎分の確認では見えず、確定した足で見つけました（2026-10-12 21:00、日本時間）");
     expect(ja).not.toContain("届いたのを見た時刻");
     expect(ja).toContain("\n今の値段: 150.300（最新の確定足の終値の売値）");
-    expect(ja).toContain("\n1通目からの時間: 2時間0分");
+    expect(ja).toContain("\n1通目の足の確定からの時間: 2時間0分");
     expect(ja).toContain("96%に届いたかは、確定した1時間足の高値（買値と売値の中間。アプリのチャートと同じ丸め方）で見ました。");
     const en = renderIndicatorMail(late, "en").text;
-    expect(en).toContain("\nIt had reached 96% during the bar 2026-10-12 10:00–11:00 UTC (2026-10-12 19:00–20:00 JST). It could not be read then and was found now (2026-10-12 12:00 UTC, 2026-10-12 21:00 JST)");
+    expect(en).toContain("\nIt had reached 96% during the bar 2026-10-12 10:00–11:00 UTC (2026-10-12 19:00–20:00 JST). It was not seen by the minute checks and was found on the closed bar (2026-10-12 12:00 UTC, 2026-10-12 21:00 JST)");
     expect(en).toContain("\nPrice now: 150.300 (bid at the newest closed bar's close)");
-    expect(en).toContain("\nTime since email 1: 2 hours 0 minutes");
+    expect(en).toContain("\nTime since the entry bar closed: 2 hours 0 minutes");
   });
 
   it("email 2 in English says the same", () => {
@@ -509,8 +518,8 @@ describe("#397 the three mails (spec section 8)", () => {
     expect(t).toContain(`Email 1: a BUY at the bar closed 2026-10-12 10:00 UTC (2026-10-12 19:00 JST), ask ${paid.toFixed(3)}`);
     expect(t).toContain("\nSeen at 2026-10-12 10:04 UTC (2026-10-12 19:04 JST)");
     expect(t).toContain(`\nPrice now: ${(paid - 0.023).toFixed(3)} (bid)`);
-    expect(t).toContain("\nProfit or loss since email 1: −2.3 pips");
-    expect(t).toContain("\nTime since email 1: 4 minutes");
+    expect(t).toContain("\nProfit or loss against email 1's price: −2.3 pips");
+    expect(t).toContain("\nTime since the entry bar closed: 4 minutes");
     expect(t).toContain("This email reports that the line reached 96%. It does not say the trade is at a profit: the result can be a loss.");
     expect(t).toContain("untick the chart under MACD ride");
   });
@@ -521,13 +530,13 @@ describe("#397 the three mails (spec section 8)", () => {
     expect(ja.subject).toBe("【Sextant】金 1時間足 96%に届きました（MACD の流れ・2通目、買いの分）");
     expect(ja.text).toContain("で買い（BUY）。その足の終値 4150.12");
     expect(ja.text).toContain("\n今の値段: 4162.50（Swissquote の値段）");
-    expect(ja.text).toContain("\n1通目からの損益: +12.38ドル");
+    expect(ja.text).toContain("\n1通目の値段からの損益: +12.38ドル");
     expect(ja.text).toContain("損益はプラスとは限りません。金の損益は、スプレッドを含みません。1通目の値段は Twelve Data の足の終値、今の値段は Swissquote の値段で、配信が別です。");
     expect(ja.text).toContain("96%に届いたかは、Swissquote の値段を毎分記録したもの（この1時間の高値）で、毎分見ています。");
     expect(ja.text).not.toContain("pips");
     const en = renderIndicatorMail(gold({ seen_price: 4140 }), "en").text;
     expect(en).toContain("\nPrice now: 4140.00 (Swissquote's price)");
-    expect(en).toContain("\nProfit or loss since email 1: −$10.12");
+    expect(en).toContain("\nProfit or loss against email 1's price: −$10.12");
     expect(en).toContain("Gold's result holds no spread, and its two prices come from two feeds: email 1's is the close of Twelve Data's bar, the price now is Swissquote's.");
     // found late, at a close: both prices are Twelve Data's closes
     const late = renderIndicatorMail(gold({ late: true, reached_at: pg(times[I_BUY] + 3 * H + 61_000) }), "ja").text;
@@ -602,6 +611,10 @@ const world = {
   forming: new Map<number, { high: number; low: number; close: number }>(),
   // followers whose plan lookup fails (a 503), and how the rides' table answers (200; 404 when it is not there)
   failPlanFor: new Set<string>(),
+  // followers whose address lookup answers this status (503: the lookup failed; 404: no such user), and followers
+  // the auth service knows without an address
+  failAuthFor: new Map<string, number>(),
+  noAddressFor: new Set<string>(),
   ridesStatus: 200,
   // called once when a ride is about to be patched: another run getting there first
   onRidePatch: null as (() => void) | null,
@@ -621,6 +634,8 @@ const resetWorld = () => {
   world.wicks.clear();
   world.forming.clear();
   world.failPlanFor.clear();
+  world.failAuthFor.clear();
+  world.noAddressFor.clear();
 };
 let clock = 0;
 
@@ -718,7 +733,9 @@ const fakeFetch = async (input: string | URL | Request, init?: RequestInit): Pro
   }
   if (url.startsWith(`${SB}/auth/v1/admin/users/`)) {
     const uid = decodeURIComponent(url.split("/").pop()!);
-    return reply({ id: uid, email: `${uid}@example.test` });
+    const failed = world.failAuthFor.get(uid);
+    if (failed !== undefined) return reply({ message: "boom" }, failed);
+    return reply(world.noAddressFor.has(uid) ? { id: uid } : { id: uid, email: `${uid}@example.test` });
   }
   if (!url.startsWith(`${SB}/rest/v1/`)) {
     world.unrouted.push(`${method} ${url.slice(0, 90)}`);
@@ -979,25 +996,140 @@ describe("#397 the ride in the function: the real index.ts replayed over fake ta
     expect(mails().slice(2)).toEqual([`userA: ${OUT_SUBJECT("買い")}`, `userB: ${OUT_SUBJECT("買い")}`]);
     const pips = ((bid(now) - ask(closes[I_BUY])) * 100).toFixed(1).replace("-", "−");
     expect(world.sent[2].text).toContain(`\n今の値段: ${bid(now).toFixed(3)}（売値）`);
-    expect(world.sent[2].text).toContain(`\n1通目からの損益: ${pips.startsWith("−") ? pips : `+${pips}`} pips`);
-    expect(world.sent[2].text).toContain("\n1通目からの時間: 2分");
+    expect(world.sent[2].text).toContain(`\n1通目の値段からの損益: ${pips.startsWith("−") ? pips : `+${pips}`} pips`);
+    expect(world.sent[2].text).toContain("\n1通目の足の確定からの時間: 2分");
     expect(world.sent[3].text).toBe(world.sent[2].text);
     // email 2's row: under the ride's ENTRY bar, closed_at when seen, the entry price, the price when seen as target
     expect(alertsOf(MACDH_OUT_RULE_ID)).toHaveLength(2);
     expect(alertsOf(MACDH_OUT_RULE_ID)[0]).toMatchObject({
       bar_time: iso(times[I_BUY]), closed_at: iso(at(I_BUY, 2)), side: "BUY", entry: ask(closes[I_BUY]), stop: null, target: bid(now), rule: MACDH_OUT_RULE_ID, status: "sent",
     });
-    // minute 3 (the chart is read again, a fresh instance): the entry bar's own ride is reached; still "in", nothing new
+    // minute 3 (the chart is read again, a fresh instance): the entry bar's own ride is reached. Still "in", no second
+    // ride — and email 1 is not offered any more: the ride is over, so a follower who has no email 1 (one who came
+    // after the reach, or whose lookup failed at the close) gets email 2 alone, never an entry signal after it
+    world.subs.push(follow("userC"));
     const s3 = await fresh(at(I_BUY, 3));
-    expect(judged(s3)).toMatchObject({ signals: ["macdx:BUY"], ride: { rows: "ok", step: "in", caught: [] } });
+    expect(judged(s3)).toMatchObject({ signals: [], ride: { rows: "ok", step: "in", caught: [], over: true } });
     expect(world.rides).toHaveLength(1);
-    expect(world.sent).toHaveLength(4);
-    // minutes 4 to 31: no second email 2, and nothing is read of GMO for a chart with no open ride
+    expect(mails().slice(4)).toEqual([`userC: ${OUT_SUBJECT("買い")}`]);
+    expect(world.sent[4].text).toBe(world.sent[2].text);
+    expect(alertsOf(MACDH_RULE_ID).map((r) => r.user_id)).toEqual(["userA", "userB"]);
+    // minute 5: the bar judged once more: the same
+    const s5 = await fresh(at(I_BUY, 5));
+    expect(judged(s5)).toMatchObject({ signals: [], ride: { step: "in", over: true } });
+    expect(world.sent).toHaveLength(5);
+    // minutes 6 to 31: no second email 2, and nothing is read of GMO for a chart with no open ride
     world.gmoCalls = 0;
-    for (const m of [4, 17, 31]) expect(minuteOf(await fresh(at(I_BUY, m)))).toBeUndefined();
+    for (const m of [6, 17, 31]) expect(minuteOf(await fresh(at(I_BUY, m)))).toBeUndefined();
     expect(world.gmoCalls).toBe(0);
+    expect(world.sent).toHaveLength(5);
+    expect(alertsOf(MACDH_OUT_RULE_ID)).toHaveLength(3);
+    expect(alertsOf(MACDH_RULE_ID)).toHaveLength(2);
+    clean();
+  });
+
+  // the review's finding A3: the same bar is read again and again inside its fresh window; should a feed give the
+  // just-closed bar another close on a later read, the bar keeps its FIRST decision
+  it("a bar has one decision, the first: its close read differently later does not add the notice to an email 1, nor an email 1 (and a ride) to a notice", async () => {
+    // (a) I_BUY is an entry (email 1). The smallest higher close at which the line is already at 96%
+    const orig = closes[I_BUY];
+    let moved = orig;
+    for (let n = 1; n < 3000; n++) {
+      moved = Number((orig + n * 0.001).toFixed(3));
+      if (rideEntryAt([...closes.slice(I_BUY - 599, I_BUY), moved])?.already) break;
+    }
+    expect(rideEntryAt([...closes.slice(I_BUY - 599, I_BUY), moved])).toMatchObject({ side: "BUY", already: true });
+    world.subs = [follow("userA"), follow("userB")];
+    world.failPlanFor.add("userB");
+    const a0 = await fresh(at(I_BUY, 0));
+    expect(judged(a0)).toMatchObject({ signals: ["macdx:BUY"], ride: { step: "in" } });
+    world.failPlanFor.clear();
+    closes[I_BUY] = moved;
+    try {
+      // minute 3: the same bar, now "already": still email 1's bar (its ride's row is there), no notice; the follower
+      // left at minute 0 gets email 1, written from the row (the first read's price)
+      const a3 = await fresh(at(I_BUY, 3));
+      expect(judged(a3)).toMatchObject({ signals: ["macdx:BUY"], ride: { step: "in" } });
+      expect(mails().slice(0, 2)).toEqual([`userA: ${IN_SUBJECT("買い（BUY）")}`, `userB: ${IN_SUBJECT("買い（BUY）")}`]);
+      expect(world.sent[1].text).toContain(`\n買値（この足の終値の買値）: ${ask(orig).toFixed(3)}`);
+      // (the bench's forming bar opens at the moved close, which is at the touch, so email 2 follows in this run: not
+      // this case's matter) — no notice, and one ride
+      expect(mails().some((m) => m.endsWith(AT_SUBJECT))).toBe(false);
+      expect(alertsOf(MACDH_AT_RULE_ID)).toEqual([]);
+      expect(world.rides).toHaveLength(1);
+    } finally {
+      closes[I_BUY] = orig;
+    }
+
+    // (b) I_NOTICE is already at 96% (the notice). A close a little higher at which it is an entry that is not already
+    resetWorld();
+    const first = closes[I_NOTICE];
+    let back = first;
+    for (let n = 1; n < 3000; n++) {
+      back = Number((first + n * 0.001).toFixed(3));
+      const e = rideEntryAt([...closes.slice(I_NOTICE - 599, I_NOTICE), back]);
+      if (e !== null && !e.already) break;
+    }
+    expect(rideEntryAt([...closes.slice(I_NOTICE - 599, I_NOTICE), back])).toMatchObject({ side: "SELL", already: false });
+    world.subs = [follow("userA")];
+    const b0 = await fresh(at(I_NOTICE, 0));
+    expect(judged(b0)).toMatchObject({ signals: ["macdx-at:SELL"], ride: { step: "at" } });
+    expect(mails()).toEqual([`userA: ${AT_SUBJECT}`]);
+    closes[I_NOTICE] = back;
+    try {
+      // minute 3: the same bar, now an entry: the notice stands; no ride is opened and no email 1 mailed
+      const b3 = await fresh(at(I_NOTICE, 3));
+      expect(judged(b3)).toMatchObject({ signals: [], ride: { step: "at", kept: true } });
+      expect(world.rides).toEqual([]);
+      expect(mails()).toEqual([`userA: ${AT_SUBJECT}`]);
+      expect(alertsOf(MACDH_RULE_ID)).toEqual([]);
+    } finally {
+      closes[I_NOTICE] = first;
+    }
+    clean();
+  });
+
+  // the review's finding A1: the address lookup failing is not "no address". A row claimed then was marked failed for
+  // good and kept every later run from mailing that follower (email 2 is the only word that a ride ended)
+  it("a follower whose ADDRESS lookup fails gets no row and is mailed by a later run (email 1 when the bar is judged again, email 2 the next minute); a follower with no address, or no longer there, gets one failed row and no second try", async () => {
+    world.subs = [follow("userA"), follow("userB"), follow("userC"), follow("userD")];
+    world.failAuthFor.set("userB", 503);
+    world.noAddressFor.add("userC");
+    world.failAuthFor.set("userD", 404);
+    const s0 = await fresh(at(I_SELL, 0));
+    expect(judged(s0)).toMatchObject({ signals: ["macdx:SELL"], ride: { rows: "ok", step: "in", unsent: ["in(lookup_failed)"] } });
+    expect(s0).toMatchObject({ sent: 1, failed: 2, lookup_failed: 1 });
+    expect(mails()).toEqual([`userA: ${IN_SUBJECT("売り（SELL）")}`]);
+    const rowsOf = (rule: string) => alertsOf(rule).map((r) => `${r.user_id} ${r.status}${r.error ? ` ${r.error}` : ""}`);
+    expect(rowsOf(MACDH_RULE_ID)).toEqual(["userA sent", "userC failed no_email", "userD failed no_email"]);
+    // minute 3, a fresh instance, the lookup answering again: the bar is judged again and the follower is mailed, the
+    // same mail; the two with no address are not looked at again
+    world.failAuthFor.delete("userB");
+    const s3 = await fresh(at(I_SELL, 3));
+    expect(mails()).toEqual([`userA: ${IN_SUBJECT("売り（SELL）")}`, `userB: ${IN_SUBJECT("売り（SELL）")}`]);
+    expect(world.sent[1].text).toBe(world.sent[0].text);
+    expect(judged(s3)!.ride).not.toHaveProperty("unsent");
+    expect(s3).not.toHaveProperty("lookup_failed");
+    expect(rowsOf(MACDH_RULE_ID)).toEqual(["userA sent", "userC failed no_email", "userD failed no_email", "userB sent"]);
+    // email 2: the run that sees the reach cannot look one follower's address up
+    const x = touchPrice(I_SELL + 1, "bottom");
+    world.forming.set(closeOf(I_SELL), { high: closes[I_SELL], low: x, close: x });
+    world.failAuthFor.set("userA", 500);
+    const s4 = await fresh(at(I_SELL, 4));
+    expect(world.rides[0]).toMatchObject({ status: "reached" });
+    expect(minuteOf(s4)).toMatchObject({ signals: ["macdx-out:SELL"], unsent: ["out(lookup_failed)"] });
+    expect(mails().slice(2)).toEqual([`userB: ${OUT_SUBJECT("売り")}`]);
+    expect(rowsOf(MACDH_OUT_RULE_ID)).toEqual(["userB sent", "userC failed no_email", "userD failed no_email"]);
+    // the next minute, the lookup answering: that follower's email 2, the same numbers; nobody a second one
+    world.failAuthFor.delete("userA");
+    const s6 = await fresh(at(I_SELL, 6));
+    expect(mails().slice(3)).toEqual([`userA: ${OUT_SUBJECT("売り")}`]);
+    expect(world.sent[3].text).toBe(world.sent[2].text);
+    expect(minuteOf(s6)).toMatchObject({ signals: ["macdx-out:SELL"] });
+    expect(minuteOf(s6)).not.toHaveProperty("unsent");
+    for (const m of [7, 8, 20]) await fresh(at(I_SELL, m));
     expect(world.sent).toHaveLength(4);
-    expect(alertsOf(MACDH_OUT_RULE_ID)).toHaveLength(2);
+    expect(world.alerts).toHaveLength(8);
     clean();
   });
 
@@ -1101,7 +1233,7 @@ describe("#397 the ride in the function: the real index.ts replayed over fake ta
     // the old ride: reached in bar k, seen late, at the newest closed bar's bid
     expect(world.rides).toHaveLength(2);
     expect(world.rides[0]).toMatchObject({ entry_bar: pg(times[older]), status: "reached", reached_bar: pg(times[I_BUY]), reached_at: pg(at(I_BUY, 0)), late: true, seen_price: bid(closes[I_BUY]) });
-    expect(world.sent[0].text).toContain("\n2026-10-12 18:00〜19:00（日本時間）の足の間に届いていました。その時は読めず、今見つけました（2026-10-12 19:00、日本時間）");
+    expect(world.sent[0].text).toContain("\n2026-10-12 18:00〜19:00（日本時間）の足の間に届いていました。毎分の確認では見えず、確定した足で見つけました（2026-10-12 19:00、日本時間）");
     expect(world.sent[0].text).toContain(`\n今の値段: ${bid(closes[I_BUY]).toFixed(3)}（最新の確定足の終値の売値）`);
     // the new ride of the same side: open, and the two rows of the two mails do not meet (other bar, other rule)
     expect(world.rides[1]).toMatchObject({ entry_bar: pg(times[I_BUY]), side: "BUY", status: "open" });
@@ -1142,6 +1274,27 @@ describe("#397 the ride in the function: the real index.ts replayed over fake ta
     // judged again: still quiet
     expect(judged(await fresh(at(I_QUIET, 3)))).toMatchObject({ ride: { step: "quiet", caught: [] } });
     expect(world.sent).toHaveLength(1);
+
+    // quiet again, the older ride's entry bar long out of the newest 100 closed bars (the review's finding A6): when
+    // the bar is judged again the read must still bring that ride (reached in THIS bar: reached_bar >= the bar), or
+    // the notice would go out on top of its email 2
+    resetWorld();
+    let far = 0;
+    let farSide: "BUY" | "SELL" = "BUY";
+    for (let i = 760; i < N - 3 && far === 0; i++) {
+      const e = entryAt(i);
+      if (!e || !e.already || times[i + 1] - times[i] !== H) continue;
+      if (rideCatchUp(Array.from({ length: i + 1 }, (_, k) => plainBar(k)), e.zside, times[i - 150])?.bar === times[i]) {
+        far = i;
+        farSide = e.side;
+      }
+    }
+    expect(far).toBeGreaterThan(0);
+    world.subs = [follow("userA")];
+    world.rides = [oldRide(farSide, far - 150)];
+    for (const m of [0, 3, 5]) expect(judged(await fresh(at(far, m))), `minute ${m}`).toMatchObject({ ride: { step: "quiet" } });
+    expect(mails()).toEqual([`userA: ${OUT_SUBJECT(farSide === "BUY" ? "買い" : "売り")}`]);
+    expect(alertsOf(MACDH_AT_RULE_ID)).toEqual([]);
     clean();
   });
 
@@ -1153,8 +1306,8 @@ describe("#397 the ride in the function: the real index.ts replayed over fake ta
     expect(mails()).toEqual([`userA: ${IN_SUBJECT("売り（SELL）")}`, `userA: ${OUT_SUBJECT("売り")}`]);
     // in at the bid, out at the ask a second later: minus the spread
     expect(world.rides[0]).toMatchObject({ status: "reached", late: false, reached_bar: pg(closeOf(I_AT_ONCE)), entry_price: bid(closes[I_AT_ONCE]), seen_price: ask(closes[I_AT_ONCE]) });
-    expect(world.sent[1].text).toContain("\n1通目からの損益: −1.0 pips");
-    expect(world.sent[1].text).toContain("\n1通目からの時間: 1分未満");
+    expect(world.sent[1].text).toContain("\n1通目の値段からの損益: −1.0 pips");
+    expect(world.sent[1].text).toContain("\n1通目の足の確定からの時間: 1分未満");
     expect(s0).toMatchObject({ signals: 2, sent: 2 });
     // minute 3: the entry bar again, its ride reached in the next bar: no new ride, no mail
     expect(judged(await fresh(at(I_AT_ONCE, 3)))).toMatchObject({ ride: { step: "in" } });
@@ -1201,6 +1354,31 @@ describe("#397 the ride in the function: the real index.ts replayed over fake ta
     clean();
   });
 
+  // the review's findings A2 / B2: on an instance kept warm the bar was held judged before the ride's work, so one
+  // failed read of the rides at the close cost the entry (and the hour's state) for good
+  it("an instance kept warm: a close whose ride work did not finish (the rides unread) is judged again when the chart is next due, as a fresh instance would; a close that settled is not", async () => {
+    world.subs = [follow("userA")];
+    const h = await instance();
+    world.ridesStatus = 503;
+    const s0 = await sweep(h, at(I_BUY, 0));
+    expect(judged(s0)).toMatchObject({ ride: { rows: "unread" } });
+    expect(world.rides).toEqual([]);
+    expect(world.states).toEqual([]);
+    expect(world.sent).toEqual([]);
+    // minute 3, the same instance, the table answering again: the chart is read and judged again
+    world.ridesStatus = 200;
+    const s3 = await sweep(h, at(I_BUY, 3));
+    expect(judged(s3)).toMatchObject({ signals: ["macdx:BUY"], ride: { rows: "ok", state: "ok", step: "in" } });
+    expect(world.rides).toHaveLength(1);
+    expect(world.states).toHaveLength(1);
+    expect(mails()).toEqual([`userA: ${IN_SUBJECT("買い（BUY）")}`]);
+    // settled now: at minute 5 this instance leaves the chart alone, and nothing is mailed twice
+    const s5 = await sweep(h, at(I_BUY, 5));
+    expect((s5.reads ?? []).find((r) => r.pair === "USD/JPY" && r.interval === "1h" && r.ride !== true)).toMatchObject({ skipped: "judged" });
+    expect(world.sent).toHaveLength(1);
+    expect(world.rides).toHaveLength(1);
+  });
+
   it("a touch in an hour nothing was read (no run after the entry's): found by the next close's catch-up, seen late, at that close's price", async () => {
     world.subs = [follow("userA")];
     await fresh(at(I_BUY, 0));
@@ -1211,8 +1389,8 @@ describe("#397 the ride in the function: the real index.ts replayed over fake ta
     expect(judged(s)!.ride).toMatchObject({ rows: "ok", caught: [{ side: "BUY", entry_bar: iso(times[I_BUY]), reached_bar: iso(times[I_BUY + 1]) }] });
     expect(world.rides[0]).toMatchObject({ status: "reached", late: true, reached_bar: pg(times[I_BUY + 1]), reached_at: pg(at(I_BUY + 1, 0)), seen_price: bid(closes[I_BUY + 1]) });
     expect(mails()).toEqual([`userA: ${IN_SUBJECT("買い（BUY）")}`, `userA: ${OUT_SUBJECT("買い")}`]);
-    expect(world.sent[1].text).toContain("その時は読めず、今見つけました");
-    expect(world.sent[1].text).toContain("\n1通目からの時間: 60分");
+    expect(world.sent[1].text).toContain("毎分の確認では見えず、確定した足で見つけました");
+    expect(world.sent[1].text).toContain("\n1通目の足の確定からの時間: 60分");
     // the state of the hour before is still kept (rows are dropped after eight days), the new hour's beside it
     expect(world.states.map((r) => r.bar_time)).toEqual([iso(closeOf(I_BUY)), iso(closeOf(I_BUY + 1))]);
     clean();
@@ -1373,12 +1551,52 @@ describe("#397 gold in the function: Twelve Data's stored bars at the close, the
     const gain = top ? seen > gcloses[G] : seen < gcloses[G];
     expect(world.sent[1].subject).toBe(`【Sextant】金 1時間足 96%に届きました（MACD の流れ・2通目、${e.side === "BUY" ? "買い" : "売り"}の分）`);
     expect(world.sent[1].text).toContain(`\n今の値段: ${seen.toFixed(2)}（Swissquote の値段）`);
-    expect(world.sent[1].text).toContain(`\n1通目からの損益: ${gain ? "+" : "−"}${dollars}ドル`);
+    expect(world.sent[1].text).toContain(`\n1通目の値段からの損益: ${gain ? "+" : "−"}${dollars}ドル`);
     expect(world.sent[1].text).toContain("金の損益は、スプレッドを含みません。1通目の値段は Twelve Data の足の終値、今の値段は Swissquote の値段で、配信が別です。");
     // the entry bar judged again each minute to :29 by fresh instances: one ride, two mails
     for (const m of [3, 4, 29]) await fresh(close + m * MIN + 2_000);
     expect(world.rides).toHaveLength(1);
     expect(world.sent).toHaveLength(2);
+    expect(world.unrouted).toEqual([]);
+  });
+
+  // the review's findings A6 and B4: gold's two feeds. The minutes (Swissquote's) never show the touch; Twelve Data's
+  // closed bar of that hour does. Found at the next close, at the newest closed bar's close, and said as what is known
+  it("a reach the recorded minutes did not show is found at the next close on Twelve Data's closed bar: late, at that bar's close, and the mail says it was not seen by the minute checks", async () => {
+    expect(G).toBeGreaterThan(0);
+    const e = gEntry(G)!;
+    const top = e.zside === "top";
+    const close = times[G] + H;
+    world.subs = [{ user_id: "userA", pair: "XAU/USD", interval: "1h", lang: "ja", rule: "macdx" }];
+    world.gold = stored(G, close + 61_000);
+    world.goldMinutes = [minute(close, gcloses[G], gcloses[G], gcloses[G])];
+    await fresh(close + MIN + 2_000);
+    expect(world.rides[0]).toMatchObject({ status: "open", entry_price: gcloses[G] });
+    // the hour's minutes are read and show no touch
+    world.goldMinutes.push(minute(close + 30 * MIN, gcloses[G], gcloses[G], gcloses[G]));
+    const mid = await fresh(close + 30 * MIN + 2_000);
+    expect((mid.reads ?? []).find((r) => r.pair === "XAU/USD" && r.ride === true)).toMatchObject({ state: "ok", open: 1, signals: [] });
+    // the next close: Twelve Data's bar of that hour has an extreme at the touch
+    let x = gcloses[G];
+    while (rideTouch(gState(G + 1), e.zside, x, x) === null) x = Number((x + (top ? 0.01 : -0.01)).toFixed(2));
+    const next = stored(G + 1, close + H + 61_000);
+    const bar = next.bars[next.bars.length - 1];
+    if (top) bar.high = Math.max(bar.high, x);
+    else bar.low = Math.min(bar.low, x);
+    world.gold = next;
+    world.goldMinutes = [minute(close + H, gcloses[G + 1], gcloses[G + 1], gcloses[G + 1])];
+    const s = await fresh(close + H + MIN + 2_000);
+    const j = (s.reads ?? []).find((r) => r.pair === "XAU/USD" && r.twelve === true)!;
+    expect(j).toMatchObject({ newest: iso(times[G + 1]), ride: { rows: "ok", caught: [{ side: e.side, entry_bar: iso(times[G]), reached_bar: iso(times[G + 1]) }] } });
+    // the price when seen is the newest closed Twelve Data bar's CLOSE (not its open, not a minute's price)
+    expect(gcloses[G + 1]).not.toBe(bar.open);
+    expect(world.rides[0]).toMatchObject({ status: "reached", late: true, reached_bar: pg(times[G + 1]), seen_price: gcloses[G + 1] });
+    const out = world.sent[world.sent.length - 1];
+    expect(out.subject).toBe(`【Sextant】金 1時間足 96%に届きました（MACD の流れ・2通目、${e.side === "BUY" ? "買い" : "売り"}の分）`);
+    expect(out.text).toContain("の足の間に届いていました。毎分の確認では見えず、確定した足で見つけました（");
+    expect(out.text).not.toContain("その時は読めず");
+    expect(out.text).toContain(`\n今の値段: ${gcloses[G + 1].toFixed(2)}（Twelve Data の最新の確定足の終値）`);
+    expect(out.text).toContain("金の損益は、スプレッドを含みません。どちらの値段も Twelve Data の足の終値です。");
     expect(world.unrouted).toEqual([]);
   });
 });

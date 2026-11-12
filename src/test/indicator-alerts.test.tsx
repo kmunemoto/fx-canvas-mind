@@ -2124,10 +2124,10 @@ describe("#353 the 1-hour MACD email from v28 to v38 (#362: 95% from v30): the b
     expect(t).toContain("この決まりは Sextant 独自のもの（数字はアプリのオーナーが決めたもの）で、公開されているインジケーターではありません（docs §8.150）。");
     expect(t).toContain("2通目は、青い線が同じ端（枠の下の端）の96%に届いた時に送ります。損切りも目標もありません。青い線が90%の帯から出ても、何も送りません。2通目を送るまで、このチャートの同じ向き（売り）の新しい1通目は送りません。");
     expect(t).toContain("枠の端には、チャートが枠を描く時に足す余白は入れていません。");
-    // what was measured (docs §8.149), as measured: the losses, the worst, the one still open, the skipped, by construction
-    expect(t).toContain("入る合図は801回で、800回が96%に届きました。届いた時の損益は、プラスが360回、マイナスが429回、ちょうど0が11回で、1回あたり平均 +0.43 pips、最悪 −323.6 pips でした。");
+    // what was measured (docs §8.150: the replay with the email's own reading), as measured: the losses, the worst, the one still open, the skipped, by construction
+    expect(t).toContain("入る合図は801回で、800回が96%に届きました。届いた時の損益は、プラスが358回、マイナスが431回、ちょうど0が11回で、1回あたり平均 +0.19 pips、最悪 −323.6 pips でした。");
     expect(t).toContain("持っている間の含み損は最大 558.8 pips、一番長く持ったのは約28日で、1回はまだ届いていません（含み損 −6.1 pips）。");
-    expect(t).toContain("知らせだけの足（確定でもう96%）が750回、同じ向きを持っている間で見送った入りが30回ありました。");
+    expect(t).toContain("知らせだけの足（確定でもう96%）が714回、同じ向きを持っている間で見送った入りが30回ありました。");
     expect(t).toContain("損切りをしないので、届く割合は作りの上で高く出ます。");
     expect(t).toContain("この違いは測っていません。");
     expect(t).toContain("価格は GMOコインの公開レート（買値と売値の中間）で、アプリのチャートと同じ足で判定しています。");
@@ -2173,7 +2173,7 @@ describe("#353 the 1-hour MACD email from v28 to v38 (#362: 95% from v30): the b
       "This is Sextant's own rule (its numbers are the app owner's), not a published indicator (docs §8.150). Email 2 is sent when the blue line reaches 96% of the same edge (the pane's top). There is no stop and no target. Nothing is sent if the line leaves the 90% band, and no new email 1 for this chart and side (BUY) is sent until email 2 has been.",
     );
     expect(t).toContain("The pane's edges are taken without the margin the chart adds as it draws them.");
-    expect(t).toContain("801 entries, of which 800 reached 96% — 360 of them at a profit, 429 at a loss and 11 at zero — +0.43 pips an entry on average, the worst −323.6 pips");
+    expect(t).toContain("801 entries, of which 800 reached 96% — 358 of them at a profit, 431 at a loss and 11 at zero — +0.19 pips an entry on average, the worst −323.6 pips");
     expect(t).toContain("There is no stop, so the share that reaches 96% is high by construction.");
     expect(t).toContain("that difference has not been measured.");
     expect(t).toContain("untick the chart under MACD ride");

@@ -407,7 +407,7 @@ describe("#275 the MACD ride (once the peak-and-valley rule) in the email-alert 
       "1通目: 1時間足が確定した時に、青い線が、新しい120本（チャートを開いた時に見える範囲）の MACD の枠の上の端の90%以上（0の線から測って）に入っていて、一つ前の足では入っていなかった時は買い（BUY）、下の端の90%以上に入っていて、一つ前の足では入っていなかった時は売り（SELL）です（流れに乗って入る合図）。",
     );
     expect(intro).toContain("その足の終わりですでに96%以上にいた時は、入る合図は送らず、知らせを1通だけ送ります。");
-    expect(intro).toContain("2通目: 青い線が同じ端の96%に届いた時に送ります。1通目からの損益（プラスとは限りません）を書きます。損切りも目標もありません。");
+    expect(intro).toContain("2通目: 青い線が同じ端の96%に届いた時に送ります。1通目の値段からの損益（プラスとは限りません）を書きます。損切りも目標もありません。");
     expect(intro).toContain("90%の帯から出ても何も送らず、2通目が届くまでは、同じチャート・同じ向きの1通目は送りません。1通目と2通目が1分以内に続けて届くことがあります。");
     expect(intro).toContain("ドル/円・ユーロ/円・豪ドル/円・ユーロ/ドル・豪ドル/ドルと金（XAU/USD）の1時間足だけです");
     expect(intro).toContain("5ペアで測った数字は下の注に、金では測っていません。");
@@ -529,23 +529,33 @@ describe("#275 the MACD ride (once the peak-and-valley rule) in the email-alert 
     expect(notes).toContain("その足の終わりで、青い線がもう96%以上にいた時は、入る合図は送らず、知らせを1通だけ送ります");
     expect(notes).toContain("2通目は、1通目のあと、青い線が同じ端の96%");
     expect(notes).toContain("5ペアは、毎分、GMO の1時間足のその時までの高値（買い）・安値（売り）で見ます。金は、毎分記録している値の、その1時間の高値・安値で見ます。");
-    expect(notes).toContain("1通目からの損益（買いは今の値段−1通目の値段、売りはその逆。5ペアは pips、金はドル）を書きます。");
+    expect(notes).toContain("1通目の値段からの損益（買いは今の値段−1通目の値段、売りはその逆。5ペアは pips、金はドル）を書きます。");
     expect(notes).toContain("金のドルは、スプレッドを含まず、足と毎分の値段の出どころが別です");
     expect(notes).toContain("損益はプラスとは限りません。2通目は「96%に届いた」という知らせで、利確の合図とは言えません。");
-    expect(notes).toContain("次の足の確定の時に見つけます。その2通目には「〔その足〕の間に届いていました。その時は読めず、今見つけました」と書き、今の値段で損益を出します。");
+    expect(notes).toContain("次の足の確定の時に見つけます。5ペアは、毎週、週明けの最初の1時間（日本時間 月曜 7:00〜8:00）と、冬時間の週の最後の1時間（日本時間 土曜 6:00〜7:00）は、毎分の確認をしていません。金も、週明けと、毎日の休みの後の最初の1時間は、毎分の確認をしていません。");
+    expect(notes).toContain("また金は、毎分の値段（別の配信）では届いていなくても、確定した足（Twelve Data）の高値・安値が96%に届いていれば、次の足の確定で見つけます。");
+    expect(notes).toContain("こうして後から見つけた2通目には「〔その足〕の間に届いていました。毎分の確認では見えず、確定した足で見つけました」と書き、今の値段で損益を出します。");
+    // the review (B5, B8): email 2 can arrive alone, an email 1 is not sent after its ride's 96%, and a chart nobody ticks is not watched
+    expect(notes).toContain("1通目を先に送ります。1通目を送れなかった時や、途中からチェックを入れた時は、2通目だけが届くことがあります（もう96%に届いた取引の1通目は、後からは送りません）。");
+    expect(notes).toContain("そのチャートに誰もチェックを入れていない間は、見ていません。持っている取引はそのまま残り、もう一度チェックを入れた後に96%に届いた時、前の1通目の値段からの損益で2通目を送ります");
+    // the review (B1): the numbers are the replay's with the email's own reading; the study's reading beside them
+    expect(notes).toContain("800回が96%に届きました（損益は、利益 358回・損失 431回・ゼロ 11回）。1回あたり平均 +0.19 pips、最悪 −323.6 pips");
+    expect(notes).toContain("1分足の値で見た時（docs §8.149）は、利益 360回・損失 429回、平均 +0.43 pips でした。違いは801回のうち7回で、メールの見方の方が早く届きます。");
+    expect(notes).toContain("知らせだけの足は714回、前の取引を持っている間の見送りは30回でした。");
     expect(notes).toContain("青い線が90%の帯から出ても、何も送りません。96%に届くまで持ち続ける形で、2通目が届くまでは、同じチャート・同じ向きの1通目は送りません");
-    expect(notes).toContain("1通目と2通目が1分以内に続けて届くことがあります（測った取引の半分は、入ってから1分以内に届いています）。1通目が先に届きます。");
+    expect(notes).toContain("1通目と2通目が1分以内に続けて届くことがあります（測った取引の半分は、入ってから1分以内に届いています）。1通目を先に送ります。");
     expect(notes).toContain("チャートを拡大・縮小すると MACD の枠の高さは変わりますが、メールはいつも新しい120本で決めます");
     expect(notes).toContain("チャートの MACD は、チャートが読んだ足から計算するので、メールの600本で出した値とわずかに違うことがあります");
     expect(notes).toContain("青い線と90%・96%の所は、丸めない値で比べます");
     expect(notes).toContain("チャートは MACD を丸めて見せる（円のペアは小数3桁、金は小数2桁）");
-    // the measured numbers, as docs §8.149 has them; gold not measured
+    // the measured numbers, as docs §8.150 has them (the replay with the email's own reading); gold not measured
     expect(notes).toContain("金では測っていません");
     expect(notes).toContain(
-      "測った結果（5ペアの1時間足、2024年1月1日〜2026年11月10日、スプレッドを引いたあと、docs §8.149）: 入る合図は801回で、800回が96%に届きました（損益は、利益 360回・損失 429回・ゼロ 11回）。1回あたり平均 +0.43 pips、最悪 −323.6 pips、途中で一番大きかった含み損 558.8 pips、一番長く持ったのは約28日で、1回はまだ届いていません（含み損 −6.1 pips）。知らせだけの足は750回、前の取引を持っている間の見送りは30回でした。",
+      "測った結果（5ペアの1時間足、2024年1月1日〜2026年11月10日、スプレッドを引いたあと、docs §8.150）: 入る合図は801回で、800回が96%に届きました（損益は、利益 358回・損失 431回・ゼロ 11回）。1回あたり平均 +0.19 pips、最悪 −323.6 pips、途中で一番大きかった含み損 558.8 pips、一番長く持ったのは約28日で、1回はまだ届いていません（含み損 −6.1 pips）。知らせだけの足は714回、前の取引を持っている間の見送りは30回でした。",
     );
     expect(notes).toContain("損切りをしないので、届く割合は作りの上で高く出ます。");
-    expect(notes).toContain("測ったのは1分足の値で、本番は GMO の1時間足を毎分読むため、その違いはまだ測っていません。");
+    expect(notes).toContain("これは、メールと同じ見方（GMO の1時間足の、その時までの高値・安値）で測り直した数字です。");
+    expect(notes).toContain("メールは毎分1回読んで、その時の値段で損益を出しますが、測り直しは届いた分の終値で出しました。この違いは測っていません。");
     expect(notes).toContain("ULTRA のメールとは別に届きます。両方をオンにすると、同じ時刻に2通届くことがあります");
     expect(notes).toContain("損切りも目標もありません。通知は注文の指示ではありません。届いたサインの勝ち負けの記録は付けていません。");
     // nothing of the replaced rule: 95%, one email per peak or valley, ULTRA's stop and targets, the 0.190 example, its numbers
@@ -650,9 +660,10 @@ describe("#275 the MACD ride (once the peak-and-valley rule) in the email-alert 
     ];
     render(<SignalAlertSettings call={async () => withMacdx({ alerts })} />);
     const rows = await screen.findAllByTestId("signal-alert-row");
-    expect(rows[0].textContent).toContain("USD/JPY 1時間 買い（MACD の流れ）");
+    // (#397: a MACD row that is not a ride's is tagged as an earlier rule's, not as the ride)
+    expect(rows[0].textContent).toContain("USD/JPY 1時間 買い（MACD・前の決まり）");
     expect(rows[0].textContent).toContain("目安 158.400 / 損切り 158.270 / 利確 158.440");
-    expect(rows[1].textContent).toContain("USD/JPY 5分 売り（MACD の流れ）");
+    expect(rows[1].textContent).toContain("USD/JPY 5分 売り（MACD・前の決まり）");
     expect(rows[1].textContent).toContain("目安 157.209 / 損切り 157.339 / 利確 157.169");
     // an old row has no ride kind
     expect(withMacdx({ alerts }).alerts.map((r) => r.ride)).toEqual([null, null]);
@@ -692,8 +703,10 @@ describe("#275 the MACD ride (once the peak-and-valley rule) in the email-alert 
     expect(rows[3].textContent).toContain("EUR/JPY 1時間 96%に届いた（売りの分）（MACD の流れ）");
     expect(label(3).className).not.toContain("text-destructive");
     expect(rows[3].querySelector("[data-testid='signal-alert-ride-prices']")!.textContent).toBe("1通目の値段 171.200 / 見えた時の値段 171.500");
-    // an old v8 row stays as it is shown today: its side in colour, its plan line
-    expect(rows[4].textContent).toContain("USD/JPY 1時間 売り（MACD の流れ）");
+    // an old v8 row (the 95% email's) keeps its side in colour and its plan line, under a tag that does not call it
+    // the ride (that email had a stop and a target, and its side was the other way round)
+    expect(rows[4].textContent).toContain("USD/JPY 1時間 売り（MACD・前の決まり）");
+    expect(rows[4].textContent).not.toContain("MACD の流れ");
     expect(label(4).className).toContain("text-destructive");
     expect(rows[4].textContent).toContain("目安 158.000 / 損切り 158.130 / 利確 157.960");
     expect(rows[4].querySelector("[data-testid='signal-alert-ride-prices']")).toBeNull();
@@ -729,7 +742,7 @@ describe("#275 the MACD ride (once the peak-and-valley rule) in the email-alert 
       "Email 1: when a 1-hour bar closes, the blue line has come into the 90% band of the top (measured from the zero line) of the MACD pane of the newest 120 bars (the range you see when you open the chart) with the bar before outside it, a BUY; into the 90% band of the pane's bottom with the bar before outside it, a SELL (an entry with the flow).",
     );
     expect(intro).toContain("If it is already at 96% or more at that close, no entry is sent, only one notice.");
-    expect(intro).toContain("Email 2: sent when the blue line reaches 96% of the same edge, with the profit or loss since email 1 (not always a profit). There is no stop and no target.");
+    expect(intro).toContain("Email 2: sent when the blue line reaches 96% of the same edge, with the profit or loss against email 1's price (not always a profit). There is no stop and no target.");
     expect(intro).toContain("Nothing is sent when the line leaves the band, and no new email 1 for the same chart and side comes until email 2 has. Emails 1 and 2 can arrive within a minute of each other.");
     expect(intro).toContain("1-hour bars of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD and gold (XAU/USD) only.");
     expect(intro).toContain("Measured on the five pairs (see the notes below); not measured on gold.");
@@ -743,19 +756,24 @@ describe("#275 the MACD ride (once the peak-and-valley rule) in the email-alert 
     expect(notes).toContain("MACD is worked out from the 600 bars ending at the bar judged. A cross with the orange line is not waited for.");
     expect(notes).toContain("If the blue line is already at 96% or more at that close, no entry is sent but one notice");
     expect(notes).toContain("The five pairs are looked at every minute with the highest high (BUY) or lowest low (SELL) so far of GMO's 1-hour bar; gold with the highest high or lowest low of the minutes recorded in that hour.");
-    expect(notes).toContain("It gives the price when the reach was seen and the profit or loss since email 1 (a BUY: the price now less the first price; a SELL: the reverse; the pairs in pips, gold in dollars).");
+    expect(notes).toContain("It gives the price when the reach was seen and the profit or loss against email 1's price (a BUY: the price now less the first price; a SELL: the reverse; the pairs in pips, gold in dollars).");
     expect(notes).toContain("Gold's dollars hold no spread, and its bars and its minute prices come from two feeds");
     expect(notes).toContain("The result is not always a profit. Email 2 reports that the line reached 96%; it is not to be called a take-profit.");
-    expect(notes).toContain("is found at the next bar's close. Its email 2 says 'it had reached during [that bar]; it could not be read then and was found now'");
+    expect(notes).toContain("is found at the next bar's close. On the five pairs the first hour of every week (Sunday 22:00–23:00 UTC) and, in winter, the week's last hour (Friday 21:00–22:00 UTC) are not checked minute by minute");
+    expect(notes).toContain("The email 2 of a reach found this way says 'it had reached during [that bar]; it was not seen by the minute checks and was found on the closed bar'");
+    expect(notes).toContain("email 1 is sent first. When email 1 could not be sent, or the chart was ticked in between, email 2 can arrive alone (the email 1 of a trade that has already reached 96% is not sent afterwards).");
+    expect(notes).toContain("While nobody has a chart ticked it is not watched");
+    expect(notes).toContain("800 of them reached 96% (358 at a profit, 431 at a loss, 11 at zero), +0.19 pips an entry on average");
+    expect(notes).toContain("Read on 1-minute bars (docs §8.149) the same entries gave 360 at a profit, 429 at a loss and +0.43 pips an entry: 7 of the 801 reach 96% earlier under the email's reading.");
     expect(notes).toContain("Nothing is sent when the blue line leaves the 90% band: it is held until it gets to 96%, and no new email 1 for the same chart and side comes until email 2 has");
-    expect(notes).toContain("emails 1 and 2 can arrive within a minute of each other (half of the measured trades reached it within a minute of the entry); email 1 comes first.");
+    expect(notes).toContain("emails 1 and 2 can arrive within a minute of each other (half of the measured trades reached it within a minute of the entry); email 1 is sent first.");
     expect(notes).toContain("Zooming the chart in or out changes the height of its MACD pane, but the email always goes by the newest 120 bars.");
     expect(notes).toContain("The blue line and the 90% and 96% marks are compared unrounded.");
     expect(notes).toContain("The chart shows MACD rounded (to 3 decimals on the yen pairs, to 2 on gold)");
-    // the measured numbers, as docs §8.149 has them
+    // the measured numbers, as docs §8.150 has them
     expect(notes).toContain("Not measured on gold");
     expect(notes).toContain(
-      "Measured (the five pairs' 1-hour bars, 1 January 2024 to 10 November 2026, after the spread, docs §8.149): 801 entries, 800 of them reached 96% (360 at a profit, 429 at a loss, 11 at zero), +0.43 pips an entry on average, the worst −323.6 pips, the largest loss on the way 558.8 pips, the longest held about 28 days, and 1 not reached yet (−6.1 pips). 750 bars were a notice only, and 30 entries were skipped",
+      "Measured (the five pairs' 1-hour bars, 1 January 2024 to 10 November 2026, after the spread, docs §8.150): 801 entries, 800 of them reached 96% (358 at a profit, 431 at a loss, 11 at zero), +0.19 pips an entry on average, the worst −323.6 pips, the largest loss on the way 558.8 pips, the longest held about 28 days, and 1 not reached yet (−6.1 pips). 714 bars were a notice only, and 30 entries were skipped",
     );
     expect(notes).toContain("With no stop, the share that reach 96% comes out high by construction.");
     expect(notes).toContain("that difference has not been measured.");
@@ -784,7 +802,7 @@ describe("#275 the MACD ride (once the peak-and-valley rule) in the email-alert 
     expect(intro).toContain("FX と同じ「MACD の流れ」のメール（2通）を送ります。");
     expect(intro).toContain("90%以上に入っていて、一つ前の足では入っていなかった時は買い");
     expect(intro).toContain("1通目のあとの1時間足の確定ごとに見て、青い線が同じ端の96%以上にいた最初の足で送ります（FX と違い、毎分は見ません）");
-    expect(intro).toContain("1通目からの損益（プラスとは限りません）を書きます。損切りも目標もありません。");
+    expect(intro).toContain("1通目の値段からの損益（プラスとは限りません）を書きます。損切りも目標もありません。");
     expect(intro).toContain("株では測っていません。");
     expect(intro).not.toContain("メールに損切り・利確の目安は入りません");
     const notes = screen.getByTestId("signal-alerts-notes").textContent!;
