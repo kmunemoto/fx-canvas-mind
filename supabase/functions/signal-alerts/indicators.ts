@@ -30,7 +30,23 @@ import { MACD_DEFAULTS } from "../_shared/macd.ts";
 import { N_TR as MACDX_N_TR, WINDOW as MACDX_WINDOW, decideOnWindow } from "../_shared/macd-extreme.ts";
 // #324: the MACD email's rule on the 1-hour chart (docs §8.114); #339: from v26 against each pair's own level (§8.116);
 // #353: from v28 the blue line at 90% of the top or bottom of the newest 120 bars' MACD pane (§8.119)
-import { LEVEL_WINDOW, ZONE_BARS, ZONE_PCT, decideZoneOnWindow } from "../_shared/macd-level.ts";
+// (#397: from v39 the email is the ride's, below; the pane's 120 bars are still this file's)
+import { ZONE_BARS } from "../_shared/macd-level.ts";
+// #397: the MACD email as a ride (docs §8.150): in at 90% with the flow, told at 96%
+import {
+  RIDE_IN_PCT,
+  RIDE_IN_SHARE,
+  RIDE_OUT_PCT,
+  RIDE_OUT_SHARE,
+  RIDE_RULE_TAG,
+  rideRuleId,
+  rideZoneSideOf,
+  type RideEntry,
+  type RideMail,
+  type RideRow,
+  type RideSide,
+  type RideZoneSide,
+} from "../_shared/macd-ride.ts";
 import { pineAtr } from "../_shared/pine.ts";
 // #291: the owner's video's way (docs §8.112), the code the chart's marks are drawn with
 import { SWEEPX, sweepCrossOnWindow, sweepPip } from "../_shared/sweep-cross.ts";
@@ -43,8 +59,8 @@ import { SPIKE, spikeOf, spikeRange } from "../_shared/spike.ts";
 import { isPossiblyClosedFor } from "../_shared/market-hours.ts";
 // #211: the Japanese emails name the pair as 楽天FX does (ユーロ/円)
 import { pairJa } from "../_shared/pair-names.ts";
-import { CHART_BARS, GOLD, LIVE_PAIRS, LIVE_STEP_MS, isGold, isTwelvePair } from "../live-chart/logic.ts";
-import { GMO_SYMBOLS } from "../track-outcomes/quotes.ts";
+import { CHART_BARS, GOLD, LIVE_PAIRS, LIVE_STEP_MS, isGold, isTwelvePair, splitBars } from "../live-chart/logic.ts";
+import { GMO_SYMBOLS, exitSide, fillSide, sideOf, type QuoteCandle } from "../track-outcomes/quotes.ts";
 import { APP_URL, assemble, clock, tfLabel, type Lang, type Mail } from "./logic.ts";
 import { STOCKMACD_RULE_ID, isStockmacdChart, renderStockMail } from "./stocks.ts";
 
@@ -127,11 +143,30 @@ export const MACDX_RULE_ID =
 // macdx_12_26_9_w600_1h_z95of120_v8 (not v6's id again, so the days on the
 // 15-minute chart stay apart in the record); the subscriptions are moved back
 // to the 1-hour chart of the same six.
+// #397 (docs §8.150): from v39 the email is a ride (_shared/macd-ride.ts,
+// research/macdride-spec.md), the owner's 「MACD 90%→96%: 足の確定で入ると 96%
+// まで行く メールをこれに変更、なので、一つのペアで2回メールを送る」
+// (2026-11-12): email 1 at the close of the 1-hour bar at which the blue line
+// came into the 90% band of the pane's top (a BUY) or bottom (a SELL) with
+// the bar before outside it, an entry with the flow (the opposite side of
+// v28 to v38's); a notice in its place where the line is already at 96% at
+// that close; email 2 the moment the line reaches 96% of the same edge. The
+// 95% email is stopped: its id, macdx_12_26_9_w600_1h_z95of120_v8, is never
+// written again. Three ids, one a mail, built from the ride's constants
+// (rideRuleId): macdx_12_26_9_w600_1h_ride90to96of120_in_v9 (email 1),
+// ..._at_v9 (the notice) and ..._out_v9 (email 2). They start as the app
+// reads the rule back from them; the subscriptions keep rule = 'macdx', on
+// the same charts.
 // MACDH_K is v26's k, kept with the rule it belongs to (decideScaledOnWindow,
 // which the morning check's SQL v3 mirrors); no email uses it from v28.
 export const MACDH_K = 0.8;
-export const MACDH_RULE_ID =
-  `macdx_${MACD_DEFAULTS.fast}_${MACD_DEFAULTS.slow}_${MACD_DEFAULTS.signal}_w${LEVEL_WINDOW}_1h_z${ZONE_PCT}of${ZONE_BARS}_v8`;
+export const MACDH_RIDE_VERSION = 9;
+// email 1's (the entry's): what indicatorRuleId gives for 'macdx'
+export const MACDH_RULE_ID = rideRuleId("macdx", "in", MACDH_RIDE_VERSION);
+// the notice's (already at 96% at the entry bar's close) and email 2's (the
+// ride reached 96%)
+export const MACDH_AT_RULE_ID = rideRuleId("macdx", "at", MACDH_RIDE_VERSION);
+export const MACDH_OUT_RULE_ID = rideRuleId("macdx", "out", MACDH_RIDE_VERSION);
 // #291: the video's way (docs §8.112, _shared/sweep-cross.ts): EMA 20 and EMA
 // 80, judged on the 600 closed bars ending at the bar, crosses counted from
 // its 241st, the stop a pip beyond the last five bars, the targets 15 and 20
@@ -151,7 +186,8 @@ export const EMARM_RULE_ID =
 // range of the SPIKE.bars closed bars before it away from its open
 export const SPIKE_RULE_ID = `spike_1h_x${SPIKE.k}_r${SPIKE.bars}_v1`;
 // The id each rule's emails are recorded under now (#324: 'macdx' under the
-// 1-hour rule's)
+// 1-hour rule's; #397: under its email 1's, the ride's other two mails each
+// under its own: signalRuleId, below)
 export const indicatorRuleId = (rule: IndicatorRule): string =>
   rule === "qtrend"
     ? QTREND_RULE_ID
@@ -168,6 +204,16 @@ export const indicatorRuleId = (rule: IndicatorRule): string =>
     : rule === "spike"
     ? SPIKE_RULE_ID
     : ULTRA_RULE_ID;
+// #397: the id a signal's row is written under (signal_alerts.rule, part of
+// the key that keeps a mail from being sent twice): its rule's, and for a
+// mail of the MACD ride that mail's own — the rule's email 1 id with "in"
+// made "at" or "out" (so 'macdx' gives MACDH_AT_RULE_ID and
+// MACDH_OUT_RULE_ID, and 'stockmacd' its own three once its id is email 1's;
+// an id that is not a ride's is left as it is)
+export const rideRuleIdOf = (inId: string, mail: RideMail): string =>
+  inId.replace(`_${RIDE_RULE_TAG}_in_`, `_${RIDE_RULE_TAG}_${mail}_`);
+export const signalRuleId = (s: Pick<IndicatorSignal, "rule" | "ride">): string =>
+  s.ride ? rideRuleIdOf(indicatorRuleId(s.rule), s.ride.mail) : indicatorRuleId(s.rule);
 
 // Every pair the live chart has, on these timeframes; those read from
 // Twelve Data on 1 hour and up only, but gold on 15 minutes too (#212, the
@@ -310,7 +356,7 @@ export interface IndicatorSignal {
   // #291: the video's way's (absent on the other rules')
   sweep?: SweepxFacts | null;
   // #324: the 1-hour MACD rule's (the MACD email's from v25; absent on the others'; #384: the 15-minute chart's from v31;
-  // #386: the 1-hour chart's again from v33)
+  // #386: the 1-hour chart's again from v33; #397: no email of the pairs' or gold's carries it from v39 — `ride`, below)
   macdh?: MacdhFacts | null;
   // #385: AMD Po3's (absent on the other rules')
   amd?: AmdFacts | null;
@@ -318,6 +364,43 @@ export interface IndicatorSignal {
   emarm?: EmarmFacts | null;
   // #395: a sharp rise's or fall's (absent on the other rules')
   spike?: SpikeFacts | null;
+  // #397: the MACD ride's (the MACD email's from v39, and the shares'; absent
+  // on the other rules'): which of its three mails this is, and its numbers
+  ride?: RideFacts | null;
+}
+
+// #397 (docs §8.150): a mail of the MACD ride. `mail`: "in" email 1 (the
+// entry), "at" the notice (already at 96% at the entry bar's close: no
+// entry), "out" email 2 (the ride reached 96%). `zside`: the side of the
+// MACD pane the line is on, the top for a BUY and the bottom for a SELL (the
+// opposite of the 95% email's). m, top and bottom: the MACD line and the
+// pane's edges at the entry bar's close (in, at); none on an email 2, which
+// is written from the ride's row (public.macd_rides keeps the line's share
+// only) so that every run mails the same numbers. The entry bar by its open
+// and close (ISO) and the price paid there (in, out: a pair's ask close for a
+// BUY and bid close for a SELL, gold's and a share's close; at: the bar's
+// close, no entry being made). Email 2 alone: when the reach was seen, the
+// open of the bar it was reached in, whether it was seen late (in a closed
+// bar, after the bar it was reached in had ended) and the price when seen (a
+// BUY leaves on the bid, a SELL on the ask).
+// On a ride's signal: barTime is the entry bar's open on all three (so one
+// email 2 a ride and follower, whatever minute it is seen in), closedAt the
+// entry bar's close (in, at) or when the reach was seen (out), close the
+// entry bar's close as the chart draws it (in, at) or the price when seen
+// (out), and there is no stop and no target (sl and tps null).
+export interface RideFacts {
+  mail: RideMail;
+  zside: RideZoneSide;
+  m: number | null;
+  top: number | null;
+  bottom: number | null;
+  entryBar: string;
+  entryClosedAt: string;
+  entryPrice: number;
+  seenAt?: string | null;
+  reachedBar?: string | null;
+  late?: boolean | null;
+  seenPrice?: number | null;
 }
 
 // #395: what was seen: the bar's open, how far it went (its high on a rise,
@@ -550,66 +633,261 @@ export const macdxSignals = (
 };
 
 // #324: the MACD email's rule from v25 (docs §8.114; _shared/macd-level.ts)
-// at the newest closed bar of a 1-hour chart it is offered on, in place of
-// macdxSignals in the sweep (that one stays for the studies). As that one:
-// judged on the LEVEL_WINDOW closed bars ending at the bar and on nothing
-// else (the chart's `closed`, the 600 closed bars the sweep reads, gives
-// exactly one decision, the newest bar's), not on a short history, only
-// while the bar is fresh (half an hour on the hourly chart: the reads at +0,
-// +3 and +5 minutes), and with ULTRA's stop and targets (the rule has none).
-// #339 (docs §8.116): from v26 against the pair's own level, MACDH_K times
-// the usual hourly move on those same bars (decideScaledOnWindow).
-// #345 (docs §8.118): from v27 gold's too. Its bars are Twelve Data's (the
-// sweep reads them in the first half hour of the hour, a minute and more
-// after the close: twelveCloseDue), in dollars, and the stop and targets are
-// gold's (ULTRA_GOLD).
-// #353 (docs §8.119): from v28 by the zone rule (decideZoneOnWindow): a SELL
-// at the bar where the blue line comes into the top band (ZONE_PCT% or more
-// of the way from the zero line to the top of the newest ZONE_BARS' MACD
-// pane), a BUY into the bottom band. Only that is changed: the same bars,
-// window, freshness, charts, stop and targets. Only the newest bar is
-// judged, as before, so an entry the sweep did not judge in time (a failed
-// run) is not mailed later: at the next bar the bar before it is in the
-// band, and that is no entry.
-// #384 (docs §8.127): from v31 on the 15-minute chart (MACDH_INTERVALS), the
-// rule as it was; fresh for twenty minutes there (freshFor), the reads at
-// +0, +1 and +3 minutes on GMO's pairs. #386 (docs §8.129): from v33 on the
-// 1-hour chart again, fresh for half an hour, as up to v30.
-export const macdhSignals = (
+// was judged here at the newest closed bar of a 1-hour chart (macdhSignals:
+// v25's cross at the owner's level, v26's at the pair's own, §8.116; v27 gold
+// too, §8.118; from v28 the zone rule, a SELL at the bar where the blue line
+// came into the top band of the newest 120 bars' MACD pane and a BUY into the
+// bottom band, §8.119, 95% from v30, §8.122; v31 on the 15-minute chart,
+// §8.127; v33 on the 1-hour chart again, §8.129), with ULTRA's stop and
+// targets.
+// #397 (docs §8.150): from v39 that decision makes no email. The MACD email
+// is a ride (_shared/macd-ride.ts; research/macdride-spec.md): what a bar's
+// close does is rideEntryAt and rideCloseStep there, on the chart's rides
+// kept in public.macd_rides, and a ride is reached by rideTouch (each minute)
+// or rideCatchUp (at a close); the sweep (index.ts) reads and writes the
+// tables. What is here: the ride's row as read back, its prices, the forming
+// hour as the minute's check reads it, and the three mails as signals, all
+// pure so that the tests and the shares' run can call them. No stop and no
+// target (the owner holds with none; email 2 reports the line, not a profit).
+
+// A row of public.macd_rides as the function reads it back (its times as
+// milliseconds): one trade of one chart and trade side, opened by email 1 at
+// the close of its entry bar and reached the first time the line is seen at
+// 96% of its edge
+export interface MacdRide {
+  pair: string;
+  side: RideSide;
+  // the entry bar's open, and when it closed
+  entryBar: number;
+  entryClosedAt: number;
+  // the price paid, and the entry bar's close as the chart draws it
+  entryPrice: number;
+  entryMid: number;
+  // the line's share of the way to its edge at the entry (m / top or bottom)
+  share0: number | null;
+  status: "open" | "reached";
+  // when the reach was seen, the open of the bar it was reached in, the
+  // price when seen, whether it was seen late, the line's share at the touch
+  reachedAt: number | null;
+  reachedBar: number | null;
+  seenPrice: number | null;
+  late: boolean | null;
+  share1: number | null;
+}
+// The columns a ride is read with (never select=*)
+export const MACD_RIDE_COLUMNS =
+  "pair,side,entry_bar,entry_closed_at,entry_price,entry_mid,share0,status,reached_at,reached_bar,seen_price,late,share1";
+const finite = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+const timeOf = (v: unknown): number | null => {
+  const t = typeof v === "string" ? Date.parse(v) : Number.NaN;
+  return Number.isFinite(t) ? t : null;
+};
+// A ride from its row; null when the row is not one (no pair, side, entry bar
+// or price, or a status that is neither)
+export const macdRideOf = (row: unknown): MacdRide | null => {
+  if (typeof row !== "object" || row === null) return null;
+  const r = row as Record<string, unknown>;
+  const entryBar = timeOf(r.entry_bar);
+  const entryClosedAt = timeOf(r.entry_closed_at);
+  const entryPrice = finite(r.entry_price);
+  const entryMid = finite(r.entry_mid);
+  if (typeof r.pair !== "string" || (r.side !== "BUY" && r.side !== "SELL") || (r.status !== "open" && r.status !== "reached")) return null;
+  if (entryBar === null || entryClosedAt === null || entryPrice === null || entryMid === null) return null;
+  return {
+    pair: r.pair,
+    side: r.side,
+    entryBar,
+    entryClosedAt,
+    entryPrice,
+    entryMid,
+    share0: finite(r.share0),
+    status: r.status,
+    reachedAt: timeOf(r.reached_at),
+    reachedBar: timeOf(r.reached_bar),
+    seenPrice: finite(r.seen_price),
+    late: typeof r.late === "boolean" ? r.late : null,
+    share1: finite(r.share1),
+  };
+};
+// A ride as rideCloseStep reads it
+export const rideRowOf = (r: MacdRide): RideRow => ({ side: r.side, entryBar: r.entryBar, status: r.status, reachedBar: r.reachedBar });
+
+// The price a ride pays at a bar's close and the one it would leave at there,
+// from GMO's bar with both sides (as given, unrounded): a BUY is filled on
+// the ask and leaves on the bid, a SELL the other way (research/macd90-spec.md).
+// Gold and the shares have one price, the bar's close.
+export const ridePaidAt = (side: RideSide, q: QuoteCandle): number => sideOf(q, fillSide(side)).close;
+export const rideLeaveAt = (side: RideSide, q: QuoteCandle): number => sideOf(q, exitSide(side)).close;
+
+// A pair's 1-hour bar forming at `hourMs`, as the minute's check for 96%
+// reads it from GMO's 1-hour read (`quotes`, bid and ask): its high and low
+// so far, the mid of the two sides rounded as the chart draws them (as the
+// sharp rise reads the forming bar), and the newest bid and ask (its closes
+// so far, as given). Null when the read holds no bar forming at that hour.
+export const rideFormingOf = (
+  pair: string,
+  quotes: ReadonlyArray<QuoteCandle>,
+  hourMs: number,
+  nowMs: number,
+): { high: number; low: number; quote: QuoteCandle } | null => {
+  const f = splitBars([...quotes], "1h", nowMs);
+  if (!f.forming || !f.formingQuote || barOpenMs(f.forming.datetime) !== hourMs) return null;
+  const d = decimalsOf(pair);
+  const high = Number(f.forming.high.toFixed(d));
+  const low = Number(f.forming.low.toFixed(d));
+  return Number.isFinite(high) && Number.isFinite(low) ? { high, low, quote: f.formingQuote } : null;
+};
+
+// Gold's hour starting at `hourMs` so far, from its recorded minutes
+// (public.gold_tick_bars: Swissquote's mid): the highest high and the lowest
+// low of the minutes in the hour and the newest minute's close, rounded as
+// the chart draws gold (2 decimals). Unlike the sharp rise's bar (goldHourBar)
+// the hour's open is not needed, so an hour whose first minutes were not
+// recorded is read from the minutes there are. Null with no minute in it.
+export const goldHourExtremes = (
+  minutes: ReadonlyArray<{ minute: string; high: number; low: number; close: number }>,
+  hourMs: number,
+): { high: number; low: number; close: number; minutes: number } | null => {
+  const inHour = minutes
+    .map((m) => ({ ...m, t: Date.parse(m.minute) }))
+    .filter((m) => m.t >= hourMs && m.t < hourMs + HOUR_MS && [m.high, m.low, m.close].every((v) => Number.isFinite(v)))
+    .sort((a, b) => a.t - b.t);
+  if (inHour.length === 0) return null;
+  const r2 = (v: number) => Number(v.toFixed(2));
+  return {
+    high: r2(Math.max(...inHour.map((m) => m.high))),
+    low: r2(Math.min(...inHour.map((m) => m.low))),
+    close: r2(inHour[inHour.length - 1].close),
+    minutes: inHour.length,
+  };
+};
+
+// How long after a ride was reached its email 2 still goes to a follower who
+// has none (a lookup that failed is tried again by the next runs): the
+// hourly chart's freshness, half an hour
+export const RIDE_OUT_FRESH_MS = 30 * 60_000;
+
+const isoOf = (ms: number): string => new Date(ms).toISOString();
+
+// Email 1 ("in") or the notice ("at") at the close of the bar an entry was
+// found at (rideEntryAt), as a signal. `bar`: its open and close (ms), its
+// close as the chart draws it, and the price paid (in: a pair's ask close for
+// a BUY and bid close for a SELL, gold's and a share's close; the notice
+// makes no entry and carries the bar's close). `rule`: 'macdx' (the pairs and
+// gold) or 'stockmacd' (the shares).
+export const rideCloseSignal = (
+  rule: "macdx" | "stockmacd",
   pair: string,
   interval: string,
-  closed: ReadonlyArray<Candle>,
-  nowMs: number,
-  freshMs: number = freshFor(interval),
-): IndicatorSignal[] => {
-  const step = LIVE_STEP_MS[interval];
-  if (step === undefined || !isMacdhChart(pair, interval) || closed.length < LEVEL_WINDOW) return [];
-  const i = closed.length - 1;
-  const open = barOpenMs(closed[i].datetime);
-  if (!Number.isFinite(open)) return [];
-  const age = nowMs - (open + step);
-  if (age < 0 || age > freshMs) return [];
-  const d = decideZoneOnWindow(closed, i);
-  if (d === null || !d.fire) return [];
-  const close = closed[i].close;
-  const lv = ultraLevels(d.side, close, ultraUnit(pair), ultraParamsFor(isGold(pair)));
-  return [{
-    rule: "macdx",
-    pair,
+  mail: "in" | "at",
+  entry: RideEntry,
+  bar: { openMs: number; closeMs: number; mid: number; paid: number },
+): IndicatorSignal => ({
+  rule,
+  pair,
+  interval,
+  side: entry.side,
+  strong: false,
+  barTime: isoOf(bar.openMs),
+  closedAt: isoOf(bar.closeMs),
+  close: bar.mid,
+  line: null,
+  eps: null,
+  rsi: null,
+  rsiPrev: null,
+  sl: null,
+  tps: null,
+  ride: {
+    mail,
+    zside: entry.zside,
+    m: entry.z.m,
+    top: entry.z.top,
+    bottom: entry.z.bottom,
+    entryBar: isoOf(bar.openMs),
+    entryClosedAt: isoOf(bar.closeMs),
+    entryPrice: mail === "at" ? bar.mid : bar.paid,
+  },
+});
+
+// Email 2 ("out") of a ride that was reached, as a signal, from its row
+// alone: every run that mails it writes the same numbers. Its bar is the
+// ride's entry bar and its closedAt when the reach was seen. Null while the
+// ride is open, or its row holds no time or price for the reach.
+export const rideOutSignal = (rule: "macdx" | "stockmacd", interval: string, ride: MacdRide): IndicatorSignal | null => {
+  if (ride.status !== "reached" || ride.reachedAt === null || ride.seenPrice === null) return null;
+  return {
+    rule,
+    pair: ride.pair,
     interval,
-    side: d.side,
+    side: ride.side,
     strong: false,
-    barTime: new Date(open).toISOString(),
-    closedAt: new Date(open + step).toISOString(),
-    close,
+    barTime: isoOf(ride.entryBar),
+    closedAt: isoOf(ride.reachedAt),
+    close: ride.seenPrice,
     line: null,
     eps: null,
     rsi: null,
     rsiPrev: null,
-    sl: lv.sl,
-    tps: lv.tps,
-    macdh: { m: d.m, top: d.top, bottom: d.bottom, mark: d.mark },
-  }];
+    sl: null,
+    tps: null,
+    ride: {
+      mail: "out",
+      zside: rideZoneSideOf(ride.side),
+      m: null,
+      top: null,
+      bottom: null,
+      entryBar: isoOf(ride.entryBar),
+      entryClosedAt: isoOf(ride.entryClosedAt),
+      entryPrice: ride.entryPrice,
+      seenAt: isoOf(ride.reachedAt),
+      reachedBar: ride.reachedBar === null ? null : isoOf(ride.reachedBar),
+      late: ride.late === true,
+      seenPrice: ride.seenPrice,
+    },
+  };
+};
+
+// What a signal's row in public.signal_alerts says of it (the claim's key is
+// user_id, kind, pair, interval, bar_time, side, rule). A ride's: under its
+// mail's own id, the entry the price paid (the notice: the bar's close), no
+// stop, and on email 2 alone the target column holds the price when seen —
+// so one email 2 a ride and follower, and it cannot meet a new email 1 or
+// notice of the same bar and side.
+export const signalRow = (s: IndicatorSignal): {
+  bar_time: string;
+  closed_at: string;
+  side: "BUY" | "SELL";
+  entry: number;
+  stop: number | null;
+  target: number | null;
+  rule: string;
+} => ({
+  bar_time: s.barTime,
+  closed_at: s.closedAt,
+  side: s.side,
+  entry: s.ride ? s.ride.entryPrice : s.close,
+  stop: s.ride ? null : s.sl,
+  target: s.ride ? (s.ride.mail === "out" ? s.ride.seenPrice ?? null : null) : s.tps ? s.tps[0] : null,
+  rule: signalRuleId(s),
+});
+
+// How a ride's mail is written in a run's record (the signals of an entry of
+// summary.reads): "macdx:BUY" email 1, "macdx-at:BUY" the notice and
+// "macdx-out:BUY" email 2 (the shares': "stockmacd:", "stockmacd-at:",
+// "stockmacd-out:"), so that a reader of the record who takes what starts
+// with "macdx:" (the morning check's Routine) takes email 1 alone
+export const rideSignalTag = (s: Pick<IndicatorSignal, "rule" | "side" | "ride">): string =>
+  `${s.rule}${s.ride && s.ride.mail !== "in" ? `-${s.ride.mail}` : ""}:${s.side}`;
+
+// Profit or loss since email 1 (research/macdride-spec.md section 2): the
+// price when seen less the entry for a BUY, the entry less it for a SELL. A
+// pair's in pips (0.01 on a yen pair, 0.0001 on the others) and gold's in
+// dollars, worked in whole points of the price's decimals so that a
+// difference of prices comes out as written (research/macd90-spec.md).
+export const ridePnl = (pair: string, side: RideSide, entry: number, seen: number): { value: number; unit: "pips" | "usd" } => {
+  const p = (x: number) => Math.round(x * 10 ** decimalsOf(pair));
+  const points = side === "BUY" ? p(seen) - p(entry) : p(entry) - p(seen);
+  return isGold(pair) ? { value: points / 100, unit: "usd" } : { value: points / 10, unit: "pips" };
 };
 
 // #291: the owner's video's way (docs §8.112) on gold's 1-minute chart. Each
@@ -1225,6 +1503,8 @@ const goldMeasuredLine = (s: IndicatorSignal, lang: Lang): string => {
 // #385: nor has AMD Po3 (its table counts the chart's own, §8.128).
 // (The 5-minute MACD rule's measured figures, §8.109, went with its emails:
 // they are another rule's.)
+// (#397: the MACD email, a ride from v39, has its own measured paragraph:
+// rideMeasuredLine, docs §8.149; this line is no longer its)
 const notMeasuredLine = (lang: Lang): string =>
   lang === "en"
     ? "This rule's win rate and its profit or loss a trade have not been measured."
@@ -1292,20 +1572,243 @@ const measuredLine = (s: IndicatorSignal, lang: Lang): string => {
 
 const decimalsOf = (pair: string) => (isGold(pair) ? 2 : pair.toUpperCase().includes("JPY") ? 3 : 5);
 
-// #353 (docs §8.119): how the MACD email writes its three numbers (the blue
-// line, the top or bottom of the newest 120 bars' MACD pane, and ZONE_PCT% of it),
+// #353 (docs §8.119): how the MACD email writes its numbers (the blue line,
+// an edge of the newest 120 bars' MACD pane, and the marks on the way to it),
 // the minus as the chart's (U+2212), not toFixed's hyphen. In the price's
 // decimals, as the chart's MACD pane shows them, or more where the pane's
-// edge on the signal's side (the top for a SELL, the bottom for a BUY) would
-// come out with fewer than two significant digits in those (a top of
-// 0.0000125 on EUR/USD is written 0.000013, not 0.00001, and its 95%
-// 0.000012); the three in the same decimals, at most 20
-const macdNumbers = (s: IndicatorSignal): ((v: number) => string) => {
+// edge the mail is about (`end`) would come out with fewer than two
+// significant digits in those (a top of 0.0000125 on EUR/USD is written
+// 0.000013, not 0.00001); the numbers of a mail in the same decimals, at most
+// 20. #397: the edge is the pane's on the ride's side, the top for a BUY and
+// the bottom for a SELL (the 95% email took the bottom for a BUY)
+const macdNumbers = (pair: string, end: number | null): ((v: number | null) => string) => {
+  const d = decimalsOf(pair);
+  const md = end !== null && Number.isFinite(end) && end !== 0 ? Math.min(20, Math.max(d, 1 - Math.floor(Math.log10(Math.abs(end))))) : d;
+  return (v: number | null) => (v !== null && Number.isFinite(v) ? v.toFixed(md).replace(/^-/, "−") : "—");
+};
+
+// #397 (docs §8.149): the ride as measured, on the five pairs' bars only
+// (research/macd90m-spec.md way C: in at the 1-hour close, out at the close
+// of the first 1-minute bar that touches 96%, held until then; GMO's bars,
+// the entries closing 2024-01-01 to 2026-11-10, the spread paid; the Python
+// written apart agreed on every row, run 43134981457). `entries`: the trades;
+// `reached` of them got to 96%, `plus` at a profit, `minus` at a loss and
+// `zero` at none; `perTrade` their mean and `worst` the lowest, pips; `maeMax`
+// the largest loss on the way, pips; `longestDays` the longest held
+// (40,141 minutes); `open` not reached by the end, at `openPips`; `notices`
+// the bars already at 96% at their close (no trade) and `skipped` the entries
+// while a ride of the side was held; half of those reached were reached
+// within a minute of the entry (the median). Gold and the shares are not
+// measured, nor the function's own reading (GMO's 1-hour bar each minute
+// where the study read 1-minute bars)
+export const RIDE_MEASURED = {
+  from: "2024-01",
+  to: "2026-11-10",
+  entries: 801,
+  reached: 800,
+  plus: 360,
+  minus: 429,
+  zero: 11,
+  perTrade: 0.43,
+  worst: -323.6,
+  maeMax: 558.8,
+  longestDays: 28,
+  open: 1,
+  openPips: -6.1,
+  notices: 750,
+  skipped: 30,
+  medianMinutes: 1,
+} as const;
+// the measured paragraph of email 1 (gold's says first that gold is not measured)
+const rideMeasuredLine = (pair: string, lang: Lang): string => {
+  const m = RIDE_MEASURED;
+  // the minus as the chart's (U+2212)
+  const sg = (v: number) => (v < 0 ? `\u2212${Math.abs(v)}` : `+${v}`);
+  // "2024-01" as 2024\u5e741\u6708, "2026-11-10" as 2026\u5e7411\u670810\u65e5
+  const dayJa = (ymd: string) => {
+    const [y, mo, day] = ymd.split("-").map(Number);
+    return `${y}\u5e74${mo}\u6708${day === undefined ? "" : `${day}\u65e5`}`;
+  };
+  const gold = isGold(pair);
+  if (lang === "en") {
+    return (gold ? "This rule has not been measured on gold; the numbers that follow are the five pairs'. " : "") +
+      `Measured on the 1-hour bars of USD/JPY, EUR/JPY, AUD/JPY, EUR/USD and AUD/USD (${m.from} to ${m.to}, after the spread; docs §8.149): ${m.entries} entries, of which ${m.reached} reached ${RIDE_OUT_PCT}% — ${m.plus} of them at a profit, ${m.minus} at a loss and ${m.zero} at zero — ${sg(m.perTrade)} pips an entry on average, the worst ${sg(m.worst)} pips, the largest loss on the way ${m.maeMax} pips, the longest held about ${m.longestDays} days, and ${m.open} not reached yet (${sg(m.openPips)} pips). ${m.notices} more bars were a notice only (already at ${RIDE_OUT_PCT}%), and ${m.skipped} entries were skipped while a ride of the same side was held. Half of those reached were reached within ${m.medianMinutes} minute of the entry. There is no stop, so the share that reaches ${RIDE_OUT_PCT}% is high by construction. On the five pairs the function reads GMO's 1-hour bar each minute where the study read 1-minute bars; that difference has not been measured.`;
+  }
+  return (gold ? "金では、この決まりを測っていません。次の数字は5ペアのものです。" : "") +
+    `ドル/円・ユーロ/円・豪ドル/円・ユーロ/ドル・豪ドル/ドルの1時間足で測ると（${dayJa(m.from)}〜${dayJa(m.to)}、スプレッドを引いたあと。docs §8.149）、入る合図は${m.entries}回で、${m.reached}回が${RIDE_OUT_PCT}%に届きました。届いた時の損益は、プラスが${m.plus}回、マイナスが${m.minus}回、ちょうど0が${m.zero}回で、1回あたり平均 ${sg(m.perTrade)} pips、最悪 ${sg(m.worst)} pips でした。持っている間の含み損は最大 ${m.maeMax} pips、一番長く持ったのは約${m.longestDays}日で、${m.open}回はまだ届いていません（含み損 ${sg(m.openPips)} pips）。このほかに、知らせだけの足（確定でもう${RIDE_OUT_PCT}%）が${m.notices}回、同じ向きを持っている間で見送った入りが${m.skipped}回ありました。届いた取引の半分は、入ってから${m.medianMinutes}分以内に届いています。損切りをしないので、届く割合は作りの上で高く出ます。5ペアのメールは GMO の1時間足を毎分読んで${RIDE_OUT_PCT}%を見ますが、測った時は1分足で見ました。この違いは測っていません。`;
+};
+
+// #397: how long a ride was held, as email 2 says it: minutes under 2 hours,
+// then hours and minutes under 2 days, then days and hours
+export const rideHeldText = (ms: number, lang: Lang): string => {
+  const min = Math.max(0, Math.floor(ms / MIN_MS));
+  if (min < 1) return lang === "en" ? "under a minute" : "1分未満";
+  if (min < 120) return lang === "en" ? `${min} minute${min === 1 ? "" : "s"}` : `${min}分`;
+  const h = Math.floor(min / 60);
+  if (h < 48) return lang === "en" ? `${h} hours ${min % 60} minutes` : `${h}時間${min % 60}分`;
+  const d = Math.floor(h / 24);
+  return lang === "en" ? `${d} days ${h % 24} hours` : `${d}日${h % 24}時間`;
+};
+
+// #397 (docs §8.150; research/macdride-spec.md section 8): the three mails of
+// the MACD ride on the five pairs and gold. Email 1: the bar, that the blue
+// line came into the 90% band of the pane's top (bottom) with the bar before
+// outside it — an entry with the flow, a BUY (SELL) — its numbers, the price
+// paid, what follows and what was measured. The notice: the line came in
+// already at 96%, no entry. Email 2: the first email, that the line reached
+// 96% (or was found to have, late), the price now, the profit or loss since
+// the first email and how long it was held; it reports the line, not a
+// profit: of the 800 measured trades that reached 96%, 429 were at a loss.
+// The pane's edge is the ride's side's: the top for a BUY, the bottom for a
+// SELL.
+const renderRideMail = (s: IndicatorSignal, lang: Lang): Mail => {
+  const f = s.ride ?? null;
+  const mail: RideMail = f?.mail ?? "in";
+  const gold = isGold(s.pair);
   const d = decimalsOf(s.pair);
-  const f = s.macdh;
-  const end = f ? (s.side === "BUY" ? f.bottom : f.top) : NaN;
-  const md = Number.isFinite(end) && end !== 0 ? Math.min(20, Math.max(d, 1 - Math.floor(Math.log10(Math.abs(end))))) : d;
-  return (v: number) => (Number.isFinite(v) ? v.toFixed(md).replace(/^-/, "−") : "—");
+  const px = (v: number | null | undefined) => (v === null || v === undefined || !Number.isFinite(v) ? "—" : v.toFixed(d));
+  const buy = s.side === "BUY";
+  const top = (f?.zside ?? rideZoneSideOf(s.side)) === "top";
+  const edge = f ? (top ? f.top : f.bottom) : null;
+  const mx = macdNumbers(s.pair, edge);
+  const mark = (share: number) => (edge === null ? null : share * edge);
+  const tf = tfLabel(lang, s.interval);
+  const entryClose = f ? Date.parse(f.entryClosedAt) : Date.parse(s.closedAt);
+  const seen = f?.seenAt ? Date.parse(f.seenAt) : Date.parse(s.closedAt);
+  const late = f?.late === true;
+  const reachedBar = f?.reachedBar ? Date.parse(f.reachedBar) : Number.NaN;
+  const step = LIVE_STEP_MS[s.interval] ?? HOUR_MS;
+  const pnl = f && f.seenPrice !== null && f.seenPrice !== undefined ? ridePnl(s.pair, s.side, f.entryPrice, f.seenPrice) : null;
+  // the result with its sign (the minus as the chart's, U+2212; ± at exactly zero): a pair's in pips to one
+  // decimal, gold's in dollars
+  const sign = pnl === null ? "" : pnl.value > 0 ? "+" : pnl.value < 0 ? "\u2212" : "±";
+  const amount = pnl === null ? "" : Math.abs(pnl.value).toFixed(pnl.unit === "usd" ? 2 : 1);
+  if (lang === "en") {
+    const side = buy ? "BUY" : "SELL";
+    const end = top ? "top" : "bottom";
+    const source = gold
+      ? "The bars are Twelve Data's (GMO Coin does not carry XAU/USD), as the app's chart draws them."
+      : "The bars are the mid of GMO Coin's public bid and ask, as the app's chart draws them.";
+    const stop = "To stop these emails, open Settings → Email alerts in the app and untick the chart under MACD ride.\nThis is reference information, not investment advice. Every trading decision is your own.";
+    if (mail === "out") {
+      const paid = gold ? "that bar's close" : buy ? "ask" : "bid";
+      const leave = gold
+        ? late ? "the newest closed Twelve Data bar's close" : "Swissquote's price"
+        : `${buy ? "bid" : "ask"}${late ? " at the newest closed bar's close" : ""}`;
+      const result = pnl === null ? "—" : pnl.unit === "usd" ? `${sign}$${amount}` : `${sign}${amount} pips`;
+      return assemble(`[Sextant] ${s.pair} ${tf} reached ${RIDE_OUT_PCT}% (MACD ride, email 2, the ${side})`, [
+        `On ${s.pair}, ${tf} chart, the MACD line (blue) reached ${RIDE_OUT_PCT}% of the way to the ${end} of the MACD pane (MACD ride, email 2, for the ${side}).`,
+        [
+          `Email 1: a ${side} at the bar closed ${clock(entryClose, 0)} UTC (${clock(entryClose, 9)} JST), ${paid} ${px(f?.entryPrice)}`,
+          late && Number.isFinite(reachedBar)
+            ? `It had reached ${RIDE_OUT_PCT}% during the bar ${clock(reachedBar, 0)}–${clock(reachedBar + step, 0).slice(11)} UTC (${clock(reachedBar, 9)}–${clock(reachedBar + step, 9).slice(11)} JST). It could not be read then and was found now (${clock(seen, 0)} UTC, ${clock(seen, 9)} JST)`
+            : `Seen at ${clock(seen, 0)} UTC (${clock(seen, 9)} JST)`,
+          `Price now: ${px(f?.seenPrice)} (${leave})`,
+          `Profit or loss since email 1: ${result}`,
+          `Time since email 1: ${rideHeldText(seen - entryClose, "en")}`,
+        ].join("\n"),
+        `This email reports that the line reached ${RIDE_OUT_PCT}%. It does not say the trade is at a profit: the result can be a loss.` +
+          (gold
+            ? ` Gold's result holds no spread${late ? "; both prices are closes of Twelve Data's bars." : ", and its two prices come from two feeds: email 1's is the close of Twelve Data's bar, the price now is Swissquote's."}`
+            : ""),
+        `${gold
+          ? late
+            ? `The bars are Twelve Data's (GMO Coin does not carry XAU/USD); the reach was read on the closed 1-hour bar's ${buy ? "high" : "low"}.`
+            : `The bars are Twelve Data's (GMO Coin does not carry XAU/USD); the reach is looked for every minute on this hour's ${buy ? "highest" : "lowest"} price so far in Swissquote's prices, recorded every minute.`
+          : late
+          ? `The prices are GMO Coin's public bid and ask; the reach was read on the closed 1-hour bar's ${buy ? "high" : "low"} (the mid of bid and ask, as the app's chart draws it).`
+          : `The prices are GMO Coin's public bid and ask; the reach is looked for every minute on the 1-hour bar's ${buy ? "high" : "low"} so far (the mid of bid and ask, as the app's chart draws it).`} Check the latest state in the app:\n${APP_URL}`,
+        stop,
+      ]);
+    }
+    if (mail === "at") {
+      return assemble(`[Sextant] ${s.pair} ${tf} notice: already at ${RIDE_OUT_PCT}% (MACD ride, no entry signal)`, [
+        `On ${s.pair}, ${tf} chart, the MACD line (blue) came into the ${RIDE_IN_PCT}% band of the MACD pane's ${end}, and at the bar's close it was already at ${RIDE_OUT_PCT}% or more. No entry signal (it would have been a ${side}) is sent: this is a notice only.`,
+        [
+          `Bar: closed ${clock(entryClose, 0)} UTC (${clock(entryClose, 9)} JST)`,
+          `  MACD = ${mx(f?.m ?? null)}; ${end} of the pane = ${mx(edge)}; ${RIDE_OUT_PCT}% of it = ${mx(mark(RIDE_OUT_SHARE))}`,
+        ].join("\n"),
+        `This is Sextant's own rule (its numbers are the app owner's), not a published indicator (docs §8.150). The next entry signal for this chart and side is judged at the bar where the line, having left the ${RIDE_IN_PCT}% band, comes back into it.`,
+        `${source} Check the latest state in the app:\n${APP_URL}`,
+        stop,
+      ]);
+    }
+    return assemble(`[Sextant] ${s.pair} ${tf} ${side} entry signal (MACD ride, email 1)`, [
+      `A MACD ride ${side} entry signal fired on ${s.pair}, ${tf} chart (email 1).`,
+      [
+        `Bar: closed ${clock(entryClose, 0)} UTC (${clock(entryClose, 9)} JST)`,
+        `MACD(12, 26, 9): the MACD line (blue) came into the ${end} band of the MACD pane of the newest ${ZONE_BARS} bars: ${RIDE_IN_PCT}% or more of the way from the zero line to the pane's ${end} (the ${top ? "highest" : "lowest"} of the MACD line, the signal line and the histogram). The bar before was outside it, so this is an entry with the flow: a ${side}`,
+        `  MACD = ${mx(f?.m ?? null)}; ${end} of the pane = ${mx(edge)}; ${RIDE_IN_PCT}% of it = ${mx(mark(RIDE_IN_SHARE))}; ${RIDE_OUT_PCT}% of it = ${mx(mark(RIDE_OUT_SHARE))}`,
+        gold ? `This bar's close: ${px(f?.entryPrice)}` : `${buy ? "Ask" : "Bid"} at this bar's close (the price paid): ${px(f?.entryPrice)}`,
+      ].join("\n"),
+      `This is Sextant's own rule (its numbers are the app owner's), not a published indicator (docs §8.150). Email 2 is sent when the blue line reaches ${RIDE_OUT_PCT}% of the same edge (the pane's ${end}). There is no stop and no target. Nothing is sent if the line leaves the ${RIDE_IN_PCT}% band, and no new email 1 for this chart and side (${side}) is sent until email 2 has been. The pane's edges are taken without the margin the chart adds as it draws them.`,
+      rideMeasuredLine(s.pair, "en"),
+      `${source}${gold ? " Email 2 is looked for on Swissquote's prices, recorded every minute (another feed than the bars')." : ""} Check the latest state in the app before you place an order:\n${APP_URL}`,
+      stop,
+    ]);
+  }
+  const sideJ = `${buy ? "買い" : "売り"}（${s.side}）`;
+  const end = top ? "上" : "下";
+  const source = gold
+    ? `足は Twelve Data のもの（${pairJa(s.pair)}は GMOコインにないため）で、アプリのチャートと同じです。`
+    : "価格は GMOコインの公開レート（買値と売値の中間）で、アプリのチャートと同じ足で判定しています。";
+  const stop = "この通知を止めるには、アプリの「設定」→「メール通知」の「MACD の流れ」でチェックを外してください。\n本メールは参考情報であり、投資助言ではありません。取引の最終判断はご自身の責任で行ってください。";
+  if (mail === "out") {
+    const paid = gold ? "その足の終値" : buy ? "買値" : "売値";
+    const leave = gold
+      ? late ? "Twelve Data の最新の確定足の終値" : "Swissquote の値段"
+      : `${late ? "最新の確定足の終値の" : ""}${buy ? "売値" : "買値"}`;
+    const result = pnl === null ? "—" : pnl.unit === "usd" ? `${sign}${amount}ドル` : `${sign}${amount} pips`;
+    return assemble(`【Sextant】${pairJa(s.pair)} ${tf} ${RIDE_OUT_PCT}%に届きました（MACD の流れ・2通目、${buy ? "買い" : "売り"}の分）`, [
+      `${pairJa(s.pair)}の${tf}で、MACD の青い線が、枠の${end}の端の${RIDE_OUT_PCT}%に届きました（MACD の流れの2通目。${sideJ}の分）。`,
+      [
+        `1通目: ${clock(entryClose, 9)}（日本時間）に確定した足で${sideJ}。${paid} ${px(f?.entryPrice)}`,
+        late && Number.isFinite(reachedBar)
+          ? `${clock(reachedBar, 9)}〜${clock(reachedBar + step, 9).slice(11)}（日本時間）の足の間に届いていました。その時は読めず、今見つけました（${clock(seen, 9)}、日本時間）`
+          : `届いたのを見た時刻: ${clock(seen, 9)}（日本時間）`,
+        `今の値段: ${px(f?.seenPrice)}（${leave}）`,
+        `1通目からの損益: ${result}`,
+        `1通目からの時間: ${rideHeldText(seen - entryClose, "ja")}`,
+      ].join("\n"),
+      `このメールは、青い線が${RIDE_OUT_PCT}%に届いたことの知らせです。損益はプラスとは限りません。` +
+        (gold
+          ? `金の損益は、スプレッドを含みません。${late ? "どちらの値段も Twelve Data の足の終値です。" : "1通目の値段は Twelve Data の足の終値、今の値段は Swissquote の値段で、配信が別です。"}`
+          : ""),
+      `${gold
+        ? late
+          ? `足は Twelve Data のもの（${pairJa(s.pair)}は GMOコインにないため）です。${RIDE_OUT_PCT}%に届いたかは、確定した1時間足の${buy ? "高値" : "安値"}で見ました。`
+          : `足は Twelve Data のもの（${pairJa(s.pair)}は GMOコインにないため）です。${RIDE_OUT_PCT}%に届いたかは、Swissquote の値段を毎分記録したもの（この1時間の${buy ? "高値" : "安値"}）で、毎分見ています。`
+        : late
+        ? `値段は GMOコインの公開レート（買値・売値）です。${RIDE_OUT_PCT}%に届いたかは、確定した1時間足の${buy ? "高値" : "安値"}（買値と売値の中間。アプリのチャートと同じ丸め方）で見ました。`
+        : `値段は GMOコインの公開レート（買値・売値）です。${RIDE_OUT_PCT}%に届いたかは、1時間足のその時までの${buy ? "高値" : "安値"}（買値と売値の中間。アプリのチャートと同じ丸め方）で、毎分見ています。`}アプリで最新の状態を確認してください。\n${APP_URL}`,
+      stop,
+    ]);
+  }
+  if (mail === "at") {
+    return assemble(`【Sextant】${pairJa(s.pair)} ${tf} 知らせ: もう${RIDE_OUT_PCT}%です（MACD の流れ・入る合図なし）`, [
+      `${pairJa(s.pair)}の${tf}で、MACD の青い線が、枠の${end}の端の${RIDE_IN_PCT}%の帯に入りましたが、足が確定した時にはもう${RIDE_OUT_PCT}%以上でした。入る合図（${sideJ}）は送りません。知らせだけです。`,
+      [
+        `判定した足: ${clock(entryClose, 9)}（日本時間）に確定した足`,
+        `  MACD = ${mx(f?.m ?? null)}、枠の${end}の端 = ${mx(edge)}（その${RIDE_OUT_PCT}% = ${mx(mark(RIDE_OUT_SHARE))}）`,
+      ].join("\n"),
+      `この決まりは Sextant 独自のもの（数字はアプリのオーナーが決めたもの）で、公開されているインジケーターではありません（docs §8.150）。このチャートの同じ向きの次の入る合図は、青い線がいったん${RIDE_IN_PCT}%の帯から出て、入り直した足で判定します。`,
+      `${source}アプリで最新の状態を確認してください。\n${APP_URL}`,
+      stop,
+    ]);
+  }
+  return assemble(`【Sextant】${pairJa(s.pair)} ${tf} ${sideJ}で入る合図（MACD の流れ・1通目）`, [
+    `${pairJa(s.pair)}の${tf}で、MACD の流れの${sideJ}で入る合図が出ました（1通目）。`,
+    [
+      `判定した足: ${clock(entryClose, 9)}（日本時間）に確定した足`,
+      `MACD(12・26・9): 青い線（MACD）が、新しい${ZONE_BARS}本の MACD の枠の${end}の端（青い線・オレンジの線・棒の${top ? "一番高い" : "一番低い"}所）の${RIDE_IN_PCT}%以上（0の線から測って）に入りました。一つ前の足では入っていなかったので、流れに乗って${buy ? "買い" : "売り"}で入る合図です`,
+      `  MACD = ${mx(f?.m ?? null)}、枠の${end}の端 = ${mx(edge)}（その${RIDE_IN_PCT}% = ${mx(mark(RIDE_IN_SHARE))}、${RIDE_OUT_PCT}% = ${mx(mark(RIDE_OUT_SHARE))}）`,
+      gold ? `この足の終値: ${px(f?.entryPrice)}` : `${buy ? "買値" : "売値"}（この足の終値の${buy ? "買値" : "売値"}）: ${px(f?.entryPrice)}`,
+    ].join("\n"),
+    `この決まりは Sextant 独自のもの（数字はアプリのオーナーが決めたもの）で、公開されているインジケーターではありません（docs §8.150）。2通目は、青い線が同じ端（枠の${end}の端）の${RIDE_OUT_PCT}%に届いた時に送ります。損切りも目標もありません。青い線が${RIDE_IN_PCT}%の帯から出ても、何も送りません。2通目を送るまで、このチャートの同じ向き（${buy ? "買い" : "売り"}）の新しい1通目は送りません。枠の端には、チャートが枠を描く時に足す余白は入れていません。`,
+    rideMeasuredLine(s.pair, "ja"),
+    `${source}${gold ? "2通目は、Swissquote の値段を毎分記録したもの（足とは別の配信）で見ます。" : ""}注文の前にアプリで最新の状態を確認してください。\n${APP_URL}`,
+    stop,
+  ]);
 };
 
 // #395 (docs §8.138): how often the rule went off on the five pairs' 1-hour
@@ -1374,6 +1877,8 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
   if (s.rule === "stockmacd") return renderStockMail(s, lang);
   // #395: a sharp rise's or fall's
   if (s.rule === "spike") return renderSpikeMail(s, lang);
+  // #397: the MACD ride's three mails (the MACD email from v39; docs §8.150)
+  if (s.rule === "macdx") return renderRideMail(s, lang);
   const d = decimalsOf(s.pair);
   const px = (v: number | null) => (v === null || !Number.isFinite(v) ? "—" : v.toFixed(d));
   const gold = isGold(s.pair);
@@ -1529,37 +2034,6 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
         ...footer,
       ]);
     }
-    if (s.rule === "macdx") {
-      // #324: the 1-hour rule's (docs §8.114), the MACD email's from v25; #339: its level the pair's own (§8.116);
-      // #353: from v28 the blue line at ZONE_PCT% of the top or bottom of the newest ZONE_BARS bars' MACD pane (§8.119);
-      // #384: from v31 on the 15-minute chart, the timeframe said as the subject says it (§8.127);
-      // #386: from v33 on the 1-hour chart again, the docs cited §8.129 in place of §8.127
-      const f = s.macdh;
-      const buy = s.side === "BUY";
-      // the minus as the chart's (U+2212); more decimals for a tiny top or bottom (macdNumbers)
-      const mx = macdNumbers(s);
-      return assemble(`[Sextant] ${s.pair} ${tf} ${side} signal (MACD peak/valley)`, [
-        `A MACD peak/valley ${side} signal fired on ${s.pair}, ${tf} chart.`,
-        [
-          `Bar: closed ${clock(closeMs, 0)} UTC (${clock(closeMs, 9)} JST)`,
-          // "or more of the way", as the rule paragraph below and the Japanese 「以上（0の線から測って）」 say it: "at or
-          // below 90% of the lowest" could be read as a distance from zero, which turns it round
-          `MACD(12, 26, 9): the MACD line (blue) reached the ${buy ? "bottom" : "top"} band of the MACD pane of the newest ${ZONE_BARS} bars: ${ZONE_PCT}% or more of the way from the zero line to the pane's ${buy ? "bottom" : "top"} (the ${buy ? "lowest" : "highest"} of the MACD line, the signal line and the histogram)`,
-          ...(f
-            ? [`  MACD = ${mx(f.m)}; ${buy ? "bottom" : "top"} of the pane = ${mx(buy ? f.bottom : f.top)}; ${ZONE_PCT}% of it = ${mx(f.mark)}`]
-            : []),
-        ].join("\n"),
-        [
-          "Stop and targets (ULTRA's numbers):",
-          `  Entry ≈ ${px(s.close)}`,
-          `  Stop ${px(s.sl)} (${s.sl === null ? "—" : dist(s.sl)})`,
-          ...(s.tps ?? []).map((v, k) => tpLine(k, v)),
-        ].join("\n"),
-        `This is Sextant's own rule (its numbers are the app owner's), not a published indicator (docs §8.119, §8.122, §8.129): it mails a SELL when the ${tf} chart's MACD(12, 26, 9) blue line first reaches ${ZONE_PCT}% or more of the way from the zero line to the top of the MACD pane of the newest ${ZONE_BARS} bars (the ${ZONE_BARS} up to the bar judged, what the chart shows when it is opened; the top is the highest of the blue line (the MACD line), the orange line (the signal line) and the bars (the histogram)), and a BUY when it first reaches ${ZONE_PCT}% or more of the way to the pane's bottom (the lowest of them). The pane's edges are taken without the margin the chart adds as it draws them. One email per peak or valley: no next one until the line has gone back inside the ${ZONE_PCT}% mark (if it then comes back to the mark, another is sent). It has no stop or target of its own, so these are ULTRA's numbers. ${measuredLine(s, "en")}`,
-        `${source} Check the latest state in the app before you place an order:\n${APP_URL}`,
-        "To stop these emails, open Settings → Email alerts in the app and untick the chart under MACD peak/valley.\nThis is reference information, not investment advice. Every trading decision is your own.",
-      ]);
-    }
     const cross = s.side === "BUY" ? "back above 30" : "back below 70";
     return assemble(`[Sextant] ${s.pair} ${tf} ${s.side === "BUY" ? "Buy ☆" : "Sell ☆"} signal (ULTRA)`, [
       `An ULTRA ${s.side === "BUY" ? "Buy ☆" : "Sell ☆"} signal fired on ${s.pair}, ${tf} chart.`,
@@ -1699,37 +2173,6 @@ export const renderIndicatorMail = (s: IndicatorSignal, lang: Lang): Mail => {
       ].join("\n"),
       `Q-Trend（tarasenko_ の公開コードを移植、既定の設定 200・14・1）にはもともと損切り・利確の目安がないため、ULTRA と同じ数字を付けています。${measuredLine(s, "ja")}`,
       ...footer,
-    ]);
-  }
-  if (s.rule === "macdx") {
-    // #324: the 1-hour rule's (docs §8.114), the MACD email's from v25; #339: its level the pair's own (§8.116);
-    // #353: from v28 the blue line at ZONE_PCT% of the top or bottom of the newest ZONE_BARS bars' MACD pane
-    // (§8.119). The 90% is said 「以上」 on both sides, as the owner said it (「上か下の90%以上の所」): of the way
-    // from the zero line, so the numbers below it are the signed ones; #362: from v30 95% (ZONE_PCT, §8.122);
-    // #384: from v31 on the 15-minute chart, the timeframe said as the subject says it (§8.127);
-    // #386: from v33 on the 1-hour chart again, the docs cited §8.129 in place of §8.127
-    const f = s.macdh;
-    const buy = s.side === "BUY";
-    const sideM = `${buy ? "買い" : "売り"}（${s.side}）`;
-    const end = buy ? "下" : "上";
-    // the minus as the chart's (U+2212); more decimals for a tiny top or bottom (macdNumbers)
-    const mx = macdNumbers(s);
-    return assemble(`【Sextant】${pairJa(s.pair)} ${tf} ${sideM}のサイン（MACD の山・谷）`, [
-      `${pairJa(s.pair)}の${tf}で、MACD の山・谷の${sideM}のサインが出ました。`,
-      [
-        `判定した足: ${clock(closeMs, 9)}（日本時間）に確定した足`,
-        `MACD(12・26・9): 青い線（MACD）が、新しい${ZONE_BARS}本の MACD の枠の${end}の端（青い線・オレンジの線・棒の${buy ? "一番低い" : "一番高い"}所）の${ZONE_PCT}%以上（0の線から測って）に届きました`,
-        ...(f ? [`  MACD = ${mx(f.m)}、枠の${end}の端 = ${mx(buy ? f.bottom : f.top)}（その${ZONE_PCT}% = ${mx(f.mark)}）`] : []),
-      ].join("\n"),
-      [
-        "損切り・利確の目安（ULTRA と同じ数字）:",
-        `  エントリー ≈ ${px(s.close)}`,
-        `  損切り ${px(s.sl)}（${s.sl === null ? "—" : dist(s.sl)}）`,
-        ...(s.tps ?? []).map((v, k) => tpLine(k, v)),
-      ].join("\n"),
-      `この決まりは Sextant 独自のもの（数字はアプリのオーナーが決めたもの）で、公開されているインジケーターではありません（docs §8.119・§8.122・§8.129）。${tf}の MACD(12・26・9)の青い線が、新しい${ZONE_BARS}本（判定した足までの${ZONE_BARS}本。チャートを開いた時に見える本数）の MACD の枠の上の端（青い線・オレンジの線・棒のうち一番高い値）の${ZONE_PCT}%以上（0の線から測って）に届いた足で売り、枠の下の端（一番低い値）の${ZONE_PCT}%以上に届いた足で買いを送ります。枠の端には、チャートが枠を描く時に足す余白は入れていません。一つの山・谷では1通だけで、青い線が${ZONE_PCT}%の所より内側に戻るまでは、次を送りません（戻ってからまた届けば、もう1通送ります）。損切り・利確の目安はもともとないため、ULTRA と同じ数字を付けています。${measuredLine(s, "ja")}`,
-      `${source}注文の前にアプリで最新の状態を確認してください。\n${APP_URL}`,
-      "この通知を止めるには、アプリの「設定」→「メール通知」の「MACD の山・谷」でチェックを外してください。\n本メールは参考情報であり、投資助言ではありません。取引の最終判断はご自身の責任で行ってください。",
     ]);
   }
   const sideU = s.side === "BUY" ? "買い（Buy ☆）" : "売り（Sell ☆）";
