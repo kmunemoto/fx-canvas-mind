@@ -667,13 +667,13 @@ describe("#397 the three mails on a share (stocks.ts renderStockMail; spec secti
   it("email 2 seen late says at which close the line was already at 96%, that it could not be read then, and the price now", () => {
     const late = outSig({ late: true, reached_at: pg(closeOf(J_BUY + 1) + 1_000), seen_price: closes[J_BUY + 1] });
     const ja = renderIndicatorMail(late, "ja").text;
-    expect(ja).toContain("\n2026-05-20 23:30（日本時間）に確定した足で、もう96%以上でした。その時は読めず、今見つけました（2026-05-21 00:30、日本時間）");
+    expect(ja).toContain("\n2026-05-20 22:30（日本時間）に始まった足の終わりで、もう96%以上でした。その時は読めず、今見つけました（2026-05-21 00:30、日本時間）");
     expect(ja).not.toContain("届いたのを見た時刻");
     expect(ja).toContain(`\n今の値段: ${closes[J_BUY + 1].toFixed(2)}ドル（最新の確定足の終値）`);
     expect(ja).toContain("\n1通目からの損益: +0.82ドル（+0.38%）。終値と終値の比べです");
     expect(ja).toContain("\n1通目からの時間: 21時間0分");
     const en = renderIndicatorMail(late, "en").text;
-    expect(en).toContain("\nThe line was already at 96% or more at the close of the bar closed 2026-05-20 14:30 UTC (2026-05-20 23:30 JST). It could not be read then and was found now (2026-05-20 15:30 UTC, 2026-05-21 00:30 JST)");
+    expect(en).toContain("\nThe line was already at 96% or more at the close of the bar that opened 2026-05-20 13:30 UTC (2026-05-20 22:30 JST). It could not be read then and was found now (2026-05-20 15:30 UTC, 2026-05-21 00:30 JST)");
     expect(en).toContain(`\nPrice now: $${closes[J_BUY + 1].toFixed(2)} (the newest closed 1-hour bar's close)`);
     expect(en).toContain("\nProfit or loss since email 1: +$0.82 (+0.38%), close to close");
     // a Tokyo share's late email 2 does not say it was sent 15 minutes after the close
@@ -1221,7 +1221,7 @@ describe("#397 the shares' run: the real index.ts replayed over fake tables (spe
     });
     expect(world.rides[0]).toMatchObject({ status: "reached", reached_bar: pg(times[J_BUY]), reached_at: pg(after(J_BUY + 1, 0)), late: true, seen_price: closes[J_BUY + 1] });
     expect(mails()).toEqual([`userA: ${OUT_SUBJECT("買い")}`]);
-    expect(world.sent[0].text).toContain("\n2026-05-20 23:30（日本時間）に確定した足で、もう96%以上でした。その時は読めず、今見つけました（2026-05-21 00:30、日本時間）");
+    expect(world.sent[0].text).toContain("\n2026-05-20 22:30（日本時間）に始まった足の終わりで、もう96%以上でした。その時は読めず、今見つけました（2026-05-21 00:30、日本時間）");
     expect(world.sent[0].text).toContain(`\n今の値段: ${closes[J_BUY + 1].toFixed(2)}ドル（最新の確定足の終値）`);
     expect(alertsOf(STOCKMACD_OUT_RULE_ID)[0]).toMatchObject({ bar_time: iso(times[I_BUY]), target: closes[J_BUY + 1] });
     clean();

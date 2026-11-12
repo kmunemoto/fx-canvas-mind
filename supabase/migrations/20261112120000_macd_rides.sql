@@ -56,7 +56,8 @@ create table if not exists public.macd_rides (
   reached_bar timestamptz,
   -- the price when seen
   seen_price double precision,
-  -- seen in a closed bar, after the bar it was reached in had ended
+  -- the pairs and gold: seen by a close's catch-up, after the bar it was reached in had ended; the shares (judged at
+  -- closes only): the bar is not the newest closed one, or the newest ended more than 45 minutes before it was read
   late boolean,
   -- m / top (or bottom) at the touch
   share1 double precision,

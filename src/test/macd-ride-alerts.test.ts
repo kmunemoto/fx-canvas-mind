@@ -1387,8 +1387,11 @@ describe("#397 the function's code, read as text", () => {
   const fn = readFileSync("supabase/functions/signal-alerts/index.ts", "utf8");
   it("is v39; the ride is judged in its own try / catch after the other rules' mails; a ride is reached by a patch of a row still open", () => {
     expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v39-2026-11-12T12:00:00Z";');
-    expect(fn).toMatch(/if \(sigs\.length > 0\) await mailSignals\(sigs\);[\s\S]{0,700}try \{\s+await rideAtClose\(pair, closed, newest, said\);\s+\} catch \(err\) \{\s+console\.error\("macdx failed:", pair, interval, err\);/);
-    expect(fn).toMatch(/try \{\s+const read = await rideMinute\(pair, mine\);\s+if \(read\) reads\.push\(read\);\s+\} catch \(err\) \{\s+console\.error\("macdx ride failed:", pair, err\);/);
+    expect(fn).toMatch(/if \(sigs\.length > 0\) await mailSignals\(sigs\);[\s\S]{0,700}try \{\s+await rideAtClose\(pair, closed, newest, said\);\s+\} catch \(err\) \{\s+console\.error\("macdx failed:", pair, interval, errText\(err\)\);/);
+    expect(fn).toMatch(/try \{\s+const read = await rideMinute\(pair, mine\);\s+if \(read\) reads\.push\(read\);\s+\} catch \(err\) \{\s+console\.error\("macdx ride failed:", pair, errText\(err\)\);/);
+    // the ride's catches log a text with every URL taken out (a lookup's URL holds a follower's id), in both runs
+    expect(fn).toContain('console.error("macdx rides failed:", errText(err));');
+    expect(fn).toContain('(err instanceof Error ? `${err.name}: ${err.message}` : String(err)).replace(/https?:\\/\\/\\S+/g, "(url)");');
     expect(fn).toContain("const res = await rest(`macd_rides?${rideKey(ride)}&status=eq.open&select=${MACD_RIDE_COLUMNS}`, {");
     expect(fn).toContain('headers: { Prefer: "return=representation" },');
     expect(fn).toContain('const res = await rest("macd_rides?on_conflict=pair,side,entry_bar", {');

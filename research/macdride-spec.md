@@ -123,7 +123,8 @@ create table public.macd_rides (
   reached_at timestamptz,                  -- when it was seen
   reached_bar timestamptz,                 -- the open of the bar it was reached in
   seen_price double precision,             -- the price when seen (section 2)
-  late boolean,                            -- seen in a closed bar, after the bar it was reached in had ended
+  late boolean,                            -- the pairs and gold: seen by a close's catch-up, after the bar it was
+                                           -- reached in had ended; the shares: section 6's `late`
   share1 double precision,                 -- m / top (or bottom) at the touch
   created_at timestamptz not null default now(),
   primary key (pair, side, entry_bar)
@@ -180,7 +181,11 @@ another pair's ride.
 **A. At a close** (inside `judge`, on the runs that have the chart's closed bars in hand: the pairs at minutes 0, 3
 and 5, gold from a minute after the hour while its bar is not judged), with `i` the newest closed bar:
 
-1. Read the chart's ride rows: the open ones and those whose entry bar is in the newest 100 closed bars (small rows).
+1. Read the chart's ride rows: the open ones, those whose entry bar is in the newest 100 closed bars, and those
+   reached in bar `i` or later whatever their entry bar (`reached_bar >= open(i)`; small rows). The last clause is
+   what `rideCloseStep` needs: a ride held for more than 100 bars and reached a minute after this close must still
+   skip this bar's entry when a later run judges the bar again, and one reached in bar `i` itself must still quiet
+   the notice.
    The table unread (an error, not there): nothing of the ride is done for this chart in this run (no state, no
    mail), and the run's record says so. Never a fallback that reads more.
 2. **State** of the bar now forming: from the 599 newest closed closes (when at least 599 are in hand), upserted
@@ -191,7 +196,9 @@ and 5, gold from a minute after the hour while its bar is not judged), with `i` 
    pane over the 119 before `j`). For `j = i` this is bit for bit the study's state of bar `i`; for an older `j` the
    EMA's seed is at most 100 bars later than the study's, a difference under 1e-12 of the price (not bit-equal;
    said in section 10). A touch → the ride is **reached**, `reached_bar = open(j)`, `late = true`, the price when
-   seen the newest closed bar's (section 2).
+   seen the newest closed bar's (section 2). Its email 2 is mailed at once, before step 4, so that a ride reached in
+   a bar that is also a new entry is mailed email 2 first and then email 1 (section 7); B's pass then finds the rows
+   there.
 4. **Entry** at bar `i`, while it closed at most `freshFor("1h")` (30 minutes) ago: `rideCloseStep`, on the ride
    rows as they stand after step 3 (a ride reached there counts as reached in its `reached_bar`). `in`: insert the
    ride row (`on_conflict=pair,side,entry_bar`, duplicates ignored), then read it back; mail email 1 only when the
@@ -212,8 +219,9 @@ read for all charts). For each chart with an open ride whose entry bar is before
 3. A touch → **reached**, `reached_bar` = the forming bar's open, `late = false`, the price when seen the newest in
    that read (section 2).
 
-So emails 1 and 2 can go out in the same run (a touch in the first seconds of the bar after the entry): in the
-study half of the reached trades were reached within a minute. Email 1 is mailed before email 2.
+So emails 1 and 2 of one ride can go out in the same run (a touch in the first seconds of the bar after the
+entry): in the study half of the reached trades were reached within a minute. Of one ride, email 1 is mailed before
+email 2.
 
 **Reached** (from A.3 or B.3): `PATCH macd_rides` where the row is still `open` (`status=eq.open` in the filter),
 setting `status`, `reached_at`, `reached_bar`, `seen_price`, `late`, `share1`, with `return=representation`. No row
@@ -240,15 +248,20 @@ was seen late, in which bar, and the price now.
 ## 6. The shares (the "stocks" run)
 
 For a share somebody follows under `stockmacd`, on a read of Yahoo's bars in which the newest closed bar `n` has
-not been judged by this instance (as today):
+not been settled by this instance (an instance holds the bar judged only once the ride's work on it left nothing
+to try again: the rides read, every write made, no follower left unsent; until then it reads Yahoo again in the
+minutes of the window, as a fresh instance does):
 
-1. Read the share's ride rows (open ones and the recent). Unread → nothing of the ride in this run.
+1. Read the share's ride rows: the open ones, those whose entry bar is in the newest 100 closed bars, those reached
+   in bar `n` or later, and those reached in the last 45 minutes (step 4 needs the last: a ride reached late whose
+   entry bar has left the newest 100). Unread → nothing of the ride in this run.
 2. For each open ride with entry bar `e`: the closed bars `j` after `e` among the newest 100, oldest first; the
    first whose `Z(j)` (on its own 600 closed bars) is at `SHARE_OUT` on the ride's side → **reached**,
    `reached_bar = open(j)`, `late = (j is not n, or n ended more than STOCK_FRESH_MS ago)`, the price when seen
    `n`'s close.
 3. Entry at `n`, while it ended at most `STOCK_FRESH_MS` (45 minutes) ago: `rideCloseStep`, as section 5 A.4.
-4. Email 2 for the rides reached in the last 45 minutes to the followers with no out row yet.
+4. Email 2 for the rides reached in the last 45 minutes to the followers with no out row yet (a ride reached in
+   step 2 is mailed at once, before step 3's email 1).
 
 No state rows, no minute reads. Both sides can be open on one share; a SELL on a share is a short sale and the mail
 says so.
@@ -318,7 +331,9 @@ the chart.
 ## 9. Checks
 
 - **Unit tests** (vitest) of `_shared/macd-ride.ts`: the state and line against `zoneAt` on the window rebuilt (bit
-  for bit, random walks); `rideEntryAt` against research/macd90.ts's entries; `rideCloseStep`'s table of cases.
+  for bit, random walks); `rideEntryAt` against the rule written again from section 1's sentences (research/macd90.ts
+  reads `Deno.env` when imported and cannot be loaded under vitest: the study's own entries are held against the
+  shared code by the replay's R1 below); `rideCloseStep`'s table of cases.
 - **Function tests**: section 7's replays over fake tables; the row of each mail; the texts.
 - **The replay** (`research/macdride-replay.ts`, run in GitHub Actions on the study's data): the shared code driven
   bar by bar and minute by minute over the five pairs' real bars, as the function would (close steps, state, touch,

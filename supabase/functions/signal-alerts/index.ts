@@ -661,6 +661,12 @@ Deno.serve(async (req: Request) => {
     // row. No user id, address or row id goes into a log or a run's record
     // from here.
     //
+    // What an error says, without any address in it (a request that could
+    // not be sent names its URL, and a lookup's URL holds a follower's id):
+    // what the ride's catches log, in both runs.
+    const errText = (err: unknown): string =>
+      (err instanceof Error ? `${err.name}: ${err.message}` : String(err)).replace(/https?:\/\/\S+/g, "(url)");
+
     // The rides a query gives (its filters, after "macd_rides?"), each from
     // its named columns; null when the table could not be read (an error, not
     // there): nothing of the ride is then done — never a fallback
@@ -1111,7 +1117,7 @@ Deno.serve(async (req: Request) => {
           try {
             await rideAtClose(pair, closed, newest, said);
           } catch (err) {
-            console.error("macdx failed:", pair, interval, err);
+            console.error("macdx failed:", pair, interval, errText(err));
             said.ride.error = "failed";
           }
           if (said.unsent.length > 0) said.ride.unsent = said.unsent;
@@ -1632,13 +1638,13 @@ Deno.serve(async (req: Request) => {
                 const read = await rideMinute(pair, mine);
                 if (read) reads.push(read);
               } catch (err) {
-                console.error("macdx ride failed:", pair, err);
+                console.error("macdx ride failed:", pair, errText(err));
                 reads.push({ pair, interval: "1h", ride: true, error: "failed" });
               }
             }
           }
         } catch (err) {
-          console.error("macdx rides failed:", err);
+          console.error("macdx rides failed:", errText(err));
           reads.push({ interval: "1h", ride: true, error: "failed" });
         }
       }
@@ -1754,10 +1760,6 @@ Deno.serve(async (req: Request) => {
       const isoOf = (ms: number) => new Date(ms).toISOString();
       const enc = encodeURIComponent;
       const quoted = (ms: number) => enc(`"${isoOf(ms)}"`);
-      // what an error says, without any address in it (a request that could
-      // not be sent names its URL, and a lookup's URL holds a follower's id)
-      const errText = (err: unknown): string =>
-        (err instanceof Error ? `${err.name}: ${err.message}` : String(err)).replace(/https?:\/\/\S+/g, "(url)");
       // one mail of a ride to the share's followers who have none yet; said
       // in the run's record only when a row was made for it in this run or
       // was there already, and, when a follower left got none, why (a plan

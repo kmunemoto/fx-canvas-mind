@@ -325,6 +325,18 @@ export const tfLabel = (lang: Lang, interval: string) => TF_LABEL[lang][interval
 export const clock = (ms: number, offsetHours: number) =>
   new Date(ms + offsetHours * HOUR).toISOString().slice(0, 16).replace("T", " ");
 
+// #397 (docs §8.150): how long a ride was held, as email 2 says it (the pairs', gold's and the shares'): minutes
+// under 2 hours, then hours and minutes under 2 days, then days and hours
+export const rideHeldText = (ms: number, lang: Lang): string => {
+  const min = Math.max(0, Math.floor(ms / 60_000));
+  if (min < 1) return lang === "en" ? "under a minute" : "1分未満";
+  if (min < 120) return lang === "en" ? `${min} minute${min === 1 ? "" : "s"}` : `${min}分`;
+  const h = Math.floor(min / 60);
+  if (h < 48) return lang === "en" ? `${h} hours ${min % 60} minutes` : `${h}時間${min % 60}分`;
+  const d = Math.floor(h / 24);
+  return lang === "en" ? `${d} days ${h % 24} hours` : `${d}日${h % 24}時間`;
+};
+
 export interface Mail {
   subject: string;
   text: string;

@@ -45,8 +45,8 @@ import {
 } from "../_shared/macd-ride.ts";
 import { parseYahooChart, stockDecimals, stockMarketOf } from "../live-chart/stocks.ts";
 // (indicators.ts imports this file too: nothing of it is used here while the module is loaded, only inside the mails)
-import { rideHeldText, type IndicatorSignal } from "./indicators.ts";
-import { APP_URL, assemble, clock, type Lang, type Mail } from "./logic.ts";
+import type { IndicatorSignal } from "./indicators.ts";
+import { APP_URL, assemble, clock, rideHeldText, type Lang, type Mail } from "./logic.ts";
 
 // The shares measured in docs §8.133 (the live chart's list, src/lib/stocks.ts), in its order
 export const STOCKMACD_PAIRS: readonly string[] = [
@@ -342,9 +342,8 @@ export const renderStockMail = (s: IndicatorSignal, lang: Lang): Mail => {
   const seen = Date.parse(f?.seenAt ?? s.closedAt);
   const late = f?.late === true;
   const reachedBar = f?.reachedBar ? Date.parse(f.reachedBar) : Number.NaN;
-  // (a late email 2 names the bar it was reached in by its end, worked out here by the regular hours — the row keeps
-  // the bar's open alone, so the last bar of a day that ended early would read half an hour late)
-  const reachedEnd = Number.isFinite(reachedBar) ? stockBarEnd(s.pair, reachedBar) : Number.NaN;
+  // (a late email 2 names the bar it was reached in by its OPEN, which the row keeps: the bar's end would have to be
+  // worked out by the regular hours, and the last bar of a day that ends early would then read half an hour late)
   const seenPrice = f?.seenPrice ?? null;
   // the result with its sign (the minus as the chart's, U+2212; ± at exactly zero), in the share's currency and in
   // percent of the entry
@@ -383,8 +382,8 @@ export const renderStockMail = (s: IndicatorSignal, lang: Lang): Mail => {
         `On ${name} (${s.pair}, ${market}), 1-hour chart, the MACD line (blue) reached ${RIDE_OUT_PCT}% of the way to the ${end} of the MACD pane (Stock MACD, email 2, for the ${side}).`,
         [
           `Email 1: a ${side}${buy ? "" : " (a short sale)"} at the bar closed ${clock(entryClose, 0)} UTC (${clock(entryClose, 9)} JST), that bar's close ${px(entryPrice)}`,
-          late && Number.isFinite(reachedEnd)
-            ? `The line was already at ${RIDE_OUT_PCT}% or more at the close of the bar closed ${clock(reachedEnd, 0)} UTC (${clock(reachedEnd, 9)} JST). It could not be read then and was found now (${clock(seen, 0)} UTC, ${clock(seen, 9)} JST)`
+          late && Number.isFinite(reachedBar)
+            ? `The line was already at ${RIDE_OUT_PCT}% or more at the close of the bar that opened ${clock(reachedBar, 0)} UTC (${clock(reachedBar, 9)} JST). It could not be read then and was found now (${clock(seen, 0)} UTC, ${clock(seen, 9)} JST)`
             : `Seen at ${clock(seen, 0)} UTC (${clock(seen, 9)} JST), on the close of the newest closed 1-hour bar`,
           `Price now: ${px(seenPrice)} (the newest closed 1-hour bar's close)`,
           ...(brk ? [brkLine] : []),
@@ -446,8 +445,8 @@ export const renderStockMail = (s: IndicatorSignal, lang: Lang): Mail => {
       `${name}（${s.pair}、${market}）の1時間足で、MACD の青い線が、枠の${end}の端の${RIDE_OUT_PCT}%に届きました（株の MACD の2通目。${sideJ}の分）。`,
       [
         `1通目: ${clock(entryClose, 9)}（日本時間）に確定した足で${buy ? sideJ : `売り（${s.side}、空売り）`}。その足の終値 ${px(entryPrice)}`,
-        late && Number.isFinite(reachedEnd)
-          ? `${clock(reachedEnd, 9)}（日本時間）に確定した足で、もう${RIDE_OUT_PCT}%以上でした。その時は読めず、今見つけました（${clock(seen, 9)}、日本時間）`
+        late && Number.isFinite(reachedBar)
+          ? `${clock(reachedBar, 9)}（日本時間）に始まった足の終わりで、もう${RIDE_OUT_PCT}%以上でした。その時は読めず、今見つけました（${clock(seen, 9)}、日本時間）`
           : `届いたのを見た時刻: ${clock(seen, 9)}（日本時間）。その時の最新の確定足の終値で見ました`,
         `今の値段: ${px(seenPrice)}（最新の確定足の終値）`,
         ...(brk ? [brkLine] : []),

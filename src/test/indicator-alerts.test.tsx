@@ -1169,7 +1169,7 @@ describe("#339 the 1-hour MACD cross rule (each pair's own level, 0.8 times its 
     expect(fn).toContain('if (age < 0 || age > freshFor("1h")) {');
     // a failure of the MACD rule costs the other rules no email: theirs are out before it is judged, in its own try / catch
     expect(fn).toMatch(
-      /if \(sigs\.length > 0\) await mailSignals\(sigs\);[\s\S]{0,700}try \{\s+await rideAtClose\(pair, closed, newest, said\);\s+\} catch \(err\) \{\s+console\.error\("macdx failed:", pair, interval, err\);/,
+      /if \(sigs\.length > 0\) await mailSignals\(sigs\);[\s\S]{0,700}try \{\s+await rideAtClose\(pair, closed, newest, said\);\s+\} catch \(err\) \{\s+console\.error\("macdx failed:", pair, interval, errText\(err\)\);/,
     );
     // each mail's row under its own rule id, by the signal (indicators.ts signalRow: a ride's mail under that mail's)
     expect(fn).toContain("...signalRow(sig),");

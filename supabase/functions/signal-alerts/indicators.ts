@@ -61,7 +61,7 @@ import { isPossiblyClosedFor } from "../_shared/market-hours.ts";
 import { pairJa } from "../_shared/pair-names.ts";
 import { CHART_BARS, GOLD, LIVE_PAIRS, LIVE_STEP_MS, isGold, isTwelvePair, splitBars } from "../live-chart/logic.ts";
 import { GMO_SYMBOLS, exitSide, fillSide, sideOf, type QuoteCandle } from "../track-outcomes/quotes.ts";
-import { APP_URL, assemble, clock, tfLabel, type Lang, type Mail } from "./logic.ts";
+import { APP_URL, assemble, clock, rideHeldText, tfLabel, type Lang, type Mail } from "./logic.ts";
 import { STOCKMACD_RULE_ID, isStockmacdChart, renderStockMail } from "./stocks.ts";
 
 // #291: and "sweepx", the owner's video's way on gold's 1-minute chart (the
@@ -1638,17 +1638,9 @@ const rideMeasuredLine = (pair: string, lang: Lang): string => {
     `ドル/円・ユーロ/円・豪ドル/円・ユーロ/ドル・豪ドル/ドルの1時間足で測ると（${dayJa(m.from)}〜${dayJa(m.to)}、スプレッドを引いたあと。docs §8.149）、入る合図は${m.entries}回で、${m.reached}回が${RIDE_OUT_PCT}%に届きました。届いた時の損益は、プラスが${m.plus}回、マイナスが${m.minus}回、ちょうど0が${m.zero}回で、1回あたり平均 ${sg(m.perTrade)} pips、最悪 ${sg(m.worst)} pips でした。持っている間の含み損は最大 ${m.maeMax} pips、一番長く持ったのは約${m.longestDays}日で、${m.open}回はまだ届いていません（含み損 ${sg(m.openPips)} pips）。このほかに、知らせだけの足（確定でもう${RIDE_OUT_PCT}%）が${m.notices}回、同じ向きを持っている間で見送った入りが${m.skipped}回ありました。届いた取引の半分は、入ってから${m.medianMinutes}分以内に届いています。損切りをしないので、届く割合は作りの上で高く出ます。5ペアのメールは GMO の1時間足を毎分読んで${RIDE_OUT_PCT}%を見ますが、測った時は1分足で見ました。この違いは測っていません。`;
 };
 
-// #397: how long a ride was held, as email 2 says it: minutes under 2 hours,
-// then hours and minutes under 2 days, then days and hours
-export const rideHeldText = (ms: number, lang: Lang): string => {
-  const min = Math.max(0, Math.floor(ms / MIN_MS));
-  if (min < 1) return lang === "en" ? "under a minute" : "1分未満";
-  if (min < 120) return lang === "en" ? `${min} minute${min === 1 ? "" : "s"}` : `${min}分`;
-  const h = Math.floor(min / 60);
-  if (h < 48) return lang === "en" ? `${h} hours ${min % 60} minutes` : `${h}時間${min % 60}分`;
-  const d = Math.floor(h / 24);
-  return lang === "en" ? `${d} days ${h % 24} hours` : `${d}日${h % 24}時間`;
-};
+// #397: how long a ride was held, as email 2 says it (logic.ts rideHeldText: the pairs', gold's and the shares' mails
+// say it the same way; kept there so that stocks.ts takes no value from this file, which reads stocks.ts)
+export { rideHeldText };
 
 // #397 (docs §8.150; research/macdride-spec.md section 8): the three mails of
 // the MACD ride on the five pairs and gold. Email 1: the bar, that the blue
