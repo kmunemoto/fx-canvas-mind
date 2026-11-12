@@ -733,6 +733,18 @@ describe("#397 what a bar's close does (rideCloseStep)", () => {
       step: "skip",
       by: 0,
     },
+    // the bar's first decision stands (the review's finding A3): its own ride is there, and a later read of the bar
+    // gives a close at which the line is already at 96% — still "in", never the notice on top of email 1
+    { name: "again, already now but the bar's own ride is open: in, not the notice", entry: entryOf("BUY", true), rows: [open("BUY", B)], step: "in", own: 0 },
+    { name: "again, already now but the bar's own ride was reached in the next bar: in", entry: entryOf("SELL", true), rows: [reached("SELL", B, B + HOUR)], step: "in", own: 0 },
+    {
+      name: "again, already now, the bar's own ride there and an older one reached in this bar: in, not quiet",
+      entry: entryOf("BUY", true),
+      rows: [reached("BUY", B - 5 * HOUR, B), open("BUY", B)],
+      step: "in",
+      own: 1,
+    },
+    { name: "already, and the bar's own row of the OTHER side: the notice", entry: entryOf("BUY", true), rows: [open("SELL", B)], step: "at" },
     { name: "the bar's own row of the other side changes nothing: in", entry: entryOf("BUY", false), rows: [open("SELL", B)], step: "in" },
     { name: "a ride entered at a later bar does not skip an older bar", entry: entryOf("BUY", false), rows: [open("BUY", B + HOUR)], step: "in" },
     // both sides at once

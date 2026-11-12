@@ -318,8 +318,12 @@ export interface RideCloseStep {
 // Judging a bar again gives the same step: the bar's own row (same entry
 // bar and side) skips nothing, open or reached, so the step is still "in"
 // and the caller mails those who have no row yet; a ride of the other side
-// changes nothing. A reached row without its reachedBar is held to be over:
-// it neither skips nor quiets.
+// changes nothing. The own row is also the bar's FIRST decision, and it
+// stands: while it is there the step is "in" even when a later read of the
+// bar gives a close at which the line is already at 96% (a feed that moved
+// a just-closed bar's close across the line would otherwise add the notice
+// "no entry is sent" to an email 1 already out). A reached row without its
+// reachedBar is held to be over: it neither skips nor quiets.
 // For that the rows given must hold, of the chart: every open ride, every
 // ride reached in this bar or a later one WHATEVER ITS ENTRY BAR (a ride held
 // for weeks and reached a minute after this close still skips this bar when
@@ -330,6 +334,7 @@ export const rideCloseStep = (entry: RideEntry | null, barOpen: number, rows: Re
   const { side, zside } = entry;
   const mine = rows.filter((r) => r.side === side);
   const own = mine.find((r) => r.entryBar === barOpen) ?? null;
+  if (own !== null) return { step: "in", side, zside, own, by: null };
   if (entry.already) {
     const by = mine.find((r) => r.status === "reached" && r.reachedBar === barOpen) ?? null;
     return { step: by === null ? "at" : "quiet", side, zside, own, by };
