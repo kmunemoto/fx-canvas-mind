@@ -1,0 +1,207 @@
+-- ===== BACK 1 (v9; the same text in pairs-v9.sql and gold-v9.sql): the bands, the close's decision, the touch per bar, facts per instrument, the rides, the state rows and the mails =====
+-- The rule (supabase/functions/_shared/macd-ride.ts, research/macdride-spec.md; signal-alerts v39, docs 8.150). One row per judged bar. m = the blue line, sg = the orange line,
+-- h = the bars (m - sg); tn / bn = the top / bottom edge of the MACD pane of the 120 positions ending at the bar (the highest / lowest of 0, m, sg and h) = Z(i); tp / bp / mp = the
+-- same one bar earlier from the same 600-bar computation = Zp(i).
+-- atShare: at s on the top side = top > 0 and m >= s * top, on the bottom side = bottom < 0 and m <= s * bottom; 0.9 and 0.96 are the doubles nearest them (RIDE_IN_SHARE = 90 / 100,
+-- RIDE_OUT_SHARE = 96 / 100 are those doubles), the product is held against as it comes. in_top / in_bot = Z(i) at 0.9, p_top / p_bot = Zp(i) at 0.9, at_top / at_bot = Z(i) at 0.96.
+-- sd = the entry's trade side (rideEntryAt: the top side first): BUY = at 0.9 on the top side now and not one bar earlier, SELL = the same on the bottom side (WITH the flow: the
+-- opposite of v8), null = no entry. already = the entry's line is at 0.96 too (a notice, no ride). cls = the decision as one word (BUY, BUY@, SELL, SELL@; @ = already).
+fz as (
+  select f.symbol, f.ot, f.jr, y.pair, y.d, f.m, f.sg, f.h, f.tn, f.bn, f.clo, f.e12_p, f.e26_p, f.sg_p, f.ta_p, f.tb_p,
+         b.in_top, b.in_bot, b.p_top, b.p_bot,
+         case when b.in_top and not b.p_top then 'BUY' when b.in_bot and not b.p_bot then 'SELL' end as sd,
+         case when b.in_top and not b.p_top then b.at_top when b.in_bot and not b.p_bot then b.at_bot end as already,
+         case when b.in_top and not b.p_top then case when b.at_top then 'BUY@' else 'BUY' end
+              when b.in_bot and not b.p_bot then case when b.at_bot then 'SELL@' else 'SELL' end end as cls
+  from fin f join syms y on y.symbol = f.symbol
+  cross join lateral (select (f.tn > 0 and f.m >= 0.9::float8 * f.tn) as in_top, (f.bn < 0 and f.m <= 0.9::float8 * f.bn) as in_bot,
+                             (f.tp > 0 and f.mp >= 0.9::float8 * f.tp) as p_top, (f.bp < 0 and f.mp <= 0.9::float8 * f.bp) as p_bot,
+                             (f.tn > 0 and f.m >= 0.96::float8 * f.tn) as at_top, (f.bn < 0 and f.m <= 0.96::float8 * f.bn) as at_bot) b
+),
+-- near_edge: would moving the judged bar's OWN close (the last of its 600) by 2 ticks, up or down, change the decision at that bar (none / BUY / BUY@ / SELL / SELL@)? Production
+-- read the live file 2-6 s after the close and the table holds the final one. One tick = 10^-d. Only the last step of the recursion depends on that close, so that step is
+-- evaluated again in closed form from the state one row earlier (e12_p, e26_p, sg_p, ta_p, tb_p), the same double operations as in the recursion (this is rideLineAt of the bar's
+-- state with the moved close). The decision is monotone in the close (SELL@, SELL, none, BUY, BUY@ from low to high), so the two end points tell.
+ne as (
+  select f.symbol, f.jr, bool_or(coalesce(x.cls, '') <> coalesce(f.cls, '')) as near_edge
+  from fz f
+  join s on s.symbol = f.symbol and s.rn = f.jr
+  cross join (values (-2), (2)) q(k)
+  cross join lateral (select (s.cn + q.k / (10::float8 ^ s.d)::numeric)::float8 as c2) c
+  cross join lateral (select (2.0::float8 / 13.0::float8) * c.c2 + (1 - (2.0::float8 / 13.0::float8)) * f.e12_p as ne12,
+                             (2.0::float8 / 27.0::float8) * c.c2 + (1 - (2.0::float8 / 27.0::float8)) * f.e26_p as ne26) a
+  cross join lateral (select a.ne12 - a.ne26 as nm) b
+  cross join lateral (select (2.0::float8 / 10.0::float8) * b.nm + (1 - (2.0::float8 / 10.0::float8)) * f.sg_p as nsg) z
+  cross join lateral (select greatest(f.ta_p, b.nm, z.nsg, b.nm - z.nsg) as t2, least(f.tb_p, b.nm, z.nsg, b.nm - z.nsg) as b2) e
+  cross join lateral (select case when e.t2 > 0 and b.nm >= 0.9::float8 * e.t2 and not f.p_top then case when b.nm >= 0.96::float8 * e.t2 then 'BUY@' else 'BUY' end
+                                  when e.b2 < 0 and b.nm <= 0.9::float8 * e.b2 and not f.p_bot then case when b.nm <= 0.96::float8 * e.b2 then 'SELL@' else 'SELL' end end as cls) x
+  group by f.symbol, f.jr
+),
+-- mk_top / mk_bot = 0.9 * tn / 0.9 * bn, the marks the 90% bands start at; out_top / out_bot = 0.96 * tn / 0.96 * bn (the same products the comparisons use). tick = one unit of the
+-- last decimal.
+fx2 as (
+  select f.*, n.near_edge, 0.9::float8 * f.tn as mk_top, 0.9::float8 * f.bn as mk_bot, 0.96::float8 * f.tn as out_top, 0.96::float8 * f.bn as out_bot, power(10::float8, -f.d) as tick
+  from fz f join ne n on n.symbol = f.symbol and n.jr = f.jr
+),
+-- The highs and lows of the range's bars as the chart draws them: JS Number(v.toFixed(d)) of the exact double (half up on the exact binary value), the engine's own rounding
+-- (ENGINE step 1) done again for hsrc's h8 and l8. One row per bar, source and end (w: h = high, l = low); vn = the rounded price (numeric), bad = a mantissa out of range.
+hv as (
+  select u.symbol, u.ot, u.src, u.d, q.w, case q.w when 'h' then u.h8 else u.l8 end as v8
+  from hsrc u cross join (values ('h'), ('l')) q(w)
+),
+hk as (select symbol, ot, src, d, w, v8, case when v8 > 0 then floor(ln(v8) / ln(2::float8))::int else 0 end as k0 from hv where v8 is not null),
+hk1 as (
+  select symbol, ot, src, d, w, v8, case when v8 >= power(2::float8, k0 + 1) then k0 + 1 when v8 < power(2::float8, k0) then k0 - 1 else k0 end as k
+  from hk
+),
+hfx as (select symbol, ot, src, d, w, k, (least(v8, 1e15::float8) * power(2::float8, 52 - k))::bigint as mant from hk1),
+hr0 as (select symbol, ot, src, d, w, k, mant, (10::float8 ^ d)::numeric as p10, (1::bigint << least(greatest(52 - k, 0), 62))::numeric as den from hfx),
+hl as (
+  select symbol, ot, src, d, w,
+         (div(mant::numeric * p10, den) + case when 2 * mod(mant::numeric * p10, den) >= den then 1 else 0 end) / p10 as vn,
+         (mant < 4503599627370496 or mant >= 9007199254740992 or 52 - k < 0 or 52 - k > 62) as bad
+  from hr0
+),
+-- The touch (rideTouch) of a ride on a bar, per pane side and source: the line with x = the bar's high (a ride on the top side, a BUY) or low (the bottom side, a SELL) as the
+-- bar's close is at 0.96 on that side. The bar's state (rideStateOf of the 599 closes before it) is e12_p, e26_p, sg_p, ta_p, tb_p of the bar's own window: EMA 12, EMA 26 and the
+-- signal line one bar earlier and the pane's edges over the 119 bars before the bar (and 0); rideLineAt: f = A12 x + (1 - A12) e12, s = A26 x + (1 - A26) e26, m = f - s,
+-- g = A9 m + (1 - A9) sig, h = m - g, top = max(top119, m, g, h), bottom = min(bottom119, m, g, h): the recursion's last step again. k = 0 is the price itself; k = -2 and 2 the
+-- price two ticks lower and higher (near: would that change the touch? the touch is monotone in x).
+tq as (
+  select f.symbol, f.ot, f.jr, h.src, z.zside, q.k, h.vn, x.xv, e.nm, e.edge,
+         case z.zside when 'top' then e.edge > 0 and e.nm >= 0.96::float8 * e.edge else e.edge < 0 and e.nm <= 0.96::float8 * e.edge end as touch
+  from fz f
+  cross join (values ('top', 'h'), ('bottom', 'l')) z(zside, w)
+  join hl h on h.symbol = f.symbol and h.ot = f.ot and h.w = z.w
+  cross join (values (-2), (0), (2)) q(k)
+  cross join lateral (select (h.vn + q.k / (10::float8 ^ h.d)::numeric)::float8 as xv) x
+  cross join lateral (select (2.0::float8 / 13.0::float8) * x.xv + (1 - (2.0::float8 / 13.0::float8)) * f.e12_p as ne12,
+                             (2.0::float8 / 27.0::float8) * x.xv + (1 - (2.0::float8 / 27.0::float8)) * f.e26_p as ne26) a
+  cross join lateral (select a.ne12 - a.ne26 as nm) b
+  cross join lateral (select (2.0::float8 / 10.0::float8) * b.nm + (1 - (2.0::float8 / 10.0::float8)) * f.sg_p as nsg) g
+  cross join lateral (select b.nm as nm, case z.zside when 'top' then greatest(f.ta_p, b.nm, g.nsg, b.nm - g.nsg) else least(f.tb_p, b.nm, g.nsg, b.nm - g.nsg) end as edge) e
+),
+-- per bar, side and source: the touch at the price itself, and whether two ticks either way change it
+ts as (
+  select symbol, ot, jr, src, zside, bool_or(touch) filter (where k = 0) as touch, (bool_or(touch) filter (where k = -2)) <> (bool_or(touch) filter (where k = 2)) as near,
+         max(xv) filter (where k = 0) as x, max(nm) filter (where k = 0) as m, max(edge) filter (where k = 0) as edge
+  from tq group by symbol, ot, jr, src, zside
+),
+-- per bar and side: touched by any source (gold has two: its stored bar and the hour's recorded minutes); the facts of the first source that touched (else of the first source)
+tb as (
+  select t.symbol, t.ot, t.jr, t.zside, bool_or(t.touch) as touch, bool_or(t.near) as near,
+         string_agg(t.src, ',' order by t.src) filter (where t.touch) as srcs, string_agg(t.src, ',' order by t.src) as srcs_all,
+         (array_agg(t.x order by t.touch desc, t.src))[1] as x, (array_agg(t.m order by t.touch desc, t.src))[1] as m, (array_agg(t.edge order by t.touch desc, t.src))[1] as edge
+  from ts t group by t.symbol, t.ot, t.jr, t.zside
+),
+-- the series per instrument: its length, the bars of the day (first / last open; hours missing between the first and the last bar of the day mean a hole in the data), bad
+-- closes, and the rank of the day's first bar
+sstat as (
+  select y.symbol, count(s.rn) as history_bars,
+         count(s.rn) filter (where s.ot >= pp.start_ms and s.ot < pp.end_ms) as day_bars,
+         count(s.rn) filter (where s.bad) as bad_mantissas,
+         min(s.rn) filter (where s.ot >= pp.start_ms and s.ot < pp.end_ms) as first_day_rank,
+         min(s.ot) filter (where s.ot >= pp.start_ms and s.ot < pp.end_ms) as first_day_ot,
+         max(s.ot) filter (where s.ot >= pp.start_ms and s.ot < pp.end_ms) as last_day_ot
+  from syms y cross join pp left join s on s.symbol = y.symbol
+  group by y.symbol
+),
+-- subscriptions now (count only), and rows of ANOTHER 1-hour macdx rule id in the range: any rule id but the three of v9, so the v8 rule's mails too
+subs as (select pair, count(*) as n from public.signal_alert_subscriptions where interval = '1h' and rule = 'macdx' group by pair),
+othr as (
+  select a.pair, count(*) as n
+  from public.signal_alerts a, pp
+  where a.kind = 'signal' and a.interval = '1h' and a.rule like 'macdx%'
+    and a.rule not in ('macdx_12_26_9_w600_1h_ride90to96of120_in_v9', 'macdx_12_26_9_w600_1h_ride90to96of120_at_v9', 'macdx_12_26_9_w600_1h_ride90to96of120_out_v9')
+    and a.pair in (select pair from syms)
+    and a.bar_time >= to_timestamp(pp.start_ms / 1000.0) and a.bar_time < to_timestamp(pp.end_ms / 1000.0)
+  group by a.pair
+),
+-- The rides (public.macd_rides; the table has no user column) the range can concern: entered before its end, and open, or entered, reached or seen reached from its start on.
+-- eot = the entry bar's open, rot = the open of the bar it was reached in (null while open), ms.
+rd as (
+  select r.pair, r.side, (extract(epoch from r.entry_bar) * 1000)::bigint as eot, r.status, (extract(epoch from r.reached_bar) * 1000)::bigint as rot,
+         r.reached_at, r.entry_closed_at, r.created_at, r.late, r.entry_price, r.entry_mid, r.seen_price, r.share0, r.share1
+  from public.macd_rides r, pp
+  where r.pair in (select pair from syms) and r.entry_bar < to_timestamp(pp.end_ms / 1000.0)
+    and (r.status = 'open' or r.entry_bar >= to_timestamp(pp.start_ms / 1000.0) or r.reached_bar >= to_timestamp(pp.start_ms / 1000.0)
+         or r.reached_at >= to_timestamp(pp.start_ms / 1000.0))
+),
+-- The state rows (public.macd_ride_state) of the range's bars: what production worked out at the close before each bar and kept for the minute's check. Compared number by
+-- number with the recount's state of the same bar (kept eight days, so a run long after the day finds none).
+st as (
+  select t.pair, (extract(epoch from t.bar_time) * 1000)::bigint as ot, t.e12, t.e26, t.sig, t.top119, t.bottom119
+  from public.macd_ride_state t, pp
+  where t.pair in (select pair from syms) and t.bar_time >= to_timestamp(pp.start_ms / 1000.0) and t.bar_time < to_timestamp(pp.end_ms / 1000.0)
+),
+stc as (
+  select y.symbol, count(t.ot) as state_rows, count(f.ot) as state_checked,
+         count(f.ot) filter (where t.e12 = f.e12_p and t.e26 = f.e26_p and t.sig = f.sg_p and t.top119 = f.ta_p and t.bottom119 = f.tb_p) as state_equal,
+         max(greatest(abs(t.e12 - f.e12_p), abs(t.e26 - f.e26_p), abs(t.sig - f.sg_p), abs(t.top119 - f.ta_p), abs(t.bottom119 - f.tb_p)) / power(10::float8, -y.d)) as state_max_diff_ticks
+  from syms y left join st t on t.pair = y.pair left join fz f on f.symbol = y.symbol and f.ot = t.ot
+  group by y.symbol
+),
+-- The close's decision at each entry (rideCloseStep), from the rides AS THE TABLE HOLDS THEM (so one slip is told once and does not shift the bars after it):
+--   already: quiet when a ride of the side was reached in this very bar (its email 2 says the same), else at (the notice);
+--   else: skip when a ride of the side entered before this bar is open or was reached in a later bar, else in (email 1: a ride is opened).
+-- by_eot = the entry bar of the ride that makes it skip or quiet.
+ev as (
+  select f.symbol, f.pair, f.ot, f.sd as side, f.already, w.by_eot,
+         case when f.already then case when w.by_eot is not null then 'quiet' else 'at' end else case when w.by_eot is not null then 'skip' else 'in' end end as step
+  from fx2 f
+  cross join lateral (select min(r.eot) as by_eot from rd r
+                      where r.pair = f.pair and r.side = f.sd
+                        and case when f.already then r.status = 'reached' and r.rot = f.ot else r.eot < f.ot and (r.status = 'open' or r.rot > f.ot) end) w
+  where f.sd is not null
+),
+wstat as (
+  select y.symbol, count(f.ot) as windows, count(f.ot) filter (where f.in_top or f.in_bot) as band_bars, count(f.ot) filter (where f.sd is not null) as entries,
+         (select count(*) from ev e where e.symbol = y.symbol and e.step = 'in') as exp_in, (select count(*) from ev e where e.symbol = y.symbol and e.step = 'at') as exp_at,
+         (select count(*) from ev e where e.symbol = y.symbol and e.step = 'skip') as exp_skip, (select count(*) from ev e where e.symbol = y.symbol and e.step = 'quiet') as exp_quiet
+  from syms y left join fx2 f on f.symbol = y.symbol
+  group by y.symbol
+),
+-- The mails of the two close's kinds (email 1 = in, the notice = at): public.signal_alerts rows of their rule ids on the 1-hour chart with the bar in the range, grouped per signal
+-- (pair, side, kind, bar); no user_id / event_id is read. A row's entry is the price paid (in) or the bar's close (at).
+mails as (
+  select a.pair, a.side, case a.rule when 'macdx_12_26_9_w600_1h_ride90to96of120_in_v9' then 'in' else 'at' end as kind, (extract(epoch from a.bar_time) * 1000)::bigint as ot,
+         count(*) as n_rows, count(*) filter (where a.status = 'sent') as n_sent, string_agg(distinct a.status, ',') as statuses,
+         min(extract(epoch from (a.sent_at - a.closed_at))) as lag_min, max(extract(epoch from (a.sent_at - a.closed_at))) as lag_max,
+         min(a.entry) as entry, max(a.entry) as entry_max
+  from public.signal_alerts a, pp
+  where a.kind = 'signal' and a.interval = '1h'
+    and a.rule in ('macdx_12_26_9_w600_1h_ride90to96of120_in_v9', 'macdx_12_26_9_w600_1h_ride90to96of120_at_v9')
+    and a.pair in (select pair from syms)
+    and a.bar_time >= to_timestamp(pp.start_ms / 1000.0) and a.bar_time < to_timestamp(pp.end_ms / 1000.0)
+  group by a.pair, a.side, a.rule, a.bar_time
+),
+-- The rides' ends the range concerns (email 2 = out). A ride belongs to the range when it was reached in one of its bars (rot), or was reached in an earlier bar and seen in the
+-- range (found late: by a catch-up after hours not watched); a ride held through the range belongs to it when the recount has a touch in the range (xot = the first bar of the
+-- range after its entry bar whose high / low touches on its side: where it should have been reached).
+rx as (
+  select r.*, y.symbol, t.xot,
+         (r.rot is not null and r.rot >= pp.start_ms and r.rot < pp.end_ms) as in_range,
+         (r.rot is not null and r.rot < pp.start_ms and r.reached_at >= to_timestamp(pp.start_ms / 1000.0) and r.reached_at < to_timestamp(pp.end_ms / 1000.0)) as seen_late_in_range
+  from rd r join syms y on y.pair = r.pair cross join pp
+  cross join lateral (select min(b.ot) as xot from tb b
+                      where b.symbol = y.symbol and b.zside = case r.side when 'BUY' then 'top' else 'bottom' end and b.touch and b.ot > r.eot) t
+),
+ro as (
+  select x.*, case when x.in_range or x.seen_late_in_range then x.rot else x.xot end as lot
+  from rx x
+  where x.in_range or x.seen_late_in_range or (x.xot is not null and (x.status = 'open' or x.rot >= (select end_ms from pp)))
+),
+-- The mails of email 2: rows of its rule id whose bar (the ride's ENTRY bar) and side are a ride's of ro, or that were made for a reach seen in the range (closed_at = when the
+-- reach was seen), grouped per ride (pair, side, entry bar).
+mo as (
+  select a.pair, a.side, (extract(epoch from a.bar_time) * 1000)::bigint as eot,
+         count(*) as n_rows, count(*) filter (where a.status = 'sent') as n_sent, string_agg(distinct a.status, ',') as statuses,
+         min(extract(epoch from (a.sent_at - a.closed_at))) as lag_min, max(extract(epoch from (a.sent_at - a.closed_at))) as lag_max,
+         min(a.entry) as entry, max(a.entry) as entry_max, min(a.closed_at) as seen_min, max(a.closed_at) as seen_max
+  from public.signal_alerts a, pp
+  where a.kind = 'signal' and a.interval = '1h' and a.rule = 'macdx_12_26_9_w600_1h_ride90to96of120_out_v9'
+    and a.pair in (select pair from syms)
+    and ((a.closed_at >= to_timestamp(pp.start_ms / 1000.0) and a.closed_at < to_timestamp(pp.end_ms / 1000.0))
+         or exists (select 1 from ro o where o.pair = a.pair and o.side = a.side and to_timestamp(o.eot / 1000.0) = a.bar_time))
+  group by a.pair, a.side, a.bar_time
+),
