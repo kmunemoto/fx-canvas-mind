@@ -37,7 +37,9 @@
 // Twelve Data; #353: from v28 the blue line at 90% of the way from zero to
 // the top or bottom of the newest 120 bars' MACD pane (the highest or lowest
 // of the MACD line, the signal line and the histogram), no cross; #362: 95%
-// from v30). Not
+// from v30; #397: from v39 a ride, two emails a pair — in at the close where
+// the line came into the 90% band, with the flow, and told the moment it
+// reaches 96% — its rides kept in public.macd_rides). Not
 // recorded or settled (signal_events is the two rules' record).
 //
 // #291: a fourth caller, pg_cron every minute with {"mode": "gold-ticks"}:
@@ -76,26 +78,38 @@ import {
   INDICATOR_RULES,
   MACDH_INTERVALS,
   MACDH_PAIRS,
+  MACD_RIDE_COLUMNS,
+  RIDE_OUT_FRESH_MS,
   STALE_RETRY_MS,
   STALE_TRIES,
   TWELVE_ALERT_INTERVALS,
   TWELVE_READS_PER_RUN,
   TWELVE_RETRY_MS,
+  freshFor,
   gmoIntervalsDue,
+  goldHourExtremes,
   hourCloseOf,
   indicatorIntervalsFor,
-  indicatorRuleId,
   indicatorSignals,
   isGmoChartPair,
   isIndicatorChartFor,
   isIndicatorRule,
+  isMacdhChart,
   keepableKlines,
   klineFileEnded,
   klineFileKey,
   klineFileOf,
   klinePreloadDays,
   latestCloseMs,
-  macdhSignals,
+  macdRideOf,
+  rideCloseSignal,
+  rideFormingOf,
+  rideLeaveAt,
+  rideOutSignal,
+  ridePaidAt,
+  rideRowOf,
+  rideSignalTag,
+  signalRow,
   amdpo3Signals,
   emarmSignals,
   EMARM_INTERVALS,
@@ -121,7 +135,23 @@ import {
   type IndicatorRule,
   type IndicatorSignal,
   type KlineFile,
+  type MacdRide,
 } from "./indicators.ts";
+// #397: the MACD email as a ride (docs §8.150), the code the replay drives too
+import {
+  RIDE_CATCHUP_BARS,
+  rideCatchUp,
+  rideCloseStep,
+  rideEntryAt,
+  rideStateFrom,
+  rideStateOf,
+  rideTouch,
+  rideZoneSideOf,
+  shareOf,
+  type RideBar,
+  type RideSide,
+  type RideState,
+} from "../_shared/macd-ride.ts";
 import {
   GOLD,
   GOLD_BARS,
@@ -143,7 +173,18 @@ import {
 } from "../live-chart/logic.ts";
 import { SPIKE, spikeOf } from "../_shared/spike.ts";
 import { GOLD_TICK_EVERY_MS, goldSeedRows, goldTickPlan, judgesWhileShut, nextTickAt } from "./gold-minutes.ts";
-import { STOCKMACD_INTERVALS, STOCKMACD_PAIRS, isStockmacdChart, stockBarsOf, stockCloseDue, stockSweepOf } from "./stocks.ts";
+import {
+  STOCKMACD_INTERVALS,
+  STOCKMACD_PAIRS,
+  STOCK_FRESH_MS,
+  isStockmacdChart,
+  stockBarsOf,
+  stockCloseDue,
+  stockRideClose,
+  stockRidesReached,
+  stockSweepOf,
+  type StockBar,
+} from "./stocks.ts";
 import { YAHOO_HEADERS, yahooChartUrl } from "../live-chart/stocks.ts";
 import { SWEEPX } from "../_shared/sweep-cross.ts";
 import { GMO_INTERVALS, GMO_SYMBOLS, jstDayKey, jstYearKey } from "../track-outcomes/quotes.ts";
@@ -289,7 +330,38 @@ import type { Candle } from "../analyze/indicators.ts";
 // forming bar is joined to it (live-chart/stocks.ts). On 2026-11-05 the
 // forming bar was judged as closed from 15:32 UTC on, so the bar that closed
 // after it would not have been judged. The other rules are as they were.
-const FUNCTION_VERSION = "signal-alerts-v38-2026-11-07T04:00:00Z";
+// v38 (docs §8.141): a Tokyo share's email says that Yahoo's Tokyo prices
+// come about 15 minutes late (stocks.ts). The other rules are as they were.
+// v39 (#397, docs §8.150): the MACD email ('macdx') is a ride, the owner's
+// 「MACD 90%→96%: 足の確定で入ると 96% まで行く メールをこれに変更、なので、
+// 一つのペアで2回メールを送る」 (2026-11-12; _shared/macd-ride.ts,
+// research/macdride-spec.md), in place of v33's 95% email, which is stopped.
+// Email 1 at the close of the 1-hour bar at which the blue line came into the
+// 90% band of the MACD pane's top (a BUY) or bottom (a SELL), the bar before
+// outside it: an entry with the flow, the opposite side of the 95% email's;
+// a notice in its place when the line is already at 96% at that close; email
+// 2 the moment the line reaches 96% of the same edge, with the profit or loss
+// since email 1 (measured on the five pairs, docs §8.149: of the 800 trades
+// that reached 96%, 429 were at a loss, so it reports the line, not a
+// profit). No stop, no target, no other way out; while a ride is held no new
+// email 1 for its chart and side. A ride is one row of public.macd_rides (for
+// all the chart's followers together; opened at a close, patched once when
+// reached, never deleted); the state of the forming 1-hour bar is worked out
+// at each close and kept in public.macd_ride_state, so that every minute the
+// "indicators" run reads a few bytes, the forming bar's high and low so far
+// (GMO's 1-hour bar, the read shared with the sharp rise; gold's recorded
+// minutes) and tells whether the line has touched 96%. A touch in a time
+// nothing was read is found by the next close's catch-up and mailed as seen
+// late. Each mail is recorded under its own rule id (MACDH_RULE_ID,
+// ..._ride90to96of120_in_v9; MACDH_AT_RULE_ID, ..._at_v9; MACDH_OUT_RULE_ID,
+// ..._out_v9), email 2's row under the ride's entry bar. The charts (the five
+// pairs' and gold's 1-hour), the bars and the subscriptions are as they were;
+// the rule is named 「MACD の流れ」 / "MACD ride" in the mails. The shares'
+// email (stocks.ts, the "stocks" run) becomes the same ride in this version,
+// judged at each 1-hour close. Put out in minutes 30 to 59 of an hour, the
+// migration first, so no bar is mailed by both versions. The other rules are
+// as they were.
+const FUNCTION_VERSION = "signal-alerts-v39-2026-11-12T12:00:00Z";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
@@ -373,6 +445,13 @@ const judgedBar = new Map<string, number>();
 // rows again the next minute
 const spikeRangeMemo = new Map<string, JsonRecord>();
 const SPIKE_RANGE_MEMO_MAX = 500;
+// #397: each forming 1-hour bar's MACD ride state this instance made or read
+// (pair|bar open): a copy of its row in public.macd_ride_state, never the
+// only one — a fresh instance reads the row
+const rideStateMemo = new Map<string, RideState>();
+const RIDE_STATE_MEMO_MAX = 500;
+// its rows are kept this long (the Tuesday morning check counts Friday)
+const RIDE_STATE_KEEP_MS = 8 * 24 * 60 * 60_000;
 // when each Twelve Data chart was last read here (besides the stored row's
 // time, which twelveReadDue goes by: this holds when storing it failed)
 const twelveReadAt = new Map<string, number>();
@@ -391,7 +470,9 @@ let indicatorSweepRunning = false;
 let goldTicksMinute: number | null = null;
 // #391: each share's newest closed bar judged (its open), the close whose bar
 // is in (done for that close), and when Yahoo was last read for it, in this
-// instance; and a "stocks" run not joined by the next one
+// instance; and a "stocks" run not joined by the next one (#397: a bar is
+// held judged, and its close done, only once the ride's work on it left
+// nothing to try again; the rides themselves are in public.macd_rides)
 const stockJudged = new Map<string, number>();
 const stockDone = new Map<string, number>();
 const stockReadAt = new Map<string, number>();
@@ -445,11 +526,22 @@ Deno.serve(async (req: Request) => {
       if (!res.ok) console.error("insert failed:", res.status, await res.text().catch(() => ""));
       return Array.isArray(rows) && rows.length > 0 && isRecord(rows[0]) && typeof rows[0].id === "string" ? rows[0].id : null;
     };
-    const userEmail = async (userId: string): Promise<string | null> => {
+    // A follower's address as the auth service gives it. `ok` false: the
+    // lookup itself failed (an answer that is neither 200 nor "no such
+    // user", or a body that cannot be read). That is not a follower with no
+    // address: the indicators' mailer claims no row then, so that a later
+    // run that offers the same mail tries again (#397)
+    const userEmailRead = async (userId: string): Promise<{ ok: boolean; email: string | null }> => {
       const res = await fetch(`${supabaseUrl}/auth/v1/admin/users/${encodeURIComponent(userId)}`, { headers: serviceHeaders });
-      const body = res.ok ? await res.json().catch(() => null) : null;
-      return isRecord(body) && typeof body.email === "string" && body.email.length > 0 ? body.email : null;
+      if (!res.ok) {
+        await res.body?.cancel();
+        return { ok: res.status === 404, email: null };
+      }
+      const body = await res.json().catch(() => null);
+      if (!isRecord(body)) return { ok: false, email: null };
+      return { ok: true, email: typeof body.email === "string" && body.email.length > 0 ? body.email : null };
     };
+    const userEmail = async (userId: string): Promise<string | null> => (await userEmailRead(userId)).email;
     // One row per signal, whoever follows the chart. The unique key makes a
     // second sweep that sees the same bar a no-op; either way the id comes back.
     const eventId = async (row: JsonRecord): Promise<string | null> => {
@@ -525,36 +617,46 @@ Deno.serve(async (req: Request) => {
     // the video's way) to each of `subs` following its chart under its rule,
     // once (the claim's unique key); what happened, counted into `counts`
     const mailerFor = (subs: IndicatorSub[], counts: Record<string, number>) => {
-      const access = new Map<string, { allowed: boolean; email: string | null }>();
+      const access = new Map<string, { allowed: boolean; email: string | null; unread: boolean }>();
       return async (sigs: IndicatorSignal[]) => {
         for (const sig of sigs) {
           for (const sub of subs.filter((x) => x.pair === sig.pair && x.interval === sig.interval && x.rule === sig.rule)) {
             let who = access.get(sub.user_id);
             if (!who) {
-              const [plan, email] = await Promise.all([planOf(sub.user_id), userEmail(sub.user_id)]);
-              who = { allowed: alertsAllowed(plan, email), email };
+              const [plan, address] = await Promise.all([planOf(sub.user_id), userEmailRead(sub.user_id)]);
+              who = { allowed: alertsAllowed(plan, address.email), email: address.email, unread: !address.ok };
               access.set(sub.user_id, who);
             }
             if (!who.allowed) {
               counts.not_allowed = (counts.not_allowed ?? 0) + 1;
               continue;
             }
+            // #397: the address could not be looked up (the lookup failed,
+            // which is not "no address"). No row is claimed: a row would be
+            // marked failed for good and keep every later run from mailing
+            // this follower. Counted, so the run's record says it; a later
+            // run that offers the mail again (the bar judged again; a ride's
+            // mails and the sharp rise's while they are offered) tries again
+            if (who.unread) {
+              counts.lookup_failed = (counts.lookup_failed ?? 0) + 1;
+              continue;
+            }
+            // #397: the bar, the side, the prices and the rule id as the
+            // signal's row says them (indicators.ts signalRow): a rule's
+            // own id, and a mail of the MACD ride under that mail's (email
+            // 2's row under the ride's entry bar, its closed_at when the
+            // reach was seen, its entry the ride's and its target the price
+            // when seen)
             const id = await claimRow({
               user_id: sub.user_id,
               kind: "signal",
               pair: sig.pair,
               interval: sig.interval,
-              bar_time: sig.barTime,
-              closed_at: sig.closedAt,
-              side: sig.side,
-              entry: sig.close,
-              stop: sig.sl,
-              target: sig.tps ? sig.tps[0] : null,
+              ...signalRow(sig),
               rsi: sig.rsi,
               rsi_prev: sig.rsiPrev,
               sar: null,
               atr: sig.eps,
-              rule: indicatorRuleId(sig.rule),
               strong: sig.rule === "qtrend" ? sig.strong : null,
               event_id: null,
               status: "pending",
@@ -569,6 +671,144 @@ Deno.serve(async (req: Request) => {
           }
         }
       };
+    };
+
+    // ---- #397 (docs §8.150): the MACD ride's rows (public.macd_rides) ------------------------
+    //
+    // For the "indicators" run (the five pairs and gold) and the "stocks" run
+    // (the shares). A ride's row is written two ways only: opened (inserted,
+    // a row already there left as it is) and reached (patched once, while it
+    // is still open); it is never deleted. Its mails are written from the
+    // row. No user id, address or row id goes into a log or a run's record
+    // from here.
+    //
+    // What an error says, without any address in it (a request that could
+    // not be sent names its URL, and a lookup's URL holds a follower's id):
+    // what the ride's catches log, in both runs.
+    const errText = (err: unknown): string =>
+      (err instanceof Error ? `${err.name}: ${err.message}` : String(err)).replace(/https?:\/\/\S+/g, "(url)");
+
+    // The rides a query gives (its filters, after "macd_rides?"), each from
+    // its named columns; null when the table could not be read (an error, not
+    // there): nothing of the ride is then done — never a fallback
+    const readRides = async (filters: string): Promise<MacdRide[] | null> => {
+      const res = await rest(`macd_rides?${filters}&select=${MACD_RIDE_COLUMNS}`);
+      const rows = res.ok ? await res.json().catch(() => null) : null;
+      if (!Array.isArray(rows)) {
+        if (!res.ok) await res.body?.cancel();
+        console.error("macd rides read failed:", res.status);
+        return null;
+      }
+      return rows.map(macdRideOf).filter((r): r is MacdRide => r !== null);
+    };
+    const rideKey = (r: { pair: string; side: RideSide; entryBar: number }): string =>
+      `pair=eq.${encodeURIComponent(r.pair)}&side=eq.${r.side}&entry_bar=eq.${encodeURIComponent(new Date(r.entryBar).toISOString())}`;
+    // One ride as its row stands (null: no such row, or unread)
+    const rideNow = async (r: { pair: string; side: RideSide; entryBar: number }): Promise<MacdRide | null> => {
+      const rows = await readRides(rideKey(r));
+      return rows !== null && rows.length > 0 ? rows[0] : null;
+    };
+    // Opens a ride: its row inserted unless one of its chart, side and entry
+    // bar is there (the same bar is judged again and again), then read back —
+    // the row as it stands, whoever made it. Null when there is none: the
+    // insert was refused (another ride of the chart and side is open: the
+    // table allows one) or the table could not be read; no email 1 then
+    const openRide = async (
+      r: { pair: string; side: RideSide; entryBar: number; entryClosedAt: number; entryPrice: number; entryMid: number; share0: number | null },
+    ): Promise<MacdRide | null> => {
+      const res = await rest("macd_rides?on_conflict=pair,side,entry_bar", {
+        method: "POST",
+        headers: { Prefer: "resolution=ignore-duplicates,return=minimal" },
+        body: JSON.stringify({
+          pair: r.pair,
+          side: r.side,
+          entry_bar: new Date(r.entryBar).toISOString(),
+          entry_closed_at: new Date(r.entryClosedAt).toISOString(),
+          entry_price: r.entryPrice,
+          entry_mid: r.entryMid,
+          share0: r.share0 !== null && Number.isFinite(r.share0) ? r.share0 : null,
+          status: "open",
+        }),
+      });
+      if (!res.ok) console.error("macd ride open failed:", res.status, await res.text().catch(() => ""));
+      else await res.body?.cancel();
+      return await rideNow(r);
+    };
+    // A ride reached: its row patched while it is still open (status=eq.open
+    // in the filter), so that one run makes the transition whatever number
+    // see it. No row back: another run did (or the patch failed), and the row
+    // is read. Either way the row as it stands is the answer — reached, with
+    // the numbers of the run that made the transition — or null when it
+    // cannot be read. `at`: when it was seen; `bar`: the open of the bar it
+    // was reached in; `price`: the price when seen; `late`: seen in a closed
+    // bar, after the bar it was reached in had ended; `share`: the line's
+    // share of the way to its edge at the touch
+    const reachRide = async (
+      ride: MacdRide,
+      reached: { at: number; bar: number; price: number; late: boolean; share: number },
+    ): Promise<MacdRide | null> => {
+      const res = await rest(`macd_rides?${rideKey(ride)}&status=eq.open&select=${MACD_RIDE_COLUMNS}`, {
+        method: "PATCH",
+        headers: { Prefer: "return=representation" },
+        body: JSON.stringify({
+          status: "reached",
+          reached_at: new Date(reached.at).toISOString(),
+          reached_bar: new Date(reached.bar).toISOString(),
+          seen_price: reached.price,
+          late: reached.late,
+          share1: Number.isFinite(reached.share) ? reached.share : null,
+        }),
+      });
+      const rows = res.ok ? await res.json().catch(() => null) : null;
+      if (!res.ok) console.error("macd ride reach failed:", res.status, await res.text().catch(() => ""));
+      const mine = Array.isArray(rows) && rows.length > 0 ? macdRideOf(rows[0]) : null;
+      return mine ?? (await rideNow(ride));
+    };
+    // One mail of a ride (email 1, the notice or email 2, as a signal) to the
+    // followers of its chart under its rule who have no row for it yet. Those
+    // whose row is in the table are left out before any lookup, as the sharp
+    // rise's are, and the claim's unique key keeps two runs from both mailing:
+    // each follower once, and a follower a run failed on (a lookup that
+    // failed) is mailed by a later run. `made`: the rows made in this run
+    // (sent, failed or not configured); `had`: the rows there already; `why`:
+    // why a follower left got none. Counted into `counts` even when a lookup
+    // throws partway
+    const mailRide = async (
+      sig: IndicatorSignal,
+      subs: IndicatorSub[],
+      counts: Record<string, number>,
+    ): Promise<{ made: number; had: number; why: string }> => {
+      const row = signalRow(sig);
+      const e = encodeURIComponent;
+      const done = new Set((await readRows(
+        `signal_alerts?kind=eq.signal&pair=eq.${e(sig.pair)}&interval=eq.${e(sig.interval)}&bar_time=eq.${e(row.bar_time)}&side=eq.${row.side}&rule=eq.${e(row.rule)}&select=user_id`,
+      )).map((r) => String(r.user_id)));
+      const left = subs.filter((x) => x.rule === sig.rule && x.pair === sig.pair && x.interval === sig.interval && !done.has(x.user_id));
+      if (left.length === 0) return { made: 0, had: done.size, why: "" };
+      const these: Record<string, number> = { sent: 0, failed: 0, not_configured: 0, duplicate: 0, not_allowed: 0, lookup_failed: 0 };
+      try {
+        await mailerFor(left, these)([sig]);
+      } finally {
+        for (const [k, v] of Object.entries(these)) if (v > 0 || k in counts) counts[k] = (counts[k] ?? 0) + v;
+      }
+      return {
+        made: these.sent + these.failed + these.not_configured,
+        had: done.size,
+        why: ["not_allowed", "lookup_failed", "duplicate"].filter((k) => these[k] > 0).join(","),
+      };
+    };
+
+    // Whether a mail of a ride (as a signal) has a row for anybody. A bar's
+    // first decision stands: a bar whose notice is out is not opened as a
+    // ride by a later read of it whose close has moved under the 96% line
+    // (the other way round the ride's own row says so: rideCloseStep)
+    const rideMailThere = async (sig: IndicatorSignal): Promise<boolean> => {
+      const row = signalRow(sig);
+      const e = encodeURIComponent;
+      const rows = await readRows(
+        `signal_alerts?kind=eq.signal&pair=eq.${e(sig.pair)}&interval=eq.${e(sig.interval)}&bar_time=eq.${e(row.bar_time)}&side=eq.${row.side}&rule=eq.${e(row.rule)}&select=user_id&limit=1`,
+      );
+      return rows.length > 0;
     };
 
     const nowMs = Date.now();
@@ -707,22 +947,200 @@ Deno.serve(async (req: Request) => {
       // unique key)
       const counts: Record<string, number> = { sent: 0, failed: 0, not_configured: 0, duplicate: 0, not_allowed: 0 };
       const mailSignals = mailerFor(subs, counts);
+      // #395: the hour now, and the 1-hour bars the sharp rise looks at (the
+      // forming one, and the one before while it closed at most
+      // SPIKE_LATE_MS ago); #397: the MACD ride's forming bar is this hour's
+      const HOUR = 60 * MIN;
+      const hourMs = Math.floor(nowMs / HOUR) * HOUR;
+      const spikeOpens = nowMs - hourMs <= SPIKE_LATE_MS ? [hourMs - HOUR, hourMs] : [hourMs];
+      const isoOf = (ms: number) => new Date(ms).toISOString();
+      const enc = encodeURIComponent;
+      // #395: the stored bars this run read (or read again), for the sharp
+      // rise's range below; #397: and when they were read, kept with the MACD
+      // ride's state made from them
+      const twelveStored = new Map<string, { bars: Candle[]; fetchedAt: string }>();
+      // #395: the 1-hour reads of this run, for the sharp rise and fall below
+      // (#397: and for the MACD ride: the newest closed bar's bid and ask are
+      // its prices, the forming bar its minute's reading)
+      const hourQuotes = new Map<string, QuoteCandle[]>();
+
+      // #397 (docs §8.150; research/macdride-spec.md section 5): the MACD
+      // ride on the 1-hour chart of the five pairs and gold, for the charts
+      // somebody follows under 'macdx' in this run (a chart nobody follows is
+      // not read, and its open rides wait).
+      const rideSubs = subs.filter((x) => x.rule === "macdx" && isMacdhChart(x.pair, x.interval));
+      const ridePairs = [...new Set(rideSubs.map((x) => x.pair))];
+      // one mail of a ride to the chart's followers who have none yet; said in
+      // the run's record only when a row was made for it in this run or was
+      // there already, and, when a follower left got none, why (a plan with
+      // no alerts or a lookup that failed: tried again by the next run)
+      const sendRide = async (sig: IndicatorSignal, said: { tags: string[]; unsent: string[] }) => {
+        const got = await mailRide(sig, rideSubs, counts);
+        if (got.made > 0) fired.push(sig);
+        if (got.made + got.had > 0) said.tags.push(rideSignalTag(sig));
+        if (got.why) said.unsent.push(`${sig.ride?.mail ?? "in"}(${got.why})`);
+      };
+      // A. At a close, with the chart's closed bars in hand (`closed`, oldest
+      // first; `newest` the newest one's open): (1) the chart's rides — the
+      // open ones, those whose entry bar is among the newest
+      // RIDE_CATCHUP_BARS closed bars, and those reached in this bar or later
+      // whatever their entry bar (rideCloseStep needs them: a ride held for
+      // weeks and reached a minute after this close still skips this bar when
+      // it is judged again); unread, nothing of the ride is done; (2) the
+      // state of the bar now forming, kept in public.macd_ride_state for the
+      // minutes to come (rows over eight days old dropped); (3) the catch-up:
+      // each open ride whose line touched 96% in a closed bar after its entry
+      // bar is reached there, seen late, at the newest closed bar's price,
+      // and its email 2 goes out at once — before this bar's own email 1,
+      // when the bar is a new entry too; (4) the entry at this bar, while it
+      // closed at most freshFor("1h") ago: email 1 once the ride's row is
+      // there (inserted now, or by an earlier run: the same bar is judged
+      // again and again), the notice, or nothing (skip, quiet). The ride's
+      // record goes into `out` as it is made, so that a failure partway
+      // leaves what was done
+      const rideAtClose = async (pair: string, closed: Candle[], newest: number, out: { ride: JsonRecord; tags: string[]; unsent: string[] }) => {
+        const gold = pair === GOLD;
+        const times = closed.map((c) => barOpenMs(c.datetime));
+        // (a bar whose time cannot be read: nothing is judged, as Q-Trend's and ULTRA's are not)
+        if (times.length === 0 || times.some((t) => !Number.isFinite(t))) {
+          out.ride.error = "bars";
+          return;
+        }
+        const quoted = (ms: number) => enc(`"${isoOf(ms)}"`);
+        const from = times[Math.max(0, times.length - RIDE_CATCHUP_BARS)];
+        let rides = await readRides(`pair=eq.${enc(pair)}&or=(status.eq.open,entry_bar.gte.${quoted(from)},reached_bar.gte.${quoted(newest)})`);
+        if (rides === null) {
+          out.ride.rows = "unread";
+          return;
+        }
+        out.ride.rows = "ok";
+        // the state of the bar now forming, from the 599 newest closed closes
+        const closes = closed.map((c) => c.close);
+        const forming = newest + HOUR;
+        const state = rideStateOf(closes);
+        out.ride.state = state === null ? "short" : "ok";
+        if (state !== null) {
+          if (rideStateMemo.size >= RIDE_STATE_MEMO_MAX) rideStateMemo.clear();
+          rideStateMemo.set(`${pair}|${forming}`, state);
+          const res = await rest("macd_ride_state?on_conflict=pair,bar_time", {
+            method: "POST",
+            headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+            body: JSON.stringify({
+              pair,
+              bar_time: isoOf(forming),
+              ...state,
+              last_bar: isoOf(newest),
+              source_read_at: gold ? twelveStored.get(`${pair}|1h`)?.fetchedAt ?? null : null,
+            }),
+          });
+          if (!res.ok) {
+            out.ride.stored = false;
+            console.error("macd ride state store failed:", res.status, await res.text().catch(() => ""));
+          } else await res.body?.cancel();
+          const old = await rest(`macd_ride_state?pair=eq.${enc(pair)}&bar_time=lt.${enc(isoOf(forming - RIDE_STATE_KEEP_MS))}`, {
+            method: "DELETE",
+            headers: { Prefer: "return=minimal" },
+          });
+          if (!old.ok) console.error("macd ride state clean failed:", old.status, await old.text().catch(() => ""));
+          else await old.body?.cancel();
+        }
+        // the catch-up. The price when seen is the newest closed bar's on the
+        // side the ride leaves on (GMO's bid for a BUY and ask for a SELL, of
+        // this run's 1-hour read; gold's close)
+        const last = closed[closed.length - 1];
+        const quote = gold ? null : (hourQuotes.get(pair) ?? []).find((x) => Date.parse(x.datetime) === newest) ?? null;
+        const bars: RideBar[] = closed.map((c, k) => ({ t: times[k], high: c.high, low: c.low, close: c.close }));
+        const caught: JsonRecord[] = [];
+        out.ride.caught = caught;
+        for (const r of rides.filter((x) => x.status === "open")) {
+          const c = rideCatchUp(bars, rideZoneSideOf(r.side), r.entryBar);
+          if (c === null) continue;
+          const told: JsonRecord = { side: r.side, entry_bar: isoOf(r.entryBar), reached_bar: isoOf(c.bar) };
+          caught.push(told);
+          const price = gold ? last.close : quote ? rideLeaveAt(r.side, quote) : Number.NaN;
+          if (!Number.isFinite(price)) {
+            told.error = "no_price";
+            continue;
+          }
+          const row = await reachRide(r, { at: nowMs, bar: c.bar, price, late: true, share: c.share });
+          if (row === null || row.status !== "reached") {
+            told.error = "not_written";
+            continue;
+          }
+          if (row.reachedBar !== null) told.reached_bar = isoOf(row.reachedBar);
+          rides = rides.map((x) => (x === r ? row : x));
+          const sig = rideOutSignal("macdx", "1h", row);
+          if (sig) await sendRide(sig, out);
+        }
+        // the entry at this bar
+        const age = nowMs - (newest + HOUR);
+        if (age < 0 || age > freshFor("1h")) {
+          out.ride.step = null;
+          out.ride.fresh = false;
+          return;
+        }
+        const entry = rideEntryAt(closes);
+        const step = rideCloseStep(entry, newest, rides.map(rideRowOf));
+        out.ride.step = step.step;
+        if (entry === null || (step.step !== "in" && step.step !== "at")) return;
+        if (step.step === "at") {
+          await sendRide(rideCloseSignal("macdx", pair, "1h", "at", entry, { openMs: newest, closeMs: newest + HOUR, mid: last.close, paid: last.close }), out);
+          return;
+        }
+        // email 1: the ride's row first (the price paid is GMO's ask close
+        // for a BUY and bid close for a SELL; gold's the bar's close), then
+        // the mail, written from the row
+        let own = rides.find((x) => x.side === entry.side && x.entryBar === newest) ?? null;
+        if (own === null) {
+          // the bar's first decision stands: its notice is out (an earlier
+          // read of this bar had the line at 96% already), so no ride is
+          // opened on a read whose close has moved; nothing more is mailed
+          if (await rideMailThere(rideCloseSignal("macdx", pair, "1h", "at", entry, { openMs: newest, closeMs: newest + HOUR, mid: last.close, paid: last.close }))) {
+            out.ride.step = "at";
+            out.ride.kept = true;
+            return;
+          }
+          const paid = gold ? last.close : quote ? ridePaidAt(entry.side, quote) : Number.NaN;
+          if (!Number.isFinite(paid)) {
+            out.ride.opened = "no_price";
+            return;
+          }
+          own = await openRide({
+            pair,
+            side: entry.side,
+            entryBar: newest,
+            entryClosedAt: newest + HOUR,
+            entryPrice: paid,
+            entryMid: last.close,
+            share0: shareOf(entry.z, entry.zside),
+          });
+        }
+        if (own === null) {
+          out.ride.opened = "no_row";
+          return;
+        }
+        // the bar judged again after its ride has reached 96%: the ride is
+        // over, and an entry signal now would be for a trade that has
+        // ended, with an email 2 that will not come again. Email 1 is not
+        // mailed any more (a follower who has none gets email 2 alone)
+        if (own.status !== "open") {
+          out.ride.over = true;
+          return;
+        }
+        await sendRide(rideCloseSignal("macdx", pair, "1h", "in", entry, { openMs: own.entryBar, closeMs: own.entryClosedAt, mid: own.entryMid, paid: own.entryPrice }), out);
+      };
+
       // #171: a chart's signals are mailed as soon as it is judged, before
       // the other charts due are read
       const judge = async (pair: string, interval: string, closed: Candle[], newest: number) => {
-        // #275: the MACD peak-and-valley rule beside Q-Trend's and ULTRA's. Its
-        // failure must never cost the other two their emails. #324: from v25
-        // the 1-hour rule's (macdhSignals; nothing on another chart); #353:
-        // from v28 the zone rule's (docs §8.119); #384: from v31 on the
-        // 15-minute chart (docs §8.127); #386: from v33 on the 1-hour chart
-        // again (docs §8.129)
+        // #275: the MACD peak-and-valley rule was judged here beside Q-Trend's
+        // and ULTRA's (#324: from v25 the 1-hour rule's; #353: from v28 the
+        // zone rule's, docs §8.119; #384: v31 on the 15-minute chart; #386:
+        // v33 on the 1-hour chart again). #397: from v39 the MACD email is a
+        // ride, judged below, after the other rules' mails
         const sigs = indicatorSignals(pair, interval, closed, nowMs);
-        try {
-          sigs.push(...macdhSignals(pair, interval, closed, nowMs));
-        } catch (err) {
-          console.error("macdx failed:", pair, interval, err);
-        }
-        // #385: AMD Po3's DIST, likewise apart (docs §8.128)
+        // #385: AMD Po3's DIST, apart: its failure must never cost the others
+        // their emails (docs §8.128)
         try {
           sigs.push(...amdpo3Signals(pair, interval, closed, nowMs));
         } catch (err) {
@@ -736,25 +1154,53 @@ Deno.serve(async (req: Request) => {
         }
         judgedBar.set(`${pair}|${interval}`, newest);
         fired.push(...sigs);
-        const read = {
+        // #171: how long after the bar closed it was judged, ms
+        const judgedAfter = Date.now() - (newest + (LIVE_STEP_MS[interval] ?? 0));
+        if (sigs.length > 0) await mailSignals(sigs);
+        // #397 (docs §8.150): the MACD ride at this close, on a chart it is
+        // offered on with a follower in this run. In its own try / catch:
+        // nothing of it can cost the other rules their emails (they are out
+        // by now) or the other charts their judgment
+        const said: { ride: JsonRecord; tags: string[]; unsent: string[] } = { ride: {}, tags: [], unsent: [] };
+        const ridden = isMacdhChart(pair, interval) && ridePairs.includes(pair);
+        if (ridden) {
+          try {
+            await rideAtClose(pair, closed, newest, said);
+          } catch (err) {
+            console.error("macdx failed:", pair, interval, errText(err));
+            said.ride.error = "failed";
+          }
+          if (said.unsent.length > 0) said.ride.unsent = said.unsent;
+          // The ride's work on this bar did not finish (its rows unread, a
+          // write that failed, an exception): this instance does not hold
+          // the bar judged, so the chart is read and judged again the next
+          // time it is due inside the bar's fresh window, as a fresh instance
+          // would (minutes 3 and 5; gold each minute to :29). Judging again
+          // sends nothing twice: the other rules' mails are claimed by their
+          // rows, and the ride's by its row. A follower left without a mail
+          // (a lookup that failed) does not make the bar unsettled here: as
+          // for every other rule, that mail is tried again only when the bar
+          // is judged again
+          const unsettled = said.ride.error !== undefined || said.ride.rows === "unread" || said.ride.stored === false || said.ride.opened !== undefined ||
+            (Array.isArray(said.ride.caught) && said.ride.caught.some((c) => isRecord(c) && c.error !== undefined));
+          if (unsettled) judgedBar.delete(`${pair}|${interval}`);
+        }
+        return {
           pair,
           interval,
           bars: closed.length,
           newest: new Date(newest).toISOString(),
-          signals: sigs.map((x) => `${x.rule}:${x.side}${x.strong ? "!" : ""}`),
-          // #171: how long after the bar closed it was judged, ms
-          judged_after_ms: Date.now() - (newest + (LIVE_STEP_MS[interval] ?? 0)),
+          // (#397: a ride's mails as "macdx:BUY" email 1, "macdx-at:BUY" the
+          // notice and "macdx-out:BUY" email 2)
+          signals: [...sigs.map((x) => `${x.rule}:${x.side}${x.strong ? "!" : ""}`), ...said.tags],
+          judged_after_ms: judgedAfter,
+          ...(ridden ? { ride: said.ride } : {}),
         };
-        if (sigs.length > 0) await mailSignals(sigs);
-        return read;
       };
 
       // Twelve Data's first: a few reads at most, which GMO's many would
       // otherwise leave no time for
       let twelveLeft = TWELVE_READS_PER_RUN;
-      // #395: the stored bars this run read (or read again), for the sharp
-      // rise's range below
-      const twelveStored = new Map<string, { bars: Candle[]; fetchedAt: string }>();
       const twelveKey = Deno.env.get("TWELVE_DATA_API_KEY") ?? "";
       for (const c of twelveCharts) {
         const key = `${c.pair}|${c.interval}`;
@@ -851,8 +1297,6 @@ Deno.serve(async (req: Request) => {
       // open), once the first of them read tells (hourCloseOf); null when
       // none closed this hour
       const yearNewest = new Map<string, number | null>();
-      // #395: the 1-hour reads of this run, for the sharp rise and fall below
-      const hourQuotes = new Map<string, QuoteCandle[]>();
       for (const c of gmoCharts) {
         const key = `${c.pair}|${c.interval}`;
         const step = LIVE_STEP_MS[c.interval];
@@ -937,11 +1381,33 @@ Deno.serve(async (req: Request) => {
       // so a follower a run failed on is mailed by a later run. Its failure
       // must never cost the others theirs
       const spikePairs = [...new Set(subs.filter((x) => x.rule === "spike").map((x) => x.pair))];
-      const HOUR = 60 * MIN;
-      const hourMs = Math.floor(nowMs / HOUR) * HOUR;
-      const spikeOpens = nowMs - hourMs <= SPIKE_LATE_MS ? [hourMs - HOUR, hourMs] : [hourMs];
-      const isoOf = (ms: number) => new Date(ms).toISOString();
-      const enc = encodeURIComponent;
+      // #397: what the sharp rise and the MACD ride both read of the hour
+      // now, each read once a run. A pair's: GMO's 1-hour read that holds its
+      // forming bar — the chart's own read when it was made above (hourQuotes),
+      // else the newest file alone (and the one before, while the bar that
+      // closed at its start is looked at), or the read the sharp rise's range
+      // was made from in this run; null when it could not be read. Gold's:
+      // its recorded minutes (public.gold_tick_bars, Swissquote's prices)
+      // from the first bar looked at on
+      const formingReads = new Map<string, QuoteCandle[] | null>();
+      const formingQuotes = async (pair: string): Promise<QuoteCandle[] | null> => {
+        const own = hourQuotes.get(pair);
+        if (own) return own;
+        if (!formingReads.has(pair)) {
+          const got = await fetchLiveQuotes(pair, "1h", nowMs, deadline, chartFetcher(latestCloseMs("1h", nowMs), HOUR), spikeOpens.length);
+          formingReads.set(pair, got && got.length > 0 ? got : null);
+        }
+        return formingReads.get(pair) ?? null;
+      };
+      let goldMinutesRead: Array<{ minute: string; open: number; high: number; low: number; close: number }> | null = null;
+      const goldMinutes = async () => {
+        goldMinutesRead ??= (await readRows(
+          `gold_tick_bars?minute=gte.${enc(isoOf(spikeOpens[0]))}&select=minute,open,high,low,close&order=minute.asc`,
+        ))
+          .filter((m) => typeof m.minute === "string")
+          .map((m) => ({ minute: m.minute as string, open: Number(m.open), high: Number(m.high), low: Number(m.low), close: Number(m.close) }));
+        return goldMinutesRead;
+      };
       const spikeRead = async (pair: string): Promise<JsonRecord> => {
         const gold = pair === GOLD;
         if (!gold && !isGmoChartPair(pair)) return { pair, interval: "1h", spike: true, error: "not_offered" };
@@ -1022,6 +1488,9 @@ Deno.serve(async (req: Request) => {
               // the table's files for the bars R needs, not the chart's 600
               await preload(pair, "1h", SPIKE.bars + 3);
               quotes = await fetchLiveQuotes(pair, "1h", nowMs, deadline, chartFetcher(latestCloseMs("1h", nowMs), HOUR), SPIKE.bars + 3);
+              // #397: this read holds the forming bar too: it is the run's
+              // one read of it (formingQuotes)
+              if (quotes && quotes.length > 0) formingReads.set(pair, quotes);
             }
             if (quotes && quotes.length > 0) history = historyRead(pair, "1h", quotes, nowMs).candles;
           }
@@ -1062,11 +1531,7 @@ Deno.serve(async (req: Request) => {
         // the bars looked at
         const candidates: Array<{ bar: Candle; forming: boolean }> = [];
         if (gold) {
-          const minutes = (await readRows(
-            `gold_tick_bars?minute=gte.${enc(isoOf(spikeOpens[0]))}&select=minute,open,high,low,close&order=minute.asc`,
-          ))
-            .filter((m) => typeof m.minute === "string")
-            .map((m) => ({ minute: m.minute as string, open: Number(m.open), high: Number(m.high), low: Number(m.low), close: Number(m.close) }));
+          const minutes = await goldMinutes();
           for (const t of spikeOpens) {
             const bar = goldHourBar(minutes, t);
             if (bar) candidates.push({ bar, forming: t === hourMs });
@@ -1074,10 +1539,11 @@ Deno.serve(async (req: Request) => {
         } else {
           let quotes = pairRead;
           if (!quotes) {
-            if (Date.now() > deadline || maintenance) return { pair, interval: "1h", spike: true, skipped: maintenance ? "maintenance" : "deadline" };
+            if (!formingReads.has(pair) && (Date.now() > deadline || maintenance)) return { pair, interval: "1h", spike: true, skipped: maintenance ? "maintenance" : "deadline" };
             // the newest file (and the one before, while the bar that closed
-            // at its start is looked at): GMO's, not the table's
-            quotes = await fetchLiveQuotes(pair, "1h", nowMs, deadline, chartFetcher(latestCloseMs("1h", nowMs), HOUR), spikeOpens.length);
+            // at its start is looked at): GMO's, not the table's (#397: the
+            // run's one read of the forming bar, the MACD ride's too)
+            quotes = await formingQuotes(pair);
           }
           if (!quotes || quotes.length === 0) return { pair, interval: "1h", spike: true, error: maintenance ? "maintenance" : "unavailable" };
           const read = historyRead(pair, "1h", quotes, nowMs);
@@ -1112,7 +1578,7 @@ Deno.serve(async (req: Request) => {
             for (const [k, v] of Object.entries(these)) counts[k] = (counts[k] ?? 0) + v;
             const made = these.sent + these.failed + these.not_configured;
             if (made > 0) fired.push(x);
-            const why = ["not_allowed", "duplicate"].filter((k) => these[k] > 0).join(",");
+            const why = ["not_allowed", "lookup_failed", "duplicate"].filter((k) => these[k] > 0).join(",");
             mailed.push(`spike:${x.side}${x.spike?.forming ? "" : "@close"}${made > 0 ? "" : `:unsent${why ? `(${why})` : ""}`}`);
           }
         }
@@ -1140,6 +1606,109 @@ Deno.serve(async (req: Request) => {
         } catch (err) {
           console.error("spike failed:", pair, err);
           reads.push({ pair, interval: "1h", spike: true, error: "failed" });
+        }
+      }
+
+      // #397 (docs §8.150; research/macdride-spec.md section 5 B): the MACD
+      // ride each minute, after this run's closes were judged (a ride opened
+      // in this run is followed in this run: email 1 went out above, email 2
+      // can follow here) and after the sharp rise, whose read of a pair's
+      // forming 1-hour bar it shares (formingQuotes: one GMO read of it a run
+      // at most, and none for a pair with no open ride). One small read of
+      // public.macd_rides for all the charts followed: the rides open, and
+      // those reached in the last RIDE_OUT_FRESH_MS. For a chart with an open
+      // ride: the state of the bar now forming from this instance's copy,
+      // else its small row (never worked out here from the bars: none, and
+      // the hour is not judged — the next close's catch-up covers it); the
+      // bar's high and low so far (a pair's from GMO's forming 1-hour bar,
+      // the mid of bid and ask rounded as the chart draws; gold's the
+      // extremes of this hour's recorded minutes); a touch of 96% and the
+      // ride is reached, in this bar, at the newest price on the side it
+      // leaves on (a pair's bid for a BUY and ask for a SELL, gold's newest
+      // minute's close). Then email 2, written from the row, for each ride
+      // reached in the last RIDE_OUT_FRESH_MS to each follower with no row
+      // for it yet (mailRide). Its failure must never cost another pair's,
+      // nor anything above
+      const rideMinute = async (pair: string, rides: MacdRide[]): Promise<JsonRecord | null> => {
+        const gold = pair === GOLD;
+        const open = rides.filter((r) => r.status === "open" && r.entryBar < hourMs);
+        const reached = rides.filter((r) => r.status === "reached" && r.reachedAt !== null && r.reachedAt >= nowMs - RIDE_OUT_FRESH_MS);
+        const out: JsonRecord = { pair, interval: "1h", ride: true, forming: null, state: null, open: open.length, high: null, low: null };
+        if (open.length > 0) {
+          const key = `${pair}|${hourMs}`;
+          let state = rideStateMemo.get(key) ?? null;
+          if (state === null) {
+            const rows = await readRows(`macd_ride_state?pair=eq.${enc(pair)}&bar_time=eq.${enc(isoOf(hourMs))}&select=e12,e26,sig,top119,bottom119`);
+            state = rows.length > 0 ? rideStateFrom(rows[0]) : null;
+            if (state !== null) {
+              if (rideStateMemo.size >= RIDE_STATE_MEMO_MAX) rideStateMemo.clear();
+              rideStateMemo.set(key, state);
+            }
+          }
+          if (state !== null) {
+            out.state = "ok";
+            let bar: { high: number; low: number; leave: (side: RideSide) => number } | null = null;
+            if (gold) {
+              const g = goldHourExtremes(await goldMinutes(), hourMs);
+              if (g) bar = { high: g.high, low: g.low, leave: () => g.close };
+            } else if (!hourQuotes.has(pair) && !formingReads.has(pair) && (Date.now() > deadline || maintenance)) {
+              out.skipped = maintenance ? "maintenance" : "deadline";
+            } else {
+              const quotes = await formingQuotes(pair);
+              const f = quotes ? rideFormingOf(pair, quotes, hourMs, nowMs) : null;
+              if (f) bar = { high: f.high, low: f.low, leave: (side) => rideLeaveAt(side, f.quote) };
+            }
+            if (bar !== null) {
+              out.forming = isoOf(hourMs).slice(0, 19).replace("T", " ");
+              out.high = bar.high;
+              out.low = bar.low;
+              for (const r of open) {
+                const touch = rideTouch(state, rideZoneSideOf(r.side), bar.high, bar.low);
+                if (touch === null) continue;
+                const price = bar.leave(r.side);
+                if (!Number.isFinite(price)) continue;
+                const row = await reachRide(r, { at: nowMs, bar: hourMs, price, late: false, share: touch.share });
+                if (row !== null && row.status === "reached") reached.push(row);
+              }
+            }
+          }
+        }
+        const said = { tags: [] as string[], unsent: [] as string[] };
+        const before = fired.length;
+        try {
+          for (const r of reached) {
+            const sig = rideOutSignal("macdx", "1h", r);
+            if (sig) await sendRide(sig, said);
+          }
+        } finally {
+          out.signals = said.tags;
+          if (said.unsent.length > 0) out.unsent = said.unsent;
+        }
+        // said in the run's record only for a chart with an open ride or a
+        // ride mailed in this run
+        return open.length > 0 || fired.length > before ? out : null;
+      };
+      if (ridePairs.length > 0) {
+        try {
+          const since = enc(`"${isoOf(nowMs - RIDE_OUT_FRESH_MS)}"`);
+          const all = await readRides(`pair=in.(${enc(ridePairs.map((p) => `"${p}"`).join(","))})&or=(status.eq.open,reached_at.gte.${since})`);
+          if (all === null) reads.push({ interval: "1h", ride: true, error: "rides_unread" });
+          else {
+            for (const pair of ridePairs) {
+              const mine = all.filter((r) => r.pair === pair);
+              if (mine.length === 0) continue;
+              try {
+                const read = await rideMinute(pair, mine);
+                if (read) reads.push(read);
+              } catch (err) {
+                console.error("macdx ride failed:", pair, errText(err));
+                reads.push({ pair, interval: "1h", ride: true, error: "failed" });
+              }
+            }
+          }
+        } catch (err) {
+          console.error("macdx rides failed:", errText(err));
+          reads.push({ interval: "1h", ride: true, error: "failed" });
         }
       }
 
@@ -1214,8 +1783,33 @@ Deno.serve(async (req: Request) => {
     // The shares somebody follows under 'stockmacd' whose bar may have closed
     // (in the half hour after one of the session's closes, stockCloseDue),
     // read from Yahoo once a minute at most until that bar is in; the newest
-    // closed bar judged once, its signal mailed to each follower once (the
-    // claim's unique key)
+    // closed bar judged once an instance.
+    // #397 (docs §8.150; research/macdride-spec.md section 6): from v39 what
+    // is judged is the MACD ride, at closes only (no minute is read and no
+    // state kept: every read brings the bars). On a read whose newest closed
+    // bar this instance has not judged (stockRide, below): (1) the share's
+    // rides, one small read of public.macd_rides — the open ones, those whose
+    // entry bar is among the newest RIDE_CATCHUP_BARS closed bars, those
+    // reached in this bar or later whatever their entry bar (rideCloseStep
+    // needs them), and those reached in the last STOCK_FRESH_MS; unread,
+    // nothing of the ride is done and the record says so — never a fallback;
+    // (2) each open ride whose line, at a closed bar after its entry bar, is
+    // at 96% of its edge on that bar's own 600 closed bars (stocks.ts
+    // stockRidesReached: by the close, not the high or low) is reached there
+    // — one patch of a row still open, the price when seen the newest closed
+    // bar's close, late when that bar is not the newest or the newest ended
+    // over STOCK_FRESH_MS ago — and its email 2, written from the row, goes
+    // out at once, before this bar's own email 1 when the bar is a new entry
+    // too; (3) the entry at the newest closed bar while it ended at most
+    // STOCK_FRESH_MS ago (stockRideClose): email 1 once the ride's row is
+    // there (inserted now, or by an earlier run: the same bar is judged again
+    // and again), the notice, or nothing (skip, quiet); (4) email 2 for every
+    // other ride reached in the last STOCK_FRESH_MS to each follower with no
+    // row for it yet (one whose lookup failed in an earlier run). Each mail
+    // under its own rule id, each follower once (mailRide; the claim's unique
+    // key). A share's failure here never costs another share its judgment,
+    // and a bar is held judged by this instance (and its close done) only
+    // once nothing of it is left to try again.
     const stockSweep = async (): Promise<JsonRecord> => {
       const nowMs = Date.now();
       const summary: JsonRecord = { ok: true, mode: "stocks", version: FUNCTION_VERSION, email_configured: emailConfigured };
@@ -1225,8 +1819,117 @@ Deno.serve(async (req: Request) => {
       summary.subscriptions = subs.length;
       if (subs.length === 0) return summary;
       const counts: Record<string, number> = { sent: 0, failed: 0, not_configured: 0, duplicate: 0, not_allowed: 0 };
-      const mail = mailerFor(subs, counts);
       const reads: JsonRecord[] = [];
+      const isoOf = (ms: number) => new Date(ms).toISOString();
+      const enc = encodeURIComponent;
+      const quoted = (ms: number) => enc(`"${isoOf(ms)}"`);
+      // one mail of a ride to the share's followers who have none yet; said
+      // in the run's record only when a row was made for it in this run or
+      // was there already, and, when a follower left got none, why (a plan
+      // with no alerts or a lookup that failed: tried again by the next run)
+      const sendRide = async (sig: IndicatorSignal, said: { tags: string[]; unsent: string[] }) => {
+        const got = await mailRide(sig, subs, counts);
+        if (got.made + got.had > 0) said.tags.push(rideSignalTag(sig));
+        if (got.why) said.unsent.push(`${sig.ride?.mail ?? "in"}(${got.why})`);
+      };
+      // The ride on one share at a read whose newest closed bar is to be
+      // judged (`closed`: its closed bars, oldest first; `newest`: the newest
+      // of them). Its record goes into `out` as it is made, so that a failure
+      // partway leaves what was done. Whether nothing is left to try again:
+      // the rides were read, every write was made, and no follower was left
+      // without a mail for a reason the next run may not meet.
+      const stockRide = async (sym: string, closed: StockBar[], newest: StockBar, out: { ride: JsonRecord; tags: string[]; unsent: string[] }): Promise<boolean> => {
+        const from = closed[Math.max(0, closed.length - RIDE_CATCHUP_BARS)].open_ms;
+        let rides = await readRides(
+          `pair=eq.${enc(sym)}&or=(status.eq.open,entry_bar.gte.${quoted(from)},reached_bar.gte.${quoted(newest.open_ms)},reached_at.gte.${quoted(nowMs - STOCK_FRESH_MS)})`,
+        );
+        if (rides === null) {
+          out.ride.rows = "unread";
+          return false;
+        }
+        out.ride.rows = "ok";
+        let written = true;
+        // the rides reached: the row patched while it is open, then email 2
+        // from the row as it stands (another run's numbers when it got there
+        // first)
+        const caught: JsonRecord[] = [];
+        out.ride.caught = caught;
+        const mailed = new Set<MacdRide>();
+        for (const c of stockRidesReached(sym, closed, rides, nowMs)) {
+          const told: JsonRecord = { side: c.ride.side, entry_bar: isoOf(c.ride.entryBar), reached_bar: isoOf(c.bar), late: c.late };
+          caught.push(told);
+          const row = await reachRide(c.ride, { at: nowMs, bar: c.bar, price: c.price, late: c.late, share: c.share });
+          if (row === null || row.status !== "reached") {
+            told.error = "not_written";
+            written = false;
+            continue;
+          }
+          if (row.reachedBar !== null) told.reached_bar = isoOf(row.reachedBar);
+          if (row.late !== null) told.late = row.late;
+          rides = rides.map((x) => (x === c.ride ? row : x));
+          mailed.add(row);
+          const sig = rideOutSignal("stockmacd", "1h", row);
+          if (sig) await sendRide(sig, out);
+        }
+        // the entry at the newest closed bar, on the rows as they stand now
+        const close = stockRideClose(sym, closed, rides.map(rideRowOf), nowMs);
+        out.ride.step = close.step.step;
+        if (!close.fresh) out.ride.fresh = false;
+        const entry = close.entry;
+        if (entry !== null && close.step.step === "at") {
+          await sendRide(rideCloseSignal("stockmacd", sym, "1h", "at", entry, { openMs: newest.open_ms, closeMs: newest.end, mid: newest.close, paid: newest.close }), out);
+        } else if (entry !== null && close.step.step === "in") {
+          // email 1: the ride's row first (a share has one price: the price
+          // paid is the bar's close), then the mail, written from the row
+          let own = rides.find((x) => x.side === entry.side && x.entryBar === newest.open_ms) ?? null;
+          if (
+            own === null &&
+            (await rideMailThere(rideCloseSignal("stockmacd", sym, "1h", "at", entry, { openMs: newest.open_ms, closeMs: newest.end, mid: newest.close, paid: newest.close })))
+          ) {
+            // the bar's first decision stands: its notice is out (an
+            // earlier read of this bar had the line at 96% already), so no
+            // ride is opened on a read whose close has moved; nothing more
+            // is mailed
+            out.ride.step = "at";
+            out.ride.kept = true;
+          } else {
+            if (own === null) {
+              own = await openRide({
+                pair: sym,
+                side: entry.side,
+                entryBar: newest.open_ms,
+                entryClosedAt: newest.end,
+                entryPrice: newest.close,
+                entryMid: newest.close,
+                share0: shareOf(entry.z, entry.zside),
+              });
+            }
+            if (own === null) {
+              out.ride.opened = "no_row";
+              written = false;
+            } else if (own.status !== "open") {
+              // the bar judged again after its ride has reached 96%: the
+              // ride is over; email 1 is not mailed any more (a follower who
+              // has none gets email 2 alone)
+              out.ride.over = true;
+            } else {
+              await sendRide(rideCloseSignal("stockmacd", sym, "1h", "in", entry, { openMs: own.entryBar, closeMs: own.entryClosedAt, mid: own.entryMid, paid: own.entryPrice }), out);
+            }
+          }
+        }
+        // email 2 for the rides reached in the last STOCK_FRESH_MS by an
+        // earlier run, to the followers who have no row for it yet. (A share
+        // is read only while a close is due, STOCK_POLL_MS from it: such a
+        // follower is tried again in those minutes, and at a later close's
+        // reads while the reach is at most STOCK_FRESH_MS old; between them
+        // nothing is read)
+        for (const r of rides) {
+          if (mailed.has(r) || r.status !== "reached" || r.reachedAt === null || r.reachedAt < nowMs - STOCK_FRESH_MS) continue;
+          const sig = rideOutSignal("stockmacd", "1h", r);
+          if (sig) await sendRide(sig, out);
+        }
+        return written && out.unsent.length === 0;
+      };
       for (const sym of [...new Set(subs.map((x) => x.pair))]) {
         const due = stockCloseDue(sym, nowMs);
         if (due === null || stockDone.get(sym) === due) continue;
@@ -1252,23 +1955,45 @@ Deno.serve(async (req: Request) => {
           continue;
         }
         const step = stockSweepOf(sym, got.bars, due, stockJudged.get(sym), nowMs);
-        if (step.done) stockDone.set(sym, due);
         if (step.noSession) {
+          stockDone.set(sym, due);
           reads.push({ pair: sym, due: new Date(due).toISOString(), skipped: "no_session" });
           continue;
         }
-        if (step.judge && step.newest) stockJudged.set(sym, step.newest.open_ms);
-        if (step.signals.length > 0) await mail(step.signals);
+        // #397: the ride at this read, in its own try / catch
+        const said: { ride: JsonRecord; tags: string[]; unsent: string[] } = { ride: {}, tags: [], unsent: [] };
+        let settled = true;
+        if (step.judge && step.newest) {
+          try {
+            settled = await stockRide(sym, step.closed, step.newest, said);
+          } catch (err) {
+            console.error("stockmacd failed:", sym, errText(err));
+            said.ride.error = "failed";
+            settled = false;
+          }
+          if (said.unsent.length > 0) said.ride.unsent = said.unsent;
+        }
+        // (#397: held judged, and the close done, only once nothing is left
+        // to try again: until then the next run reads the share and judges
+        // the bar again, as a fresh instance does)
+        if (settled) {
+          if (step.done) stockDone.set(sym, due);
+          if (step.judge && step.newest) stockJudged.set(sym, step.newest.open_ms);
+        }
         reads.push({
           pair: sym,
           due: new Date(due).toISOString(),
+          bars: step.closed.length,
           newest: step.newest ? step.newest.datetime : null,
           close: step.newest ? step.newest.close : null,
           market_time: got.marketMs === null ? null : new Date(got.marketMs).toISOString(),
           judged: step.judge,
-          signals: step.signals.map((x) => `stockmacd:${x.side}`),
+          // (#397: a ride's mails as "stockmacd:BUY" email 1,
+          // "stockmacd-at:BUY" the notice and "stockmacd-out:BUY" email 2)
+          signals: said.tags,
           // how long after the bar closed it was judged, ms
           judged_after_ms: step.judge && step.newest ? Date.now() - step.newest.end : null,
+          ...(step.judge ? { ride: said.ride } : {}),
         });
       }
       return { ...summary, reads, ...counts };

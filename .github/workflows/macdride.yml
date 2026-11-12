@@ -1,0 +1,145 @@
+# The owner (2026-11-12): 「MACD 90%→96%: 足の確定で入ると 96% まで行く メールをこれに変更、なので、一つのペアで2回メールを
+# 送る」 (#397, docs §8.150). The replay of research/macdride-spec.md section 9 (research/macdride-replay.ts): the code
+# the function runs (supabase/functions/_shared/macd-ride.ts) driven bar by bar and minute by minute over the five
+# pairs' bars, with the rides in memory, under two readings of the hour's high and low so far: R1, the study's
+# (research/macd90m.ts way C, docs §8.149), and R2, GMO's forming 1-hour bar as the function reads it.
+#
+#   syn   two seeded walks, each written as GMO's files with the study's rows on it (research/macd90m.ts
+#         MODE=walkfiles, as it is: that file exports nothing, so the replay reads its rows from its files); then the
+#         replay on both: R1 must equal the study's way C rows and its summary's numbers, the catch-up must find
+#         nothing the minutes did not, and R2 and the catch-up alone are held against each other
+#   real  GMO's real 1-hour and 1-minute bars (research/.cache, fetched when missing), after syn passed: the study's
+#         rows (research/macd90m.ts, as it is), then the replay: R1 must equal them or the job fails; then R2's numbers
+#
+# GitHub's runners reach GMO's public price API, which the development container cannot. Read-only: public files
+# fetched, a report printed; it writes nothing to the repository and holds no secret.
+name: Research macdride
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/macdride-replay.ts
+      - supabase/functions/_shared/macd-ride.ts
+      - .github/workflows/macdride.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  START: "2024-01-01T00:00:00Z"
+  END: "2026-11-10T21:00:00Z"
+  LOAD_FROM: "2023-10-01T00:00:00Z"
+
+jobs:
+  syn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      LOAD_FROM: "2024-01-01T00:00:00Z"
+      START: "2024-03-01T00:00:00Z"
+      END: "2024-07-01T00:00:00Z"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: Two walks as GMO's files, and the study's rows on each (research/macd90m.ts, as it is)
+        env:
+          MODE: walkfiles
+        run: |
+          for s in 1 2; do
+            SEEDS=$s OUT=research/out/macdride/walk$s deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/macd90m.ts
+          done
+      - name: The replay on both walks (R1 against the study's rows, the catch-up, R2, the steps said again from the rows)
+        env:
+          MODE: synthetic
+          SEEDS: "1,2"
+          OUT: research/out/macdride
+        run: >
+          deno run --v8-flags=--max-old-space-size=8192
+          --allow-read=. --allow-write=research/out --allow-env
+          research/macdride-replay.ts
+
+  real:
+    needs: [syn]
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      STUDY: research/out/macd90m
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      # GMO's day files never change once the day has rolled; each restore only adds files (the 1-minute ones are
+      # ownerhold's and macdlive's, the 1-hour ones trend's, macdlive's and macd90's; then what macd90m's runs and
+      # this workflow's own earlier runs kept)
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-1min-none
+          restore-keys: gmo-1min-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-macdlive-none
+          restore-keys: gmo-macdlive-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-macd90-none
+          restore-keys: gmo-macd90-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-macd90m-none
+          restore-keys: gmo-macd90m-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-macdride-none
+          restore-keys: gmo-macdride-
+      - name: The study's rows (research/macd90m.ts, as it is; its numbers go to files, none printed here)
+        env:
+          MODE: real
+          OUT: research/out/macd90m
+        run: |
+          mkdir -p $OUT
+          deno run --v8-flags=--max-old-space-size=12288 \
+            --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env \
+            research/macd90m.ts
+          ls -la $OUT
+          sha256sum $OUT/rows.csv $OUT/summary.json
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache
+          key: gmo-macdride-${{ github.run_id }}
+      - name: The replay (R1 must equal the study's rows or this fails; then R2's numbers)
+        env:
+          MODE: real
+          OUT: research/out/macdride
+        run: |
+          mkdir -p $OUT
+          deno run --v8-flags=--max-old-space-size=12288 \
+            --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env \
+            research/macdride-replay.ts
+          ls -la $OUT
+          sha256sum $OUT/rows-R1.csv $OUT/rows-R2.csv $OUT/r2-vs-r1.csv $OUT/summary.json
+      # also when the replay stopped: its R1 rows and the study's are what the differences are read from
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macdride-${{ github.run_id }}
+          path: |
+            research/out/macdride
+            research/out/macd90m/rows.csv
+            research/out/macd90m/summary.json
+      - name: The numbers (R1 equalled the study's rows)
+        env:
+          MODE: print
+          OUT: research/out/macdride
+        run: deno run --allow-read=. --allow-env research/macdride-replay.ts

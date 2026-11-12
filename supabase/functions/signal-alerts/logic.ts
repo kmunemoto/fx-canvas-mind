@@ -325,6 +325,18 @@ export const tfLabel = (lang: Lang, interval: string) => TF_LABEL[lang][interval
 export const clock = (ms: number, offsetHours: number) =>
   new Date(ms + offsetHours * HOUR).toISOString().slice(0, 16).replace("T", " ");
 
+// #397 (docs §8.150): how long a ride was held, as email 2 says it (the pairs', gold's and the shares'): minutes
+// under 2 hours, then hours and minutes under 2 days, then days and hours
+export const rideHeldText = (ms: number, lang: Lang): string => {
+  const min = Math.max(0, Math.floor(ms / 60_000));
+  if (min < 1) return lang === "en" ? "under a minute" : "1分未満";
+  if (min < 120) return lang === "en" ? `${min} minute${min === 1 ? "" : "s"}` : `${min}分`;
+  const h = Math.floor(min / 60);
+  if (h < 48) return lang === "en" ? `${h} hours ${min % 60} minutes` : `${h}時間${min % 60}分`;
+  const d = Math.floor(h / 24);
+  return lang === "en" ? `${d} days ${h % 24} hours` : `${d}日${h % 24}時間`;
+};
+
 export interface Mail {
   subject: string;
   text: string;
@@ -489,9 +501,11 @@ export const renderSignalMail = (s: FiredSignal, lang: Lang): Mail => {
 // #291: and the owner's video's way on gold's 1-minute chart; #385: and AMD Po3's
 // #387: and the owner's video's EMA 20 / 200 way; #391: and the MACD email on shares
 // #395: and a sharp rise or fall of the 1-hour bar
+// #397: 'macdx' is named 「MACD の流れ」 / "MACD ride" from v39 (it enters with the flow, a BUY near the pane's top:
+// 「山・谷」 / "peak/valley" would read the other way round; docs §8.150)
 const RULE_LABEL: Record<Lang, Record<string, string>> = {
-  ja: { rsi_sar: "RSI＋SAR", gainz: "GA型", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD の山・谷", sweepx: "流動性狩り＋EMAクロス", amdpo3: "AMD Po3", emarm: "EMAクロス＋リターンムーブ", stockmacd: "株の MACD", spike: "急騰・急落" },
-  en: { rsi_sar: "RSI + SAR", gainz: "GA style", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD peak/valley", sweepx: "Liquidity sweep + EMA cross", amdpo3: "AMD Po3", emarm: "EMA cross + return move", stockmacd: "stock MACD", spike: "sharp rise / fall" },
+  ja: { rsi_sar: "RSI＋SAR", gainz: "GA型", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD の流れ", sweepx: "流動性狩り＋EMAクロス", amdpo3: "AMD Po3", emarm: "EMAクロス＋リターンムーブ", stockmacd: "株の MACD", spike: "急騰・急落" },
+  en: { rsi_sar: "RSI + SAR", gainz: "GA style", qtrend: "Q-Trend", ultra: "ULTRA", macdx: "MACD ride", sweepx: "Liquidity sweep + EMA cross", amdpo3: "AMD Po3", emarm: "EMA cross + return move", stockmacd: "stock MACD", spike: "sharp rise / fall" },
 };
 
 export const renderTestMail = (subs: Array<{ pair: string; interval: string; rule?: string }>, lang: Lang): Mail => {
@@ -502,14 +516,14 @@ export const renderTestMail = (subs: Array<{ pair: string; interval: string; rul
   if (lang === "en") {
     const list = subs.length === 0 ? "none yet" : subs.map(label).join(", ");
     return assemble("[Sextant] Test email alert", [
-      "This is a test. When the rule you chose (RSI + Parabolic SAR, the GA-style rule, Q-Trend, ULTRA, MACD peak/valley, Liquidity sweep + EMA cross, AMD Po3 or EMA cross + return move) fires a BUY or SELL on a chart you follow, the alert arrives at this address.",
+      "This is a test. When the rule you chose (RSI + Parabolic SAR, the GA-style rule, Q-Trend, ULTRA, MACD ride, Liquidity sweep + EMA cross, AMD Po3 or EMA cross + return move) fires a BUY or SELL on a chart you follow, the alert arrives at this address.",
       `Charts you follow: ${list}`,
       `Settings → Email alerts in the app:\n${APP_URL}`,
     ]);
   }
   const list = subs.length === 0 ? "まだありません" : subs.map(label).join("、");
   return assemble("【Sextant】メール通知のテスト", [
-    "これはテストです。登録したチャートで、選んだルール（RSI＋パラボリックSAR、GA型、Q-Trend、ULTRA、MACD の山・谷、流動性狩り＋EMAクロス、AMD Po3、EMAクロス＋リターンムーブ）の買い（BUY）・売り（SELL）のサインが出ると、このアドレスに届きます。",
+    "これはテストです。登録したチャートで、選んだルール（RSI＋パラボリックSAR、GA型、Q-Trend、ULTRA、MACD の流れ、流動性狩り＋EMAクロス、AMD Po3、EMAクロス＋リターンムーブ）の買い（BUY）・売り（SELL）のサインが出ると、このアドレスに届きます。",
     `登録中のチャート: ${list}`,
     `アプリの「設定」→「メール通知」:\n${APP_URL}`,
   ]);

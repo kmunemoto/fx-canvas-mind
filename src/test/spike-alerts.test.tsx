@@ -245,7 +245,15 @@ describe("#395 the email (signal-alerts v36)", () => {
     expect(fn).not.toContain("spikeMailed");
     expect(fn).toMatch(/try \{\s+reads\.push\(await spikeRead\(pair\)\);\s+\} catch \(err\) \{\s+console\.error\("spike failed:", pair, err\);/);
     expect(fn).toContain("spike: { pairs: SPIKE_PAIRS, intervals: SPIKE_INTERVALS },");
-    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v38-2026-11-07T04:00:00Z";');
+    // #397 (v39): what it reads of the hour now is read once a run and shared with the MACD ride's look each minute: a
+    // pair's forming 1-hour bar from GMO (the read its range was made from in the run counts as that read), gold's
+    // recorded minutes
+    expect(fn).toContain("quotes = await formingQuotes(pair);");
+    expect(fn).toContain("if (quotes && quotes.length > 0) formingReads.set(pair, quotes);");
+    expect(fn).toContain("const minutes = await goldMinutes();");
+    expect(fn.match(/fetchLiveQuotes\(pair, "1h", nowMs, deadline, chartFetcher\(latestCloseMs\("1h", nowMs\), HOUR\), spikeOpens\.length\)/g)).toHaveLength(1);
+    expect(fn.match(/gold_tick_bars\?minute=gte\./g)).toHaveLength(1);
+    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v39-2026-11-12T12:00:00Z";');
     expect(renderTestMail([{ pair: "USD/JPY", interval: "1h", rule: "spike" }], "ja").text).toContain("登録中のチャート: ドル/円 1時間足（急騰・急落）");
     const mig = readFileSync("supabase/migrations/20261105060000_signal_alert_spike.sql", "utf8");
     expect(mig).toContain("check (rule = any (array['rsi_sar', 'gainz', 'qtrend', 'ultra', 'macdx', 'sweepx', 'amdpo3', 'emarm', 'stockmacd', 'spike']));");

@@ -169,6 +169,9 @@ interface MTrade {
   kEntry: number;
   A: WayOut | null;
   B: WayOut | null;
+  // way C (held until it gets there; the owner 2026-11-12): null when already or skipped
+  C: WayOut | null;
+  cSkipped: boolean;
 }
 
 // a touch read at minute k: the line there with the minute's price toward the side (and that price)
@@ -177,7 +180,7 @@ const touchAt = (a: PairAll, j: number, k: number, zs: Side): { z: Zone; x: numb
   return { z: liveZone(a.prep[j] as Prepared, x), x };
 };
 
-const follow = (a: PairAll, tr: MTrade, way: "A" | "B", seen?: Array<{ j: number; k: number; x: number; z: Zone }>): WayOut => {
+const follow = (a: PairAll, tr: MTrade, way: "A" | "B" | "C", seen?: Array<{ j: number; k: number; x: number; z: Zone }>): WayOut => {
   const { d, m1, dec } = a;
   const pe = P(tr.entry, dec);
   let worst = 0;
@@ -202,7 +205,8 @@ const follow = (a: PairAll, tr: MTrade, way: "A" | "B", seen?: Array<{ j: number
     }
     const zj = a.z[j];
     if (zj === null) throw new Error(`${d.pair} ${iso(d.t[j])}: no zone on a followed bar`);
-    const failed = way === "A" ? !atShare(zj, tr.zside, ENTER) : tr.zside === "top" ? zj.m <= 0 : zj.m >= 0;
+    // way C has no failure: held until it is reached
+    const failed = way === "C" ? false : way === "A" ? !atShare(zj, tr.zside, ENTER) : tr.zside === "top" ? zj.m <= 0 : zj.m >= 0;
     if (failed) return done("failed", d.t[j] + HOUR, tr.side === "BUY" ? d.bc[j] : d.ac[j], shareOf(zj, tr.zside));
   }
   const last = d.n - 1;
@@ -230,6 +234,8 @@ const tradesOfPair = (a: PairAll, seen?: Array<{ j: number; k: number; x: number
       kEntry: -1,
       A: null,
       B: null,
+      C: null,
+      cSkipped: false,
     };
     out.push(tr);
   }
@@ -266,6 +272,8 @@ const tradesOfPair = (a: PairAll, seen?: Array<{ j: number; k: number; x: number
         kEntry: k,
         A: null,
         B: null,
+        C: null,
+        cSkipped: false,
       });
       break;
     }
@@ -274,6 +282,20 @@ const tradesOfPair = (a: PairAll, seen?: Array<{ j: number; k: number; x: number
     if (tr.already) continue;
     tr.A = follow(a, tr, "A", seen);
     tr.B = follow(a, tr, "B");
+  }
+  // way C: within a way in and a side, the entries in time order (out holds each way's in time order); an entry
+  // before the last taken one's moment out (or while it is open) is skipped
+  const heldTo = new Map<string, number>();
+  for (const tr of out) {
+    if (tr.already) continue;
+    const key = `${tr.way}|${tr.zside}`;
+    const until = heldTo.get(key);
+    if (until !== undefined && tr.T0 < until) {
+      tr.cSkipped = true;
+      continue;
+    }
+    tr.C = follow(a, tr, "C");
+    heldTo.set(key, tr.C.result === "open" ? Infinity : tr.C.T);
   }
   return out;
 };
@@ -309,11 +331,54 @@ const wayStats = (ws: WayOut[]) => {
 };
 type WayStats = ReturnType<typeof wayStats>;
 
+// the value at rank ceil(0.9 n) of the values in ascending order
+const p90 = (xs: number[]): number | null => {
+  if (xs.length === 0) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  return s[Math.floor((9 * s.length + 9) / 10) - 1];
+};
+const cStats = (ts: MTrade[]) => {
+  const taken = ts.filter((t) => t.C !== null).map((t) => t.C as WayOut);
+  const reached = taken.filter((w) => w.result === "reached");
+  const open = taken.filter((w) => w.result === "open");
+  let pipsSum = 0;
+  for (const w of reached) pipsSum += w.pips;
+  let openPipsSum = 0;
+  for (const w of open) openPipsSum += w.pips;
+  const maxOf = (xs: number[]) => (xs.length ? Math.max(...xs) : null);
+  return {
+    reached: reached.length,
+    open: open.length,
+    skipped: ts.filter((t) => t.cSkipped).length,
+    plus: reached.filter((w) => w.pips > 0).length,
+    minus: reached.filter((w) => w.pips < 0).length,
+    pipsSum: reached.length ? pipsSum : null,
+    pipsMean: mean(reached.map((w) => w.pips)),
+    pipsMedian: median(reached.map((w) => w.pips)),
+    pipsMin: reached.length ? Math.min(...reached.map((w) => w.pips)) : null,
+    maeMedian: median(reached.map((w) => w.mae)),
+    maeP90: p90(reached.map((w) => w.mae)),
+    maeMax: maxOf(reached.map((w) => w.mae)),
+    minutesMedian: median(reached.map((w) => w.minutes)),
+    minutesP90: p90(reached.map((w) => w.minutes)),
+    minutesMax: maxOf(reached.map((w) => w.minutes)),
+    within60: reached.filter((w) => w.minutes <= 60).length,
+    within1440: reached.filter((w) => w.minutes <= 1440).length,
+    within10080: reached.filter((w) => w.minutes <= 10080).length,
+    openPipsSum: open.length ? openPipsSum : null,
+    openPipsWorst: open.length ? Math.min(...open.map((w) => w.pips)) : null,
+    openMaeMax: maxOf(open.map((w) => w.mae)),
+    openMinutesMax: maxOf(open.map((w) => w.minutes)),
+  };
+};
+type CStats = ReturnType<typeof cStats>;
+
 const groupOf = (ts: MTrade[]) => ({
   entries: ts.length,
   already: ts.filter((t) => t.already).length,
   A: wayStats(ts.filter((t) => !t.already).map((t) => t.A as WayOut)),
   B: wayStats(ts.filter((t) => !t.already).map((t) => t.B as WayOut)),
+  C: cStats(ts.filter((t) => !t.already)),
 });
 type Group = ReturnType<typeof groupOf>;
 
@@ -340,14 +405,16 @@ const summaryOf = (trades: MTrade[], as: PairAll[]) => ({
   ways: { close: groupsOf(trades.filter((t) => t.way === "close")), moment: groupsOf(trades.filter((t) => t.way === "moment")) },
 });
 
-const HEAD = ["way", "pair", "open", "T0", "side", "entry", "share0", "already", "A_result", "A_T", "A_exit", "A_pips", "A_mae", "A_minutes", "A_share", "B_result", "B_T", "B_exit", "B_pips", "B_mae", "B_minutes", "B_share"];
+const HEAD = ["way", "pair", "open", "T0", "side", "entry", "share0", "already", "A_result", "A_T", "A_exit", "A_pips", "A_mae", "A_minutes", "A_share", "B_result", "B_T", "B_exit", "B_pips", "B_mae", "B_minutes", "B_share", "C_result", "C_T", "C_exit", "C_pips", "C_mae", "C_minutes", "C_share"];
 const wayCells = (w: WayOut | null) => (w ? [w.result, iso(w.T), String(w.exit), String(w.pips), String(w.mae), String(w.minutes), String(w.share)] : ["", "", "", "", "", "", ""]);
 const csvOf = (ts: MTrade[]): string =>
-  [HEAD.join(","), ...ts.map((t) => [t.way, t.pair, iso(t.open), iso(t.T0), t.side, String(t.entry), String(t.share0), t.already ? "1" : "0", ...wayCells(t.A), ...wayCells(t.B)].join(","))].join("\n") + "\n";
+  [HEAD.join(","), ...ts.map((t) => [t.way, t.pair, iso(t.open), iso(t.T0), t.side, String(t.entry), String(t.share0), t.already ? "1" : "0", ...wayCells(t.A), ...wayCells(t.B), ...(t.cSkipped ? ["skipped", "", "", "", "", "", ""] : wayCells(t.C))].join(","))].join("\n") + "\n";
 
 const fmt = (v: number | null, k = 2) => (v === null ? "-" : v.toFixed(k));
 const printWay = (name: string, w: WayStats) =>
   `${name}: reached ${w.reached} failed ${w.failed} open ${w.open} rate ${fmt(w.rate, 1)}% | pips sum ${fmt(w.pipsSum, 1)} mean ${fmt(w.pipsMean)} median ${fmt(w.pipsMedian)} (reached ${fmt(w.reachedPipsMean)}, failed ${fmt(w.failedPipsMean)}) | mae median ${fmt(w.maeMedian, 1)} max ${fmt(w.maeMax, 1)} | minutes median ${fmt(w.minutesMedian, 0)} max ${fmt(w.minutesMax, 0)} | open pips sum ${fmt(w.openPipsSum, 1)} worst ${fmt(w.openPipsWorst, 1)}`;
+const printC = (c: CStats) =>
+  `C (held until reached): reached ${c.reached} (plus ${c.plus}, minus ${c.minus}) open ${c.open} skipped ${c.skipped} | pips sum ${fmt(c.pipsSum, 1)} mean ${fmt(c.pipsMean)} median ${fmt(c.pipsMedian)} min ${fmt(c.pipsMin, 1)} | mae median ${fmt(c.maeMedian, 1)} p90 ${fmt(c.maeP90, 1)} max ${fmt(c.maeMax, 1)} | minutes median ${fmt(c.minutesMedian, 0)} p90 ${fmt(c.minutesP90, 0)} max ${fmt(c.minutesMax, 0)} | within 1h ${c.within60} 1d ${c.within1440} 1w ${c.within10080} | open pips sum ${fmt(c.openPipsSum, 1)} worst ${fmt(c.openPipsWorst, 1)} mae max ${fmt(c.openMaeMax, 1)} minutes max ${fmt(c.openMinutesMax, 0)}`;
 const printSummary = (s: ReturnType<typeof summaryOf>) => {
   console.log(`meta ${JSON.stringify(s.meta)}`);
   console.log(`pairs ${JSON.stringify(s.pairs)}`);
@@ -357,6 +424,7 @@ const printSummary = (s: ReturnType<typeof summaryOf>) => {
       console.log(`${k.padEnd(8)} entries ${g.entries} already ${g.already}`);
       console.log(`  ${printWay("A (the band)", g.A)}`);
       console.log(`  ${printWay("B (zero line)", g.B)}`);
+      console.log(`  ${printC(g.C)}`);
     }
   }
 };
@@ -434,7 +502,21 @@ const checkWalk = (seed: number): number => {
     for (const t of trades) {
       if (t.already !== (t.A === null && t.B === null)) bad(`${pair} ${iso(t.T0)}: already and the ways disagree`);
       if (t.A && t.B && t.A.result === "reached" && !(t.B.result === "reached" && t.B.T === t.A.T)) bad(`${pair} ${iso(t.T0)} ${t.way}: A reached but B not at the same moment`);
+      // way C: taken or skipped but not both; reached with A reached is A's trade; never out before A or B
+      if (!t.already && (t.C === null) !== t.cSkipped) bad(`${pair} ${iso(t.T0)} ${t.way}: C neither taken nor skipped (or both)`);
+      if (t.C && t.A && t.A.result === "reached" && !(t.C.result === "reached" && t.C.T === t.A.T && t.C.pips === t.A.pips && t.C.mae === t.A.mae)) bad(`${pair} ${iso(t.T0)} ${t.way}: C differs from a reached A`);
+      if (t.C && t.A && t.B && (t.C.T < t.A.T || t.C.T < t.B.T)) bad(`${pair} ${iso(t.T0)} ${t.way}: C out before A or B`);
       if (t.share0 < ENTER) bad(`${pair} ${iso(t.T0)} ${t.way}: share0 ${t.share0} under 90%`);
+    }
+    // no two taken C trades of one way in and side overlap
+    for (const way of ["close", "moment"] as Way[]) {
+      for (const zs of ["top", "bottom"] as Side[]) {
+        let until = -Infinity;
+        for (const t of trades.filter((x) => x.way === way && x.zside === zs && x.C !== null)) {
+          if (t.T0 < until) bad(`${pair} ${iso(t.T0)} ${way}: a C trade taken while another was held`);
+          until = (t.C as WayOut).result === "open" ? Infinity : (t.C as WayOut).T;
+        }
+      }
     }
     // the look-ahead check on a sample of each way in
     for (const way of ["close", "moment"] as Way[]) {
@@ -445,6 +527,7 @@ const checkWalk = (seed: number): number => {
             [t.T0, (u) => u.side === t.side && u.entry === t.entry && u.share0 === t.share0 && u.already === t.already],
             [(t.A as WayOut).T, (u) => sameWay(u.A, t.A)],
             [(t.B as WayOut).T, (u) => (t.B as WayOut).result === "open" || sameWay(u.B, t.B)],
+            [t.C && t.C.result !== "open" ? t.C.T : END, (u) => u.cSkipped === t.cSkipped && (t.C === null || t.C.result === "open" || sameWay(u.C, t.C))],
           ];
           for (const [cut, same] of cuts) {
             const again = tradesOfPair(synthAll(pair, poisoned(m, cut, pips))).find((u) => u.way === way && u.T0 === t.T0);
@@ -460,12 +543,14 @@ const checkWalk = (seed: number): number => {
   for (const way of ["close", "moment"] as Way[]) {
     for (const [k, g] of Object.entries(s.ways[way])) {
       for (const w of [g.A, g.B]) if (w.reached + w.failed + w.open + g.already !== g.entries) bad(`${way} ${k}: the counts do not add up`);
+      if (g.C.reached + g.C.open + g.C.skipped + g.already !== g.entries || g.C.plus + g.C.minus > g.C.reached) bad(`${way} ${k}: the C counts do not add up`);
     }
     const g = s.ways[way].all;
     if (g.A.reached === 0 || g.A.failed === 0) bad(`${way}: the walk has no reached or no failed trade`);
     console.log(`walk seed ${seed} ${way}: entries ${g.entries} already ${g.already}`);
     console.log(`  ${printWay("A", g.A)}`);
     console.log(`  ${printWay("B", g.B)}`);
+    console.log(`  ${printC(g.C)}`);
   }
   console.log(`walk seed ${seed}: zones compared ${zonesCompared}; look-ahead compared ${lookahead}`);
   if (zonesCompared === 0 || lookahead === 0) bad("the checks compared nothing");

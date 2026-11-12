@@ -17,6 +17,8 @@ export type AlertStatus = "pending" | "sent" | "failed" | "not_configured" | "sk
 // #387: and the owner's video's EMA 20 / 200 way, on the six's 15-minute chart
 // #391: and the MACD email on shares, the 22 shares' 1-hour chart
 // #395: and a sharp rise or fall of the 1-hour bar, on the six's 1-hour chart
+// #397: the MACD peak-and-valley email is now the "MACD ride" (docs §8.150): two emails a ride,
+// the keys macdx and stockmacd stay
 export type AlertRule = "rsi_sar" | "gainz" | "qtrend" | "ultra" | "macdx" | "sweepx" | "amdpo3" | "emarm" | "stockmacd" | "spike";
 export const ALERT_RULES: AlertRule[] = ["rsi_sar", "gainz", "qtrend", "ultra", "macdx", "sweepx", "amdpo3", "emarm", "stockmacd", "spike"];
 export type IndicatorAlertRule = "qtrend" | "ultra" | "macdx" | "sweepx" | "amdpo3" | "emarm" | "stockmacd" | "spike";
@@ -32,6 +34,16 @@ const ruleOfId = (v: unknown): AlertRule => {
   if (typeof v !== "string") return "rsi_sar";
   for (const r of ["gainz", "qtrend", "ultra", "macdx", "sweepx", "amdpo3", "emarm", "stockmacd", "spike"] as const) if (v.startsWith(r)) return r;
   return "rsi_sar";
+};
+
+// #397: which of the MACD ride's three mails a row is, from the full rule id
+// ("macdx_12_26_9_w600_1h_ride90to96of120_in_v9", "..._at_v9", "..._out_v9"; the
+// shares' start with "stockmacd"); null for any other row, an old v8 one included
+export type RideMail = "in" | "at" | "out";
+const rideOfId = (v: unknown): RideMail | null => {
+  if (typeof v !== "string") return null;
+  const m = /^(?:macdx|stockmacd)_.*_ride90to96of120_(in|at|out)_/.exec(v);
+  return m ? (m[1] as RideMail) : null;
 };
 
 // #108: what a recorded signal did after it fired
@@ -73,6 +85,10 @@ export interface AlertRow {
   id: string;
   kind: "signal" | "test";
   rule: AlertRule;
+  // #397: the MACD ride's mail this row is: "in" = email 1 (an entry), "at" = the
+  // notice (already at 96%), "out" = email 2 (the line reached 96%; entry = the
+  // first email's price, target = the price when seen); null for every other row
+  ride: RideMail | null;
   pair: string | null;
   interval: string | null;
   side: "BUY" | "SELL" | null;
@@ -198,6 +214,7 @@ const alertRow = (v: unknown): AlertRow | null => {
     id,
     kind: r.kind,
     rule: ruleOfId(r.rule),
+    ride: rideOfId(r.rule),
     pair: str(r.pair),
     interval: str(r.interval),
     side: r.side === "BUY" || r.side === "SELL" ? r.side : null,

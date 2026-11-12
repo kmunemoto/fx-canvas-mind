@@ -46,6 +46,8 @@ on:
       - supabase/functions/_shared/ema-return.ts
       - supabase/functions/_shared/macd-extreme.ts
       - supabase/functions/_shared/macd-level.ts
+      # #397 (docs §8.150): the MACD ride's shared code, imported by signal-alerts/indicators.ts and stocks.ts
+      - supabase/functions/_shared/macd-ride.ts
       - supabase/functions/_shared/macd.ts
       - supabase/functions/_shared/market-hours.ts
       - supabase/functions/_shared/pair-names.ts
