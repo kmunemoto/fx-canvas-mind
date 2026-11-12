@@ -168,6 +168,39 @@ scen("26 go-live at the entry bar's open", D, "", lambda rows: want(line(rows, P
 scen("27 go-live one bar after the entry bar", D, "", lambda rows: want(line(rows, P, B, S, "in")["verdict"] == "ok" and "before_go_live" in line(rows, P, B, S, "in")["data"].get("why", ""), "a mail before go-live is not told"), live=B + HOUR)
 scen("28 go-live one bar after the entry bar, no email 1", D, f"delete from public.signal_alerts where {where_in};",
      lambda rows: want(line(rows, P, B, S, "in")["verdict"] == "not_mailable" and line(rows, P, B, S, "in")["data"]["why"] == "before_go_live", "an entry before go-live is not not_mailable"), live=B + HOUR)
+# The sources of the highs and lows, one at a time and by the hour: the table is made to say the ride was reached one bar EARLIER (where nothing touches: scenario 09), and a
+# spike is put into that bar alone, in one source: the bar's high for a BUY ride, its low for a SELL ride. The recount must then find the touch in that very bar, from that source.
+dtq = lambda ms: dt.datetime.fromtimestamp(ms / 1000, UTC).strftime("%Y-%m-%d %H:%M:%S")
+for side in ("BUY", "SELL"):
+    got = [(i, o) for i, o in same if i["side"] == side]
+    if not got:
+        print(f"(no {side} ride entered and reached in one day: its spike scenarios are not played)")
+        continue
+    i2, o2 = got[0]
+    P2, B2, R2 = i2["pair"], i2["bar"], o2["bar"]
+    X = R2 - HOUR  # the bar before the reached one (after the entry bar: the two are two bars apart or more)
+    end = "high" if side == "BUY" else "low"
+    earlier = f"update public.macd_rides set reached_bar = reached_bar - interval '1 hour' where pair = '{P2}' and side = '{side}' and entry_bar = {tsq(B2)};"
+    found = lambda rows, src, P2=P2, X=X, side=side: want(line(rows, P2, X, side, "out")["verdict"] == "ok" and line(rows, P2, X, side, "out")["data"]["reach_check"] == "same"
+                                                         and line(rows, P2, X, side, "out")["data"]["touch_from"] == src, f"the spike of {src} in the bar is not found there")
+    if P2 == "XAU/USD":
+        num = "999999" if side == "BUY" else "0.01"
+        scen(f"30 {side}: a spike of the stored bar's {end} in the bar before", day_of(B2), earlier +
+             f" update public.live_chart_fallback set bars = (select jsonb_agg(case when e ->> 'datetime' = '{dtq(X)}' then e || jsonb_build_object('{end}', {num}) else e end order by ord)"
+             f" from jsonb_array_elements(bars) with ordinality as x(e, ord)) where pair = 'XAU/USD' and interval = '1h';", lambda rows, f=found: f(rows, "twelve"))
+        m = tsq(X + 30 * 60000)
+        px = i2.get("price", 4000)
+        scen(f"31 {side}: a spike of the recorded minutes' {end} in the bar before", day_of(B2), earlier +
+             f" insert into public.gold_tick_bars (minute, open, high, low, close, first_at, last_at, samples, source) select {m}, c, {'999999' if side == 'BUY' else 'c'}, {'c' if side == 'BUY' else '0.01'}, c, {m}, {m}, 1, 'bench'"
+             f" from (select coalesce((select close from public.gold_tick_bars where minute < {m} order by minute desc limit 1), 4000) as c) q"
+             f" on conflict (minute) do update set {end} = excluded.{end};", lambda rows, f=found: f(rows, "ticks"))
+    else:
+        sym = P2.replace("/", "_")
+        val = "999999" if side == "BUY" else "0.01"
+        scen(f"30 {side}: a spike of the day file's {end} (BID and ASK) in the bar before", day_of(B2), earlier +
+             f" update public.gmo_kline_files f set body = jsonb_set(f.body, '{{data}}', (select jsonb_agg(case when e ->> 'openTime' = '{X}' then e || jsonb_build_object('{end}', '{val}') else e end order by ord)"
+             f" from jsonb_array_elements(f.body -> 'data') with ordinality as x(e, ord))) where f.symbol = '{sym}' and f.interval = '1hour' and f.body -> 'data' @> '[{{\"openTime\": \"{X}\"}}]'::jsonb;",
+             lambda rows, f=found: f(rows, "gmo"))
 scen("29 the go-live constant is 2026-11-12 07:00 UTC", D, "", lambda rows: want([r for r in rows if r["rt"] == "RUN"][0]["data"]["go_live_utc"] == "2026-11-12 07:00", "the statement's go-live instant is not the one of the record"))
 if skips:
     K = skips[0]
