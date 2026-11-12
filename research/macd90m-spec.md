@@ -123,6 +123,22 @@ Checks on the walks: a C trade that is reached and whose A is reached has the sa
 `T` is never before its A's or B's; no two taken C trades of one way in, pair and side overlap; the look-ahead check
 covers C (the future after its `T` rewritten: the row's C cells stay).
 
+## The reach share as a number given to the run (the owner, 2026-11-12)
+
+The owner: 「確定じゃなくて、90に到達した瞬間に注文入れたら、95か96に到達する確率？」. 96% is this file's; for 95% the
+same study is run with the reach share changed and nothing else:
+
+- `REACH` (an environment variable of both implementations): a number `r` with `0.90 < r <= 1`. Not given or empty:
+  0.96, and every row and number is as before.
+- With `REACH = r`, every "96%" above is `r`: a close entry is **already** when `Z(i)` is at `r`; a moment entry is
+  already when its minute also touches `r`; **reached** (ways A, B and C) is the first minute after the entry that
+  touches `r`. The entries (90%), way A's and B's failures, the prices, `mae`, `minutes`, the skipping of way C and the
+  rows' and the summary's shape do not change. (Fewer entries are followed at a lower `r`: more of them are already.)
+- summary.json: `meta.reach` = `r` (a number). The Python counts a `meta.reach` that is not its own share as a
+  difference.
+- The walks' check "the close way's entries equal research/macd90.ts's" compares bars, sides and prices; the already
+  flag too when `r` is 0.96 (research/macd90.ts's flag is at 0.96).
+
 ## Checks (on seeded walks, before the real run)
 
 - The line at a minute, computed from the prepared state, equals `zoneAt` on the window rebuilt with that price

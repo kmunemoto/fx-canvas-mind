@@ -21,6 +21,11 @@ on:
       - research/macd90m-check.py
       - .github/workflows/macd90m.yml
   workflow_dispatch:
+    inputs:
+      reach:
+        description: "The share that counts as reached (the spec's is 0.96; e.g. 0.95). research/macd90m-spec.md, the reach share"
+        required: false
+        default: "0.96"
 
 permissions:
   contents: read
@@ -29,6 +34,7 @@ env:
   START: "2024-01-01T00:00:00Z"
   END: "2026-11-10T21:00:00Z"
   LOAD_FROM: "2023-10-01T00:00:00Z"
+  REACH: ${{ github.event.inputs.reach || '0.96' }}
 
 jobs:
   syn:
@@ -112,9 +118,12 @@ jobs:
         run: python3 -I research/macd90m-check.py --cache research/.cache --out $OUT
       - uses: actions/upload-artifact@v4
         with:
-          name: macd90m-${{ github.run_id }}
+          name: macd90m-reach${{ env.REACH }}-${{ github.run_id }}
           path: research/out/macd90m
       - name: The numbers (the Python agreed)
         env:
           MODE: print
-        run: deno run --allow-read=. --allow-env research/macd90m.ts
+        run: |
+          deno run --allow-read=. --allow-env research/macd90m.ts
+          echo "reach ${REACH}"
+          sha256sum $OUT/rows.csv $OUT/summary.json

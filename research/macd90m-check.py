@@ -28,8 +28,12 @@ prep・decide（作りかけの足の 599 番だけを足し直す形。TS と�
   - C: 取った C が reached で A（B）も reached なら、T・pips・mae が同じ。C の T は A・B の T より前にならない。
     同じ入り方・通貨・向きの取った C は重ならない。reached + open + skipped + already = entries。
 
+REACH（オーナー、2026-11-12: 「90に到達した瞬間に注文入れたら、95か96に到達する確率？」）: 環境変数 REACH に
+0.9 より大きく 1 以下の数（例 0.95）を渡すと、上の「96%」（already・reached・C）がすべてその割合になる。ほかは同じ。
+渡さない・空なら spec の 0.96。summary.json の meta.reach が同じ数でなければ食い違い。
+
 使い方:
-  [START=… END=… LOAD_FROM=…] python3 -I research/macd90m-check.py --cache DIR --out OUT
+  [START=… END=… LOAD_FROM=… REACH=…] python3 -I research/macd90m-check.py --cache DIR --out OUT
       DIR: <DIR>/<USD_JPY など>/<1hour|1min>/<bid|ask>/<鍵>.json（GMO の形）
       OUT: research/macd90m.ts の出力（rows.csv と summary.json）。読むだけで、書かない。
   [START=… END=… LOAD_FROM=…] python3 -I research/macd90m-check.py --cache DIR --self OUT2
@@ -67,7 +71,7 @@ HOUR = fc.HOUR
 WINDOW = fc.WINDOW               # 600
 PAIRS = fc.PAIRS
 S_IN = m90.S_IN                  # 0.9
-S_GO = m90.S_GO                  # 0.96
+S_GO = m90.S_GO                  # 0.96（spec の数。REACH を渡した時は、下の reach_of でその数にする）
 A12, A26, A9 = m90.A12, m90.A26, m90.A9
 B12, B26, B9 = m90.B12, m90.B26, m90.B9
 REL = m90.REL
@@ -97,6 +101,23 @@ PAIR_KEYS = ['bars', 'minutes', 'close', 'moment']
 T90, T96, B90, B96 = 1, 2, 4, 8  # 分の触れ方（上の 90%・96%、下の 90%・96%）
 
 js_str, js_div, cell, in_band, die = m90.js_str, m90.js_div, m90.cell, m90.in_band, m90.die
+
+
+def reach_of():
+    """届いたとみる割合: 環境変数 REACH（無い・空なら spec の 0.96）。0.9 より大きく 1 以下の数でなければ止まる。"""
+    v = os.environ.get('REACH') or ''
+    if v == '':
+        return m90.S_GO
+    try:
+        x = float(v)
+    except ValueError:
+        x = float('nan')
+    if not (S_IN < x <= 1):
+        die(f'REACH {v!r}: a share above {S_IN!r} and at most 1')
+    return x
+
+
+S_GO = reach_of()
 
 
 # ---------------------------------------------------------------- 窓の 598 番までの状態（足ごとに1回）
@@ -574,7 +595,7 @@ def groups_of(rows):
 
 
 def summary_of(rows, pairs, start, end, load_from):
-    return dict(meta=dict(start=fc.iso(start), end=fc.iso(end), loadFrom=fc.iso(load_from)), pairs=pairs,
+    return dict(meta=dict(start=fc.iso(start), end=fc.iso(end), loadFrom=fc.iso(load_from), reach=S_GO), pairs=pairs,
                 ways={wi: groups_of([r for r in rows if r['way'] == wi]) for wi in WAYS_IN})
 
 
@@ -664,7 +685,11 @@ def compare_summary(C, mine, S):
             same = False
         if not same:
             C.bad(f'meta.{k}: TS {v!r} / Python {mine["meta"][k]!r} (set START, END, LOAD_FROM as the TS run)')
-    skipped += [f'meta.{k}' for k in (meta if isinstance(meta, dict) else {}) if k not in ('start', 'end', 'loadFrom')]
+    C.fields += 1
+    v = meta.get('reach') if isinstance(meta, dict) else None
+    if not (isinstance(v, (int, float)) and not isinstance(v, bool) and float(v) == S_GO):
+        C.bad(f'meta.reach: TS {v!r} / Python {S_GO!r} (set REACH as the TS run)')
+    skipped += [f'meta.{k}' for k in (meta if isinstance(meta, dict) else {}) if k not in ('start', 'end', 'loadFrom', 'reach')]
     tp = S.get('pairs')
     tpl = [x for x in tp if isinstance(x, dict)] if isinstance(tp, list) else []
     if [x.get('pair') for x in tpl] != PAIRS:
@@ -778,6 +803,7 @@ def main():
             die('summary.json is not an object')
     print(f'macd90m-check: entries closing in [{fc.iso(start)}, {fc.iso(end)}), 1-hour bars from {fc.iso(load_from)}, '
           f'1-minute bars from START; the band {S_IN!r} in, {S_GO!r} reached (a minute touches with its mid high / low)')
+    print('  the reach share is the spec\'s' if S_GO == m90.S_GO else f'  the reach share is NOT the spec\'s 0.96 (REACH set: {S_GO!r})')
     if all(period[k] == DEFAULTS[k] for k in DEFAULTS):
         print('  the period is the spec\'s')
     else:
