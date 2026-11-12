@@ -13,10 +13,6 @@
 //                   run's loaders, the study written to OUT: what research/macd90m-check.py is run on first.
 //   MODE=print      the summary the real run wrote.
 //
-//   REACH           the share that counts as reached, when not the spec's 0.96 (the owner 2026-11-12:
-//                   「90に到達した瞬間に注文入れたら、95か96に到達する確率？」): a number above 0.9, at most 1, e.g. 0.95.
-//                   Every "96%" of the rule is then that share (already, reached, way C); nothing else changes.
-//
 // Nothing here changes an email; the numbers are the study's only.
 
 import { LEVEL_WINDOW, ZONE_BARS, zoneAt } from "../supabase/functions/_shared/macd-level.ts";
@@ -39,7 +35,7 @@ import {
   type PairData,
   PAIRS,
   poisoned,
-  REACH as REACH_SPEC,
+  REACH,
   type Result,
   type Side,
   shareOf,
@@ -54,9 +50,6 @@ const START = Date.parse(env("START", "2024-01-01T00:00:00Z"));
 const END = Date.parse(env("END", "2026-11-10T21:00:00Z"));
 const LOAD_FROM = Date.parse(env("LOAD_FROM", "2023-10-01T00:00:00Z"));
 const OUT = env("OUT", "research/out/macd90m");
-// the share that counts as reached: the spec's, or REACH (an empty REACH is the spec's)
-const REACH = env("REACH", "") === "" ? REACH_SPEC : Number(env("REACH", ""));
-if (!(REACH > ENTER && REACH <= 1)) throw new Error(`REACH "${env("REACH", "")}": a share above ${ENTER} and at most 1`);
 const W = LEVEL_WINDOW;
 const A12 = 2 / (MACD_DEFAULTS.fast + 1);
 const A26 = 2 / (MACD_DEFAULTS.slow + 1);
@@ -235,8 +228,7 @@ const tradesOfPair = (a: PairAll, seen?: Array<{ j: number; k: number; x: number
       zside: t.zside,
       entry: t.entry,
       share0: t.share0,
-      // Z(i) at the reach share (research/macd90.ts's own flag when REACH is the spec's: checked on the walks)
-      already: atShare(a.z[t.i] as Zone, t.zside, REACH),
+      already: t.already,
       kFrom: t.i + 1 < d.n ? a.k0[t.i + 1] : m1.n,
       jFrom: t.i + 1,
       kEntry: -1,
@@ -402,7 +394,7 @@ const ordered = (all: MTrade[]): MTrade[] =>
   [...all].sort((a, b) => a.T0 - b.T0 || PAIRS.indexOf(a.pair as typeof PAIRS[number]) - PAIRS.indexOf(b.pair as typeof PAIRS[number]) || wayOrder(a.way) - wayOrder(b.way));
 
 const summaryOf = (trades: MTrade[], as: PairAll[]) => ({
-  meta: { start: iso(START), end: iso(END), loadFrom: iso(LOAD_FROM), reach: REACH },
+  meta: { start: iso(START), end: iso(END), loadFrom: iso(LOAD_FROM) },
   pairs: as.map((a) => ({
     pair: a.d.pair,
     bars: a.d.n,
@@ -503,10 +495,9 @@ const checkWalk = (seed: number): number => {
       zonesCompared++;
       if (!sameZone(s.z, slowZone(a.d, s.j, s.x))) bad(`${pair} ${iso(a.m1.t[s.k])}: the line at the minute differs from zoneAt on the window rebuilt`);
     }
-    // the close entries are research/macd90.ts's (its already flag is at the spec's share: compared when REACH is that)
-    const closeKey = (t: { i: number; side: string; entry: number; already: boolean }) => `${t.i} ${t.side} ${t.entry}` + (REACH === REACH_SPEC ? ` ${t.already}` : "");
-    const mine = trades.filter((t) => t.way === "close").map(closeKey).join("|");
-    const theirs = tradesOf(a.d).trades.map(closeKey).join("|");
+    // the close entries are research/macd90.ts's
+    const mine = trades.filter((t) => t.way === "close").map((t) => `${t.i} ${t.side} ${t.entry} ${t.already}`).join("|");
+    const theirs = tradesOf(a.d).trades.map((t) => `${t.i} ${t.side} ${t.entry} ${t.already}`).join("|");
     if (mine !== theirs) bad(`${pair}: the close entries differ from research/macd90.ts's`);
     for (const t of trades) {
       if (t.already !== (t.A === null && t.B === null)) bad(`${pair} ${iso(t.T0)}: already and the ways disagree`);
@@ -570,7 +561,6 @@ const checkWalk = (seed: number): number => {
 
 if (import.meta.main) {
   if (MODE !== "print") await Deno.mkdir(OUT, { recursive: true });
-  if (MODE !== "print") console.log(`reach ${REACH}${REACH === REACH_SPEC ? " (the spec's)" : " (REACH set: NOT the spec's 0.96)"}`);
   if (MODE === "synthetic") {
     let fail = 0;
     for (const seed of env("SEEDS", "1,2").split(",").map(Number)) fail += checkWalk(seed);
