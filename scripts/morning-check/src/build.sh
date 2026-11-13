@@ -69,6 +69,8 @@ MIG=20261113140000_morning_check_v9_fix.sql
 python3 -I mkfn.py ../../../supabase/migrations/$MIG fn-header-v9.part mc.pairs_v9 $O/pairs-v9.fn.sql mc.gold_v9 $O/gold-v9.fn.sql
 # and the block that builds the same functions from pieces sent one at a time (README v9.7: pieces.py, then install-v9.sql run once)
 python3 -I mkinstall.py install-v9.sql install-v9.part $MIG $O/pairs-v9.fn.sql $O/gold-v9.fn.sql
+# and one block that holds the two sources in full, for the SQL Editor when the pieces cannot be sent (2026-11-13: the connector answered 502)
+python3 -I mkinstall.py install-v9-full.sql install-v9-full.part $MIG $O/pairs-v9.fn.sql $O/gold-v9.fn.sql
 
 # ---- v3 must be unchanged ----
 md5sum -c v3.md5

@@ -3,6 +3,9 @@
 #   the pieces (src/pieces.py) put into a scratch database with the statements that are sent to production -> each answer's md5 and length compared with the list
 #   -> the block run in one transaction -> the functions it leaves compared with those of the migration file (definition and rights)
 #   -> the block run with a piece changed by one character, a piece missing, only gold's text changed, no mc._src: it must stop and create nothing.
+# And src/install-v9-full.sql (the two sources in the file itself, for the SQL Editor when the pieces cannot be sent), on a database that has the first version's
+# functions: it replaces them (definition and rights = the migration files'), and with one character changed, only gold's text changed, the file cut short, or
+# CR LF line ends, it stops and the first version's functions stay.
 # Needs python3 and a scratch PostgreSQL (16 or later) whose user may create databases: MC_PSQL, default "psql -h 127.0.0.1 -p 54329 -U postgres".
 # IT DROPS AND CREATES THE DATABASES mc9i AND mc9j THERE. Nothing here touches the project's database.
 #   bash install.sh
@@ -53,5 +56,39 @@ echo "== only gold's text changed"
 fresh > /dev/null; $PSQL -d mc9i -q -c "update mc._src set txt = txt || ' ' where name = 'g1'"
 say "$(block | cut -c1-48)" "the gold source differs from the repository: md5" "stops"
 say "$(state)" "functions=0 pieces=true" "nothing created"
+echo "== the full block (src/install-v9-full.sql: the two sources in the file, no pieces), on a database that has the first version's functions"
+FULL=../src/install-v9-full.sql
+old() {
+  $PSQL -q -c "drop database if exists mc9i" -c "create database mc9i" 2> /dev/null
+  $PSQL -d mc9i -q -v ON_ERROR_STOP=1 -f schema.sql -f $M/20261112120000_macd_rides.sql -f $M/20261112130000_morning_check_v9.sql 2> /dev/null
+}
+md5s() { $PSQL -d mc9i -At -c "select string_agg(p.proname || ' ' || md5(p.prosrc), ' ' order by p.proname) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'mc'"; }
+full() { PGOPTIONS="-c client_min_messages=warning" $PSQL -d mc9i -q -At -F ' ' -v ON_ERROR_STOP=1 -f "$1" 2>&1 | sed 's/^.*ERROR: *//' | cut -c1-60; }
+OLDMD5="gold_v9 d687c0396bfaeff902465babc1d2404a pairs_v9 2341115ffd83c86d0f8d566deea0c34d"
+NEWMD5="gold_v9 $(grep '^gold' "$WORK/pieces.txt" | awk '{print $3}') pairs_v9 $(grep '^pairs' "$WORK/pieces.txt" | awk '{print $3}')"
+old; say "$(md5s)" "$OLDMD5" "before: the first version's functions"
+say "$(full $FULL)" "$(printf 'installed gold_v9 %s %s\ninstalled pairs_v9 %s %s' $(grep '^gold' "$WORK/pieces.txt" | awk '{print $3, $2}') $(grep '^pairs' "$WORK/pieces.txt" | awk '{print $3, $2}'))" "runs; its last select shows the new md5 and length"
+say "$(md5s)" "$NEWMD5" "after: the new functions"
+say "$($PSQL -d mc9i -At -c "$q")" "$($PSQL -d mc9j -At -c "$q")" "definition and rights = the migration files'"
+say "$($PSQL -d mc9i -At -c "select data->>'via' || ' ' || (data->>'sql_md5') from mc.gold_v9(1794344400000, 1794430800000) where row_type = 'RUN'")" "function mc.gold_v9 $(grep '^gold' "$WORK/pieces.txt" | awk '{print $3}')" "mc.gold_v9 runs and says its md5"
+say "$(full $FULL | head -1)" "installed gold_v9 $(grep '^gold' "$WORK/pieces.txt" | awk '{print $3, $2}')" "run twice: the same"
+echo "== the full block changed on the way: it stops, the first version's functions stay"
+old; sed 's/0\.96::float8 \* e\.edge else/0.97::float8 * e.edge else/' $FULL > "$WORK/full-changed.sql"
+say "$(cmp -s $FULL "$WORK/full-changed.sql" && echo same || echo changed)" "changed" "(one character of the shared text changed)"
+say "$(full "$WORK/full-changed.sql" | head -1 | cut -c1-49)" "the pairs source differs from the repository: md5" "stops"
+say "$(md5s)" "$OLDMD5" "nothing changed"
+old; awk 'BEGIN{n=0} /^\$src\$;$/{n++} {print} n==1 && !done {getline; sub(/with recursive/, "with  recursive"); print; done=1}' $FULL > "$WORK/full-gold.sql"
+say "$(cmp -s $FULL "$WORK/full-gold.sql" && echo same || echo changed)" "changed" "(only gold's text changed)"
+say "$(full "$WORK/full-gold.sql" | head -1 | cut -c1-48)" "the gold source differs from the repository: md5" "stops"
+say "$(md5s)" "$OLDMD5" "nothing changed (the pairs' function, made after the checks, is not made)"
+old; head -c 60000 $FULL > "$WORK/full-cut.sql"
+say "$(full "$WORK/full-cut.sql" | grep -c 'unterminated dollar-quoted string')" "1" "cut short: an error"
+say "$(md5s)" "$OLDMD5" "nothing changed"
+old; sed 's/$/\r/' $FULL > "$WORK/full-crlf.sql"
+say "$(full "$WORK/full-crlf.sql" | head -1 | cut -c1-49)" "the pairs source differs from the repository: md5" "CR LF line ends (a paste may give them): stops"
+say "$(md5s)" "$OLDMD5" "nothing changed"
+$PSQL -q -c "drop database if exists mc9i" -c "create database mc9i" 2> /dev/null
+$PSQL -d mc9i -q -v ON_ERROR_STOP=1 -f schema.sql -f $M/20261112120000_macd_rides.sql
+full $FULL > /dev/null; say "$(md5s)" "$NEWMD5" "on a database without the schema mc: the new functions"
 $PSQL -q -c "drop database if exists mc9i" -c "drop database if exists mc9j"
 [ $bad = 0 ] && echo "install: all as expected" || { echo "install: SOMETHING DIFFERS"; exit 1; }
