@@ -63,7 +63,12 @@ $A $O/gold-v9.min.sql                                head.part syms-gold-v9.part
 #      and the migration that installs them as mc.pairs_v9 / mc.gold_v9 (generated: never edited by hand) ----
 $A $O/pairs-v9.fn.sql        head.part syms-pairs-v9.part front-pairs-v9.part engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v9.part guard-pairs.part dayend-pairs-v4.part back2-v9.part run-v9-fn.part --sub SQLNAME=pairs.sql --sub START_MS=p_start --sub END_MS=p_end --sub FN=mc.pairs_v9 --sub FNFILE=pairs-v9.fn.sql --strip
 $A $O/gold-v9.fn.sql         head.part syms-gold-v9.part  front-gold-v9.part  engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v9.part guard-gold.part  dayend-gold-v4.part  back2-v9.part run-v9-fn.part --sub SQLNAME=gold.sql --sub START_MS=p_start --sub END_MS=p_end --sub FN=mc.gold_v9 --sub FNFILE=gold-v9.fn.sql --strip
-python3 -I mkfn.py ../../../supabase/migrations/20261112130000_morning_check_v9.sql fn-header-v9.part mc.pairs_v9 $O/pairs-v9.fn.sql mc.gold_v9 $O/gold-v9.fn.sql
+# The migration of the current functions. 20261112130000_morning_check_v9.sql is the first one (2026-11-12, as installed on 2026-11-13) and is kept as it was: a new version of
+# the statements gets a NEW migration name here (docs/OPERATIONS.md 10). 2026-11-13: the review's fixes (docs 8.151, README v9.6).
+MIG=20261113140000_morning_check_v9_fix.sql
+python3 -I mkfn.py ../../../supabase/migrations/$MIG fn-header-v9.part mc.pairs_v9 $O/pairs-v9.fn.sql mc.gold_v9 $O/gold-v9.fn.sql
+# and the block that builds the same functions from pieces sent one at a time (README v9.7: pieces.py, then install-v9.sql run once)
+python3 -I mkinstall.py install-v9.sql install-v9.part $MIG $O/pairs-v9.fn.sql $O/gold-v9.fn.sql
 
 # ---- v3 must be unchanged ----
 md5sum -c v3.md5

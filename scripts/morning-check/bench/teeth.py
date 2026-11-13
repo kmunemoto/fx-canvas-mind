@@ -25,9 +25,11 @@ G = [
     ("gold: the minutes' high from their lows", "max(g.high)::float8, min(g.low)::float8", "max(g.low)::float8, min(g.low)::float8"),
     ("gold: the stored bar's high from its close", "y.d, b.hi as h8, b.lo as l8", "y.d, b.cl as h8, b.lo as l8"),
     ("gold: touch 0.96 -> 0.97", "then e.edge > 0 and e.nm >= 0.96::float8 * e.edge else", "then e.edge > 0 and e.nm >= 0.97::float8 * e.edge else"),
+    ("gold: the minutes counted in an hour with no state row (review 2026-11-13)", "(ts.src <> 'ticks' or exists (select 1 from st join syms y on y.pair = st.pair where y.symbol = ts.symbol and st.ot = ts.ot)) as counted", "(true) as counted"),
     ("gold: BUY and SELL swapped", "case when b.in_top and not b.p_top then 'BUY' when b.in_bot and not b.p_bot then 'SELL' end as sd", "case when b.in_top and not b.p_top then 'SELL' when b.in_bot and not b.p_bot then 'BUY' end as sd"),
 ]
 M = [
+    ("a reached bar with no data told as reach_differs (review 2026-11-13)", "when not exists (select 1 from tb b where b.symbol = y.symbol and b.ot = k.rot) then 'not_recounted'", "when false then 'not_recounted'"),
     ("in_top 0.9 -> 0.91", "(f.tn > 0 and f.m >= 0.9::float8 * f.tn) as in_top", "(f.tn > 0 and f.m >= 0.91::float8 * f.tn) as in_top"),
     ("in_bot 0.9 -> 0.89", "(f.bn < 0 and f.m <= 0.9::float8 * f.bn) as in_bot", "(f.bn < 0 and f.m <= 0.89::float8 * f.bn) as in_bot"),
     ("p_top 0.9 -> 0.92", "(f.tp > 0 and f.mp >= 0.9::float8 * f.tp) as p_top", "(f.tp > 0 and f.mp >= 0.92::float8 * f.tp) as p_top"),

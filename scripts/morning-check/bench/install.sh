@@ -33,13 +33,13 @@ say "$(state)" "functions=2 pieces=false" "two functions, the pieces dropped"
 say "$($PSQL -d mc9i -At -F ' ' -c "select 'pairs', length(prosrc), md5(prosrc) from pg_proc where oid = 'mc.pairs_v9(bigint,bigint)'::regprocedure")" "$(grep '^pairs' "$WORK/pieces.txt" | awk '{print $1, $2, $3}')" "md5(prosrc) of mc.pairs_v9"
 say "$($PSQL -d mc9i -At -F ' ' -c "select 'gold', length(prosrc), md5(prosrc) from pg_proc where oid = 'mc.gold_v9(bigint,bigint)'::regprocedure")" "$(grep '^gold' "$WORK/pieces.txt" | awk '{print $1, $2, $3}')" "md5(prosrc) of mc.gold_v9"
 $PSQL -q -c "drop database if exists mc9j" -c "create database mc9j" 2> /dev/null
-$PSQL -d mc9j -q -v ON_ERROR_STOP=1 -f schema.sql -f $M/20261112120000_macd_rides.sql -f $M/20261112130000_morning_check_v9.sql
+$PSQL -d mc9j -q -v ON_ERROR_STOP=1 -f schema.sql -f $M/20261112120000_macd_rides.sql -f $M/20261112130000_morning_check_v9.sql -f $M/20261113140000_morning_check_v9_fix.sql
 q="select string_agg(md5(pg_get_functiondef(p.oid)) || ' ' || coalesce(p.proacl::text, 'null'), ' / ' order by p.proname) || ' / ' || (select nspacl::text from pg_namespace where nspname = 'mc') from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'mc'"
 say "$($PSQL -d mc9i -At -c "$q")" "$($PSQL -d mc9j -At -c "$q")" "definition and rights = the migration file's"
 say "$($PSQL -d mc9i -At -c "select data->>'via' || ' ' || (data->>'sql_md5') from mc.pairs_v9(1794344400000, 1794430800000) where row_type = 'RUN'")" "function mc.pairs_v9 $(grep '^pairs' "$WORK/pieces.txt" | awk '{print $3}')" "mc.pairs_v9 runs and says its md5"
 say "$($PSQL -d mc9i -At -c "select data->>'via' || ' ' || (data->>'sql_md5') from mc.gold_v9(1794344400000, 1794430800000) where row_type = 'RUN'")" "function mc.gold_v9 $(grep '^gold' "$WORK/pieces.txt" | awk '{print $3}')" "mc.gold_v9 runs and says its md5"
 echo "== the block again (no pieces any more): it stops, the functions stay"
-say "$(block)" "mc._src is missing: apply supabase/migrations/20261112130000" "stops"
+say "$(block)" "mc._src is missing: apply supabase/migrations/20261113140000" "stops"
 say "$(state)" "functions=2 pieces=false" "nothing changed"
 echo "== one character of one piece changed"
 fresh > /dev/null; $PSQL -d mc9i -q -c "update mc._src set txt = replace(txt, '0.96::float8 * e.edge else', '0.97::float8 * e.edge else') where name = 'c1a'"
