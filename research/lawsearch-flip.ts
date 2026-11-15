@@ -20,10 +20,11 @@
 //   * every blind bar of both halves and timeframes: the mirror's buy h = the original's sell h, and PL the same (the
 //     mirror's buy PL = the original's sell PL, the mirror's sell PL = the original's buy PL; points, |difference| ≤
 //     1e−9); the two tables must hold the same bars;
-//   * the symmetric items (every trial that is not a B: E04, E26, S01 and their F): the signals (pair, bar,
+//   * the symmetric items (every trial whose item is not in NOT_SYMMETRIC below): the signals (pair, bar,
 //     direction, reason, half, warm) match 1-to-1 with the direction reversed; the difference (rows in one only, both
 //     ways, ÷ the original's rows) must be ≤ 0.1% per trial;
-//   * B06 is not symmetric (log returns of mirrored prices): its name, reason and difference are printed, not judged.
+//   * an item of NOT_SYMMETRIC (B06: log returns of mirrored prices) is not symmetric: its name, reason and difference
+//     are printed, not judged (spec 14.2: 対称でない項目は、名前と理由を出す).
 // Also judged, so that the judgement is of the original run: the original's signals and blind tables built here equal
 // the run's dumps (signals/<trial>.csv; blind/<tf>_<half>.csv when the run wrote it), and the mirror's higher bars
 // equal the mirror of the original's. The trades of the counted signals are printed (information).
@@ -39,7 +40,7 @@
 //
 // INFORMATION only (spec 23.1: the FLIP=1 run, its files read under spec 2, is for the TS–Python comparison): with
 // <flipped run>, its dumps against the original's, as the trial compared them (the blind bars' h and PL with 11 O-2's
-// count; the signals' differences of E04, E26, S01 and B06). These lines start with "INFO" and never fail the run.
+// count; the signals' differences of every trial the run wrote). These lines start with "INFO" and never fail the run.
 //
 // Exit: 0 every judged condition passed; 3 a judged failure or a STOP; 1 a crash; 2 usage.
 
@@ -142,6 +143,16 @@ export interface FlipSignals {
   examples: string[];
 }
 
+// spec 14.2: the items that are not symmetric under the exact mirror, with the reason printed; every other trial is
+// judged. B06 works on log returns of mirrored prices. (Step 4's pilot, 2026-11-15, the lead: B07 reads the point
+// closes' differences, whose mirror swaps AG and AL exactly, and the 200-bar sum, whose mirror swaps above and below
+// exactly, so it is judged; until then every B was printed as B06 was.) An item added later is judged unless it is
+// listed here with its reason.
+const NOT_SYMMETRIC: Readonly<Record<string, string>> = Object.freeze({ B06: "log returns of mirrored prices" });
+// the item of a trial id: m15.E04.F01 -> E04, h1.B06 -> B06, m15.S01 -> S01
+const itemOfTrial = (id: string): string => id.split(".")[1] ?? id;
+const notSymmetricWhy = (id: string): string | null => (Object.hasOwn(NOT_SYMMETRIC, itemOfTrial(id)) ? NOT_SYMMETRIC[itemOfTrial(id)] : null);
+
 // INFO: the FLIP=1 run's signals dump against the original's (the trial's comparison)
 export function compareSignals(trial: string, a: Row[], b: Row[]): FlipSignals {
   const ka = new Set(a.map((r) => `${r.pair}|${r.i}|${r.d}|${r.reason}`));
@@ -160,7 +171,7 @@ export function compareSignals(trial: string, a: Row[], b: Row[]): FlipSignals {
     onlyB++;
     if (examples.length < 10) examples.push(`${trial}: flipped (d reversed) ${k}, no original twin`);
   }
-  const judged = !/\.B\d\d$/.test(trial);
+  const judged = notSymmetricWhy(trial) === null;
   return { trial, rows: a.length, rowsFlipped: b.length, onlyOriginal: onlyA, onlyFlipped: onlyB, share: a.length > 0 ? (onlyA + onlyB) / a.length : onlyB > 0 ? 1 : 0, judged, examples };
 }
 
@@ -200,7 +211,6 @@ export async function flipInfo(run: string, flipped: string, tsA: string, tsB: s
   for await (const e of Deno.readDir(`${tsA}/signals`)) names.add(e.name);
   for (const name of [...names].sort()) {
     const trial = name.replace(/\.csv$/, "");
-    if (!/\.(E04|E26|S01|B06)/.test(trial)) continue;
     const a = await readCsv(`${tsA}/signals/${name}`);
     const b = await readCsv(`${tsB}/signals/${name}`);
     if (!a || !b) {
@@ -208,7 +218,7 @@ export async function flipInfo(run: string, flipped: string, tsA: string, tsB: s
       continue;
     }
     const c = compareSignals(trial, a, b);
-    lines.push(`INFO SIGNALS ${trial}: original ${c.rows}, flipped ${c.rowsFlipped}, only original ${c.onlyOriginal}, only flipped ${c.onlyFlipped}, difference ${(100 * c.share).toFixed(4)}%${c.judged ? "" : " (B06: not symmetric)"}`);
+    lines.push(`INFO SIGNALS ${trial}: original ${c.rows}, flipped ${c.rowsFlipped}, only original ${c.onlyOriginal}, only flipped ${c.onlyFlipped}, difference ${(100 * c.share).toFixed(4)}%${c.judged ? "" : ` (${itemOfTrial(trial)}: not symmetric)`}`);
     for (const x of c.examples.slice(0, 4)) lines.push(`INFO   ${x}`);
   }
   return lines;
@@ -476,15 +486,16 @@ export async function flipJudge(run: string, tsDir: string, flipped?: string): P
       for (const x of c.examples) lines.push(`  ${x}`);
     }
   }
-  // condition 3: the symmetric items' signals 1-to-1 reversed (≤ 0.1% per trial); B06 printed
+  // condition 3: the symmetric items' signals 1-to-1 reversed (≤ 0.1% per trial); the items of NOT_SYMMETRIC printed
   for (const t of trials) {
     const a = sigKeys(o2.sig.get(t.id)!, false);
     const b = sigKeys(n2.sig.get(t.id)!, true);
     const d = setDiff(a, b);
     const share = a.length > 0 ? (d.onlyA + d.onlyB) / a.length : d.onlyB > 0 ? 1 : 0;
-    const judged = t.kind !== "B";
+    const why = notSymmetricWhy(t.id);
+    const judged = why === null;
     const ok = !judged || share <= 0.001;
-    const line = `SIGNALS ${t.id}: original ${a.length}, mirror ${b.length}, only original ${d.onlyA}, only mirror ${d.onlyB}, difference ${pct(share)} ${judged ? (ok ? "PASS (≤ 0.1%)" : "FAIL (> 0.1%)") : "(not symmetric: log returns of mirrored prices; printed, not judged)"}`;
+    const line = `SIGNALS ${t.id}: original ${a.length}, mirror ${b.length}, only original ${d.onlyA}, only mirror ${d.onlyB}, difference ${pct(share)} ${judged ? (ok ? "PASS (≤ 0.1%)" : "FAIL (> 0.1%)") : `(not symmetric: ${why}; printed, not judged)`}`;
     if (ok) lines.push(line);
     else fail(line);
     for (const x of d.examples.slice(0, 4)) lines.push(`  ${t.id}: ${x}`);
