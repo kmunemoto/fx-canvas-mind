@@ -15,7 +15,7 @@ WORK=${MC_WORK:-$(mktemp -d)}
 M=../../../supabase/migrations
 for db in mc9 mc9g; do
   $PSQL -q -c "drop database if exists $db" -c "create database $db"
-  $PSQL -d $db -q -v ON_ERROR_STOP=1 -f schema.sql -f $M/20261112120000_macd_rides.sql -f $M/20261112130000_morning_check_v9.sql
+  $PSQL -d $db -q -v ON_ERROR_STOP=1 -f schema.sql -f $M/20261112120000_macd_rides.sql -f $M/20261112130000_morning_check_v9.sql -f $M/20261113140000_morning_check_v9_fix.sql
 done
 first=""
 for seed in "${@:-1}"; do

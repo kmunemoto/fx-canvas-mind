@@ -87,12 +87,19 @@ ts as (
          max(xv) filter (where k = 0) as x, max(nm) filter (where k = 0) as m, max(edge) filter (where k = 0) as edge
   from tq group by symbol, ot, jr, src, zside
 ),
--- per bar and side: touched by any source (gold has two: its stored bar and the hour's recorded minutes); the facts of the first source that touched (else of the first source)
+-- per bar and side: touched by a source production reads for that bar; the facts of the first source that touched (else of the first source).
+-- Gold has two sources. Its stored bar (twelve) is read by every close's catch-up. Its recorded minutes (ticks) are read only by the minute's check, and that runs only in an
+-- hour production kept a state row for (macd_ride_state: written at the judged close before the hour; no row, no minute's check: signal-alerts index.ts rideMinute). So the
+-- minutes count only in a bar with a state row; a touch only they show in a bar without one is kept apart (unwatched_touch: shown, not counted). Found by the review of
+-- 2026-11-13 (docs 8.151). The pairs have one source (gmo), read by both the minute's check and the catch-up: always counted.
 tb as (
-  select t.symbol, t.ot, t.jr, t.zside, bool_or(t.touch) as touch, bool_or(t.near) as near,
-         string_agg(t.src, ',' order by t.src) filter (where t.touch) as srcs, string_agg(t.src, ',' order by t.src) as srcs_all,
-         (array_agg(t.x order by t.touch desc, t.src))[1] as x, (array_agg(t.m order by t.touch desc, t.src))[1] as m, (array_agg(t.edge order by t.touch desc, t.src))[1] as edge
-  from ts t group by t.symbol, t.ot, t.jr, t.zside
+  select t.symbol, t.ot, t.jr, t.zside, bool_or(t.touch and t.counted) as touch, bool_or(t.touch and not t.counted) and not bool_or(t.touch and t.counted) as unwatched_touch,
+         bool_or(t.near) as near,
+         string_agg(t.src, ',' order by t.src) filter (where t.touch and t.counted) as srcs, string_agg(t.src, ',' order by t.src) as srcs_all,
+         (array_agg(t.x order by (t.touch and t.counted) desc, t.src))[1] as x, (array_agg(t.m order by (t.touch and t.counted) desc, t.src))[1] as m,
+         (array_agg(t.edge order by (t.touch and t.counted) desc, t.src))[1] as edge
+  from (select ts.*, (ts.src <> 'ticks' or exists (select 1 from st join syms y on y.pair = st.pair where y.symbol = ts.symbol and st.ot = ts.ot)) as counted from ts) t
+  group by t.symbol, t.ot, t.jr, t.zside
 ),
 -- the series per instrument: its length, the bars of the day (first / last open; hours missing between the first and the last bar of the day mean a hole in the data), bad
 -- closes, and the rank of the day's first bar
@@ -177,14 +184,17 @@ mails as (
 ),
 -- The rides' ends the range concerns (email 2 = out). A ride belongs to the range when it was reached in one of its bars (rot), or was reached in an earlier bar and seen in the
 -- range (found late: by a catch-up after hours not watched); a ride held through the range belongs to it when the recount has a touch in the range (xot = the first bar of the
--- range after its entry bar whose high / low touches on its side: where it should have been reached).
+-- range after its entry bar whose high / low touches on its side: where it should have been reached). xu = the first bar after the entry bar with a touch only gold's recorded
+-- minutes show, in an hour without a state row (production cannot have seen it): shown on the line, not counted.
 rx as (
-  select r.*, y.symbol, t.xot,
+  select r.*, y.symbol, t.xot, u.xu,
          (r.rot is not null and r.rot >= pp.start_ms and r.rot < pp.end_ms) as in_range,
          (r.rot is not null and r.rot < pp.start_ms and r.reached_at >= to_timestamp(pp.start_ms / 1000.0) and r.reached_at < to_timestamp(pp.end_ms / 1000.0)) as seen_late_in_range
   from rd r join syms y on y.pair = r.pair cross join pp
   cross join lateral (select min(b.ot) as xot from tb b
                       where b.symbol = y.symbol and b.zside = case r.side when 'BUY' then 'top' else 'bottom' end and b.touch and b.ot > r.eot) t
+  cross join lateral (select min(b.ot) as xu from tb b
+                      where b.symbol = y.symbol and b.zside = case r.side when 'BUY' then 'top' else 'bottom' end and b.unwatched_touch and b.ot > r.eot) u
 ),
 ro as (
   select x.*, case when x.in_range or x.seen_late_in_range then x.rot else x.xot end as lot

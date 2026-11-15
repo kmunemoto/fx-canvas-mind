@@ -12,6 +12,11 @@
 -- The schema mc is not one the API serves, and nobody but the owner (postgres) may use it or run the functions: anon and authenticated have no right on either.
 -- To take them away again: drop schema mc cascade;
 --
+-- Versions (create or replace: a later file replaces the functions of an earlier one; the RUN row's md5 tells which is in the database):
+--   20261112130000_morning_check_v9.sql      the first (installed 2026-11-13 by the owner in the SQL Editor, from pieces: docs 8.151)
+--   20261113140000_morning_check_v9_fix.sql  the review's fixes of 2026-11-13: a ride reached in a bar with no data is "not_recounted" (unchecked), not reach_differs;
+--                                            gold's recorded minutes count only in an hour with a state row (production's minute's check runs only there)
+--
 -- THIS FILE IS GENERATED (scripts/morning-check/src/build.sh, mkfn.py): do not edit it by hand.
 
 create schema if not exists mc;

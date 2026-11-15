@@ -259,12 +259,19 @@ ts as (
          max(xv) filter (where k = 0) as x, max(nm) filter (where k = 0) as m, max(edge) filter (where k = 0) as edge
   from tq group by symbol, ot, jr, src, zside
 ),
--- per bar and side: touched by any source (gold has two: its stored bar and the hour's recorded minutes); the facts of the first source that touched (else of the first source)
+-- per bar and side: touched by a source production reads for that bar; the facts of the first source that touched (else of the first source).
+-- Gold has two sources. Its stored bar (twelve) is read by every close's catch-up. Its recorded minutes (ticks) are read only by the minute's check, and that runs only in an
+-- hour production kept a state row for (macd_ride_state: written at the judged close before the hour; no row, no minute's check: signal-alerts index.ts rideMinute). So the
+-- minutes count only in a bar with a state row; a touch only they show in a bar without one is kept apart (unwatched_touch: shown, not counted). Found by the review of
+-- 2026-11-13 (docs 8.151). The pairs have one source (gmo), read by both the minute's check and the catch-up: always counted.
 tb as (
-  select t.symbol, t.ot, t.jr, t.zside, bool_or(t.touch) as touch, bool_or(t.near) as near,
-         string_agg(t.src, ',' order by t.src) filter (where t.touch) as srcs, string_agg(t.src, ',' order by t.src) as srcs_all,
-         (array_agg(t.x order by t.touch desc, t.src))[1] as x, (array_agg(t.m order by t.touch desc, t.src))[1] as m, (array_agg(t.edge order by t.touch desc, t.src))[1] as edge
-  from ts t group by t.symbol, t.ot, t.jr, t.zside
+  select t.symbol, t.ot, t.jr, t.zside, bool_or(t.touch and t.counted) as touch, bool_or(t.touch and not t.counted) and not bool_or(t.touch and t.counted) as unwatched_touch,
+         bool_or(t.near) as near,
+         string_agg(t.src, ',' order by t.src) filter (where t.touch and t.counted) as srcs, string_agg(t.src, ',' order by t.src) as srcs_all,
+         (array_agg(t.x order by (t.touch and t.counted) desc, t.src))[1] as x, (array_agg(t.m order by (t.touch and t.counted) desc, t.src))[1] as m,
+         (array_agg(t.edge order by (t.touch and t.counted) desc, t.src))[1] as edge
+  from (select ts.*, (ts.src <> 'ticks' or exists (select 1 from st join syms y on y.pair = st.pair where y.symbol = ts.symbol and st.ot = ts.ot)) as counted from ts) t
+  group by t.symbol, t.ot, t.jr, t.zside
 ),
 -- the series per instrument: its length, the bars of the day (first / last open; hours missing between the first and the last bar of the day mean a hole in the data), bad
 -- closes, and the rank of the day's first bar
@@ -349,14 +356,17 @@ mails as (
 ),
 -- The rides' ends the range concerns (email 2 = out). A ride belongs to the range when it was reached in one of its bars (rot), or was reached in an earlier bar and seen in the
 -- range (found late: by a catch-up after hours not watched); a ride held through the range belongs to it when the recount has a touch in the range (xot = the first bar of the
--- range after its entry bar whose high / low touches on its side: where it should have been reached).
+-- range after its entry bar whose high / low touches on its side: where it should have been reached). xu = the first bar after the entry bar with a touch only gold's recorded
+-- minutes show, in an hour without a state row (production cannot have seen it): shown on the line, not counted.
 rx as (
-  select r.*, y.symbol, t.xot,
+  select r.*, y.symbol, t.xot, u.xu,
          (r.rot is not null and r.rot >= pp.start_ms and r.rot < pp.end_ms) as in_range,
          (r.rot is not null and r.rot < pp.start_ms and r.reached_at >= to_timestamp(pp.start_ms / 1000.0) and r.reached_at < to_timestamp(pp.end_ms / 1000.0)) as seen_late_in_range
   from rd r join syms y on y.pair = r.pair cross join pp
   cross join lateral (select min(b.ot) as xot from tb b
                       where b.symbol = y.symbol and b.zside = case r.side when 'BUY' then 'top' else 'bottom' end and b.touch and b.ot > r.eot) t
+  cross join lateral (select min(b.ot) as xu from tb b
+                      where b.symbol = y.symbol and b.zside = case r.side when 'BUY' then 'top' else 'bottom' end and b.unwatched_touch and b.ot > r.eot) u
 ),
 ro as (
   select x.*, case when x.in_range or x.seen_late_in_range then x.rot else x.xot end as lot
@@ -528,7 +538,7 @@ cv as (
 oj0 as (
   select coalesce(o.pair, m.pair) as pair, coalesce(o.side, m.side) as side, coalesce(o.eot, m.eot) as eot,
          (o.eot is not null) as has_ride, (o.eot is not null and (o.in_range or o.seen_late_in_range)) as has_exp, (m.eot is not null) as has_mail,
-         o.status, o.rot, o.xot, o.in_range, o.seen_late_in_range, o.reached_at, o.late, o.entry_price, o.seen_price, o.share1,
+         o.status, o.rot, o.xot, o.xu, o.in_range, o.seen_late_in_range, o.reached_at, o.late, o.entry_price, o.seen_price, o.share1,
          coalesce(o.lot, (floor(extract(epoch from m.seen_min) / 3600) * 3600000)::bigint) as lot,
          m.n_rows, m.n_sent, m.statuses, m.lag_min, m.lag_max, m.entry, m.entry_max, m.seen_min, m.seen_max
   from ro o full join mo m on m.pair = o.pair and m.side = o.side and m.eot = o.eot
@@ -537,7 +547,10 @@ oj2 as (
   select k.*, y.symbol, y.ord, y.d, coalesce(sb.n, 0) as subs, power(10::float8, -y.d) as tick,
          case k.side when 'BUY' then 'top' else 'bottom' end as zside,
          case when not k.has_ride then null
-              when k.in_range then case when k.xot = k.rot then 'same' when k.xot < k.rot then 'recount_earlier' else 'recount_no_touch_at_reached_bar' end
+              when k.in_range then case when k.xot = k.rot then 'same' when k.xot < k.rot then 'recount_earlier'
+                                        -- the reached bar has no data here (the five pairs on a Saturday morning, gold STALE_ROW, a missing bar): not recounted (found 2026-11-13, docs 8.151)
+                                        when not exists (select 1 from tb b where b.symbol = y.symbol and b.ot = k.rot) then 'not_recounted'
+                                        else 'recount_no_touch_at_reached_bar' end
               when k.seen_late_in_range then 'reached_bar_before_range'
               else 'not_reached_in_table' end as reach_check
   from oj0 k join syms y on y.pair = k.pair
@@ -553,7 +566,8 @@ oj3 as (
 ov as (
   select oj3.*,
          case when has_exp and has_mail then (case when n_rows > n_sent then 'not_sent' when n_rows > greatest(subs, 1) then 'dup'
-                                                   when reach_check in ('recount_earlier', 'recount_no_touch_at_reached_bar') then 'reach_differs' else 'ok' end)
+                                                   when reach_check in ('recount_earlier', 'recount_no_touch_at_reached_bar') then 'reach_differs'
+                                                   when reach_check = 'not_recounted' then 'unchecked' else 'ok' end)
               when has_exp then (case when subs = 0 then 'not_mailable' else 'missing' end)
               when has_mail then 'extra'
               else (case when subs = 0 then 'not_mailable' else 'missing' end) end as verdict
@@ -688,6 +702,7 @@ u as (
            'reached_bar_utc', to_char(to_timestamp(f.rot / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI'),
            'recount_touch_bar_utc', to_char(to_timestamp(f.xot / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI'),
            'reach_check', f.reach_check,
+           'ticks_touch_unwatched_bar_utc', case when f.xu < coalesce(f.xot, f.rot, f.xu + 1) then to_char(to_timestamp(f.xu / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI') end,
            'seen_utc', to_char(f.reached_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI:SS'), 'late', f.late,
            'mail_rows', f.n_rows, 'mail_status', f.statuses, 'lag_min_s', round(f.lag_min::numeric, 3), 'lag_max_s', round(f.lag_max::numeric, 3),
            'entry_price', f.entry_price, 'seen_price', f.seen_price,
@@ -702,6 +717,7 @@ u as (
                     when 'not_mailable' then 'no_subscription'
                     when 'dup' then 'rows ' || f.n_rows || ' > subscriptions ' || f.subs
                     when 'extra' then case when f.has_ride then 'an email 2 row for a ride the table does not hold reached in the range' else 'an email 2 row with no ride row of its entry bar and side' end
+                    when 'unchecked' then 'the bar the ride was reached in has no data here: its touch is not recounted'
                     when 'reach_differs' then case f.reach_check when 'recount_earlier' then 'recount: the line touched 96% in an earlier bar of the range (recount_touch_bar_utc)'
                                                                  else 'recount: no touch of 96% in the bar the ride was reached in (by the stored high / low)' end
                     when 'ok' then case when f.reach_check = 'reached_bar_before_range' then 'reached in a bar before the range, seen in it (found late); the touch is not recounted here' end end))

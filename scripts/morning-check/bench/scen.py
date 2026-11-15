@@ -201,6 +201,34 @@ for side in ("BUY", "SELL"):
              f" update public.gmo_kline_files f set body = jsonb_set(f.body, '{{data}}', (select jsonb_agg(case when e ->> 'openTime' = '{X}' then e || jsonb_build_object('{end}', '{val}') else e end order by ord)"
              f" from jsonb_array_elements(f.body -> 'data') with ordinality as x(e, ord))) where f.symbol = '{sym}' and f.interval = '1hour' and f.body -> 'data' @> '[{{\"openTime\": \"{X}\"}}]'::jsonb;",
              lambda rows, f=found: f(rows, "gmo"))
+# The review of 2026-11-13 (docs 8.151). 32: the bar the ride was reached in is missing from the data (the five pairs: from both day files; gold: from the stored row and the
+# recorded minutes): the end is not recounted, so it is "unchecked" (not_recounted), never reach_differs. 33 (gold): a touch only the recorded minutes show, in the hour before the
+# reached one, made unwatched by deleting that hour's state row (production runs the minute's check only in an hour with a state row): the end stays ok / same, the touch is shown.
+if P == "XAU/USD":
+    gone = (f"update public.live_chart_fallback set bars = (select jsonb_agg(e order by ord) from jsonb_array_elements(bars) with ordinality as x(e, ord) where e ->> 'datetime' <> '{dtq(R)}')"
+            f" where pair = 'XAU/USD' and interval = '1h'; delete from public.gold_tick_bars where minute >= {tsq(R)} and minute < {tsq(R + HOUR)};")
+else:
+    gone = (f"update public.gmo_kline_files f set body = jsonb_set(f.body, '{{data}}', (select coalesce(jsonb_agg(e order by ord), '[]'::jsonb) from jsonb_array_elements(f.body -> 'data') with ordinality as x(e, ord)"
+            f" where e ->> 'openTime' <> '{R}')) where f.symbol = '{P.replace('/', '_')}' and f.interval = '1hour' and f.body -> 'data' @> '[{{\"openTime\": \"{R}\"}}]'::jsonb;")
+scen("32 the reached bar missing from the data", D, gone,
+     lambda rows: want(line(rows, P, R, S, "out")["verdict"] == "unchecked" and line(rows, P, R, S, "out")["data"]["reach_check"] == "not_recounted"
+                       and "touch_price" not in line(rows, P, R, S, "out")["data"] and "reach_differs" not in (summary(rows, P)["data"]["attention"] or "")
+                       and "unchecked=" in (summary(rows, P)["data"]["attention"] or ""), "a reached bar with no data is not told as not recounted"))
+if P == "XAU/USD":
+    X3 = R - HOUR
+    m3 = tsq(X3 + 30 * 60000)
+    spike = ("999999" if S == "BUY" else "c", "c" if S == "BUY" else "0.01")
+    unwatched = (f"delete from public.macd_ride_state where pair = 'XAU/USD' and bar_time = {tsq(X3)};"
+                 f" insert into public.gold_tick_bars (minute, open, high, low, close, first_at, last_at, samples, source) select {m3}, c, {spike[0]}, {spike[1]}, c, {m3}, {m3}, 1, 'bench'"
+                 f" from (select coalesce((select close from public.gold_tick_bars where minute < {m3} order by minute desc limit 1), 4000) as c) q"
+                 f" on conflict (minute) do update set {'high' if S == 'BUY' else 'low'} = excluded.{'high' if S == 'BUY' else 'low'};")
+    scen("33 gold: a touch only the minutes show, in an hour with no state row", D, unwatched,
+         lambda rows: want(line(rows, P, R, S, "out")["verdict"] == "ok" and line(rows, P, R, S, "out")["data"]["reach_check"] == "same"
+                           and line(rows, P, R, S, "out")["data"].get("ticks_touch_unwatched_bar_utc") == fmt(X3)
+                           and "reach_differs" not in (summary(rows, P)["data"]["attention"] or ""), "a minutes-only touch in an unwatched hour is counted, or not shown"))
+    scen("33b gold: the same touch in an hour WITH its state row is counted", D, unwatched.split(";", 1)[1],
+         lambda rows: want(line(rows, P, R, S, "out")["verdict"] == "reach_differs" and line(rows, P, R, S, "out")["data"]["reach_check"] == "recount_earlier"
+                           and line(rows, P, R, S, "out")["data"]["recount_touch_bar_utc"] == fmt(X3), "a minutes-only touch in a watched hour is not counted"))
 scen("29 the go-live constant is 2026-11-12 07:00 UTC", D, "", lambda rows: want([r for r in rows if r["rt"] == "RUN"][0]["data"]["go_live_utc"] == "2026-11-12 07:00", "the statement's go-live instant is not the one of the record"))
 if skips:
     K = skips[0]
