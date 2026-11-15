@@ -2970,6 +2970,28 @@ that path end to end (the table above; 7.8 syn step 3). Stage 2's `suspect13` ch
 - The hand-level plants still fail their named examples on both sides; `smaNewestFirst` now also fails A.3.10 and
   A.3.11 (the stochastic's %K and %D are the study's SMA3), and `htfOpen` also fails A.3.28's and A.3.30's new
   `trials` keys with F02. Totals now: TS and Python 118 pass, 0 fail, 28 skip.
+- (Round A's review, 2026-11-15: two reviewers, one refuter.) No finding stood; all four were refuted with high
+  confidence as "the code does what the frozen spec says". What they measured, and the weak places they named:
+  - TS vs Python on made-up walks built for the hard cases (flat starts with U = D = 0, flat runs with HH = LL and
+    vr = 0, 266 and 93 windows with RCI9 exactly ±80, %K exactly 20 and 80, %K = %D, EMA5 = EMA20): every buy and sell
+    row, every indicator column and every warm-up of E01–E21 bit-identical (two reviewers, separately). RCI9 was never
+    within 1e-9 of ±80 without being exactly ±80. Mirrored walks: E10–E21 no difference; E01–E09 differ only at the
+    first move after a flat start (U = D = 0, RSI 100 on both sides), as `lawsearch-flip.ts`'s comment says.
+  - At exactly the boundary values, on both sides (the refuter's stub inputs): E10 refuses the crossings at %K = 20
+    and %K = 80 (strict gate); E12 counts RCI = −80 as below for X↑ and +80 as above for X↓.
+  - The examples pin even fewer constants than the builders said (the reviewers' constant-change runs): besides the
+    stochastic's gate and E12's line, an RSI line moved by ±1 (E01, E02, E03, E05, E06's buy side), E09's buy side
+    and E07's / E08's sell sides at 49 or 51, and E15's zero at ±1e−6 pass every example. Warm-up changes are all
+    caught. The reviewers and the refuter read these constants in both implementations against spec 4.1 (L and
+    100 − L, 50, < 20 / > 80, −80 / +80, 0): they match today. A wrong constant shared by both sides would pass the
+    examples and the TS–Python comparison; reading is the only check there.
+  - A.3.13 cannot catch a wrong equality rule for E12 (`<` for `≤` at RCI = −80): its bars 9 and 10 are the bars spec
+    17.2 / 17.4 let differ, so both runners blank them. The spec chose this on purpose (hand.md, reading (b)); a change
+    is the owner's.
+  - Defense in depth not taken: in `--compare` mode the comparator learns RCI-border bars from `ind/` rows only, and
+    the run's adoption sees the TS's RCI9 only on `ind/` rows (9.2's B06 code has the same shape). This acts only if
+    the two RCI9 differ in the last digits, which the two implementations cannot do on a series (same rank rule, same
+    order of operations, every term exact; 80,000 tie-heavy bars gave 0 bitwise differences).
 
 - Where an example's keys mix items, the adapter checks the built item's keys and reports the others as "skip (not
   built: E07)".
