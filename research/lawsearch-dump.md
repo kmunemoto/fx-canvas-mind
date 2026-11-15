@@ -557,7 +557,11 @@ Key: tf, half. All int. late_end must be 0.
 - (Round A's run, 2026-11-15) RCI(9) lands on exactly ±80 often, so the `ALLOWED rci-border` lines are many (the
   200-trial run N 1002: 14,880 bars). Whether the adoption changed anything is the `INFO rci-border` line's count
   (10): on that run the Python's own rows equalled the TS's at all 59,520 stage-0 places (9,724 holding a row), so
-  nothing was changed (measured on a copy before the line existed).
+  nothing was changed (measured on a copy, then by the line itself on a copy of the run's folder). On a copy whose
+  Python E12 compared with −80 − 1e−12 and +80 + 1e−12 (the equality rule reversed at exactly ±80), every hand
+  example still passed and the comparison still said `RESULT agree` (the adoption hides it, as spec 17.2 allows),
+  while the line said `differed at 16466`. A count above 0 is allowed by the spec, so it does not fail the run; the
+  lead reads it.
 
 ### 9.3 Allowed difference: decisions on quantiles and p (spec 8.5)
 
