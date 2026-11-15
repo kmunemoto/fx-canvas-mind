@@ -3,10 +3,11 @@
 //
 // The registry is keyed by the ids of research/ledger/lawsearch-candidates.json. The small trial (spec 19 step 3)
 // defines E04, E26, B06, F00 and F01 (and S01 through F01). Step 4's pilot (2026-11-15, the lead) adds E13, E29, E30,
-// F02, F02r (and S02 through F02) and B07. Every other id throws "NOT BUILT: <id>", so a mode can refuse a trial
+// F02, F02r (and S02 through F02) and B07. Step 4's round A (2026-11-15, the lead) adds E01–E03, E05–E12 and
+// E14–E21. Every other id throws "NOT BUILT: <id>", so a mode can refuse a trial
 // before it reads a bar. Adding an item later is one entry of ITEMS (or FILTERS) and nothing else.
 //
-// Each definition follows spec 4.1–4.4, 5 and 17.3 (§8.113 C1, C17, C19). The dump columns are lawsearch-dump.md 5's;
+// Each definition follows spec 4.1–4.4, 3.2, 5 and 17.3 (§8.113 C1, C17, C19). The dump columns are lawsearch-dump.md 5's;
 // with the hand examples' shrunk params the names keep the default numbers (RSI14, EMA200, HTF_EMA50).
 
 import { DAY, MINUTE } from "./lib.ts";
@@ -95,7 +96,9 @@ const triOf = (n: number, f: (i: number) => number): Tri => {
   return out;
 };
 
-// E01–E06 rsi_back_p_L (spec 4.1): buy X↑(RSI_p, L), sell X↓(RSI_p, 100 − L); a cross item (spec 5); warm-up p + 1
+// E01–E06 rsi_back_p_L (spec 4.1): buy X↑(RSI_p, L), sell X↓(RSI_p, 100 − L); a cross item (spec 5); warm-up p + 1.
+// E07–E09 rsi_50_p are the same with L = 50 (buy X↑(RSI_p, 50), sell X↓(RSI_p, 50); step 4, round A). The RSI is
+// pineRsi's through the Ind's cache (one array per p, shared by every item of that p: E03, E04 and E08 read RSI14).
 const rsiBack = (id: string, p0: number, L: number): ItemDef => {
   const pOf = (params?: ItemParams) => params?.rsi ?? p0;
   const warmupFor = (params?: ItemParams) => params?.warmup ?? pOf(params) + 1;
@@ -193,7 +196,7 @@ const bigmoveItem = (id: string): ItemDef => {
 
 // E13–E14 macd_sig (spec 4.1): buy X↑(MACD line, signal), sell X↓(MACD line, signal) on doubles (3.1); a cross item
 // (spec 5); the line and signal are the app's macd (17.1) through the Ind's cache; warm-up s + m − 1 (34 for
-// (12, 26, 9))
+// (12, 26, 9), 39 for E14's (5, 35, 5), step 4 round A)
 const macdSig = (id: string, f: number, sl: number, m: number): ItemDef => {
   const warmupFor = (params?: ItemParams) => params?.warmup ?? sl + m - 1;
   return {
@@ -326,6 +329,118 @@ const rsi2Item = (id: string): ItemDef => {
   };
 };
 
+// ---- step 4, round A (2026-11-15): E01–E03, E05–E12, E14–E21 ------------------------------------------------------
+// Every one is a cross item of spec 5 (its formula holds X↑ or X↓, so the rising edge is in the formula and spec 5's
+// two "合図にしない足" are not applied: the first bar where the cross is not 無し may give a signal). A tri is 1, 0, or −1
+// where a value of the formula is 無し. Every comparison is on doubles with no tolerance (spec 3.1, 21.5). The dump
+// columns are lawsearch-dump.md 5's round-A table; each build also gives the indicator columns its formula reads (as
+// E04 gives RSI14 and F02r F02's), so that a run holding only that item still writes them (dumpInd checks that two
+// builds of one column hold the same values). Params: only the generic warm-up override (no hand example shrinks these
+// items; F01's ema param must not reach E18's or E21's EMA200).
+
+// E10–E11 stoch_kd_k (spec 4.1, 3.2): buy X↑(%K, %D) and %K[i] < 20, sell X↓(%K, %D) and %K[i] > 80, the slow
+// stochastic (k, 3, 3) of Ind.stoch; warm-up k + 4
+const stochKd = (id: string, k: number): ItemDef => {
+  const warmupFor = (params?: ItemParams) => params?.warmup ?? k + 4;
+  return {
+    id,
+    kind: "cross",
+    warmup: warmupFor(),
+    warmupFor,
+    build(ind: Ind, params?: ItemParams): ItemBuild {
+      const st = ind.stoch(k);
+      const up = xUp(st.K, st.D);
+      const dn = xDn(st.K, st.D);
+      const n = ind.series.n;
+      const buy = triOf(n, (i) => (up[i] === -1 ? -1 : up[i] === 1 && st.K[i] < 20 ? 1 : 0));
+      const sell = triOf(n, (i) => (dn[i] === -1 ? -1 : dn[i] === 1 && st.K[i] > 80 ? 1 : 0));
+      return {
+        kind: "cross",
+        cond: [buy, sell],
+        keep: null,
+        warmup: warmupFor(params),
+        columns: { [`STOCH${k}_K`]: st.K, [`STOCH${k}_D`]: st.D, [`${id}_buy`]: buy, [`${id}_sell`]: sell },
+      };
+    },
+  };
+};
+
+// E12 rci_9 (spec 4.1, 3.2): buy X↑(RCI9, −80), sell X↓(RCI9, +80), RCI9 by the app's rci (src/lib/rci.ts, length 9;
+// Ind.rci); warm-up 9 (spec 5's table). The decisions where RCI[i] or RCI[i−1] is within 1e−9 of ±80 may differ from
+// the Python's (spec 3.2's note, 17.2; lawsearch-dump.md 9.2b): the comparator takes the TS's there
+const rciItem = (id: string, n0: number): ItemDef => {
+  const warmupFor = (params?: ItemParams) => params?.warmup ?? n0;
+  return {
+    id,
+    kind: "cross",
+    warmup: warmupFor(),
+    warmupFor,
+    build(ind: Ind, params?: ItemParams): ItemBuild {
+      const r = ind.rci(n0);
+      const buy = xUp(r, -80);
+      const sell = xDn(r, 80);
+      return { kind: "cross", cond: [buy, sell], keep: null, warmup: warmupFor(params), columns: { [`RCI${n0}`]: r, [`${id}_buy`]: buy, [`${id}_sell`]: sell } };
+    },
+  };
+};
+
+// E15 macd_zero (spec 4.1): buy X↑(MACD(12, 26) line, 0), sell X↓(line, 0); the line of the app's macd through the
+// Ind's cache. The line does not depend on the signal's m (macd.ts: pineEma(C, f) − pineEma(C, s)), so the build
+// reads macd(f, s, 9), E13's, and both give the same MACD12_26 column. Warm-up s (spec 5's table: 「MACD の線だけ
+// （E15）」 s = 26, not s + m − 1; A.3.17)
+const macdZero = (id: string, f: number, sl: number): ItemDef => {
+  const warmupFor = (params?: ItemParams) => params?.warmup ?? sl;
+  return {
+    id,
+    kind: "cross",
+    warmup: warmupFor(),
+    warmupFor,
+    build(ind: Ind, params?: ItemParams): ItemBuild {
+      const line = ind.macd(f, sl, 9).line;
+      const buy = xUp(line, 0);
+      const sell = xDn(line, 0);
+      return { kind: "cross", cond: [buy, sell], keep: null, warmup: warmupFor(params), columns: { [`MACD${f}_${sl}`]: line, [`${id}_buy`]: buy, [`${id}_sell`]: sell } };
+    },
+  };
+};
+
+// E16–E18 ema2 (spec 4.1): buy X↑(EMA_f, EMA_s), sell X↓(EMA_f, EMA_s), both pineEma of the mid close (Ind.ema);
+// warm-up the slower s (spec 5's table 「EMA の2本の交差」, 21.5)
+const ema2 = (id: string, f: number, sl: number): ItemDef => {
+  const warmupFor = (params?: ItemParams) => params?.warmup ?? sl;
+  return {
+    id,
+    kind: "cross",
+    warmup: warmupFor(),
+    warmupFor,
+    build(ind: Ind, params?: ItemParams): ItemBuild {
+      const fast = ind.ema(f);
+      const slow = ind.ema(sl);
+      const buy = xUp(fast, slow);
+      const sell = xDn(fast, slow);
+      return { kind: "cross", cond: [buy, sell], keep: null, warmup: warmupFor(params), columns: { [`EMA${f}`]: fast, [`EMA${sl}`]: slow, [`${id}_buy`]: buy, [`${id}_sell`]: sell } };
+    },
+  };
+};
+
+// E19–E21 c_ema (spec 4.1): buy X↑(C, EMA_n), sell X↓(C, EMA_n), C the mid close (double) and EMA_n pineEma's
+// (Ind.ema; E21's EMA200 is F01's array); warm-up n (spec 5's table 「EMA_n」)
+const cEma = (id: string, n0: number): ItemDef => {
+  const warmupFor = (params?: ItemParams) => params?.warmup ?? n0;
+  return {
+    id,
+    kind: "cross",
+    warmup: warmupFor(),
+    warmupFor,
+    build(ind: Ind, params?: ItemParams): ItemBuild {
+      const ema = ind.ema(n0);
+      const buy = xUp(ind.series.C, ema);
+      const sell = xDn(ind.series.C, ema);
+      return { kind: "cross", cond: [buy, sell], keep: null, warmup: warmupFor(params), columns: { [`EMA${n0}`]: ema, [`${id}_buy`]: buy, [`${id}_sell`]: sell } };
+    },
+  };
+};
+
 // F00 (spec 4.2): always true; no warm-up
 const f00: FilterDef = {
   id: "F00",
@@ -415,8 +530,31 @@ const htfFilter = (id: "F02" | "F02r"): FilterDef => ({
 });
 
 const ITEM_MAP: ReadonlyMap<string, ItemDef> = new Map<string, ItemDef>([
+  // step 4, round A: E01–E03, E05, E06 rsi_back_p_L ((7,20) (7,30) (14,20) (21,20) (21,30)) and E07–E09 rsi_50_p
+  ["E01", rsiBack("E01", 7, 20)],
+  ["E02", rsiBack("E02", 7, 30)],
+  ["E03", rsiBack("E03", 14, 20)],
   ["E04", rsiBack("E04", 14, 30)],
+  ["E05", rsiBack("E05", 21, 20)],
+  ["E06", rsiBack("E06", 21, 30)],
+  ["E07", rsiBack("E07", 7, 50)],
+  ["E08", rsiBack("E08", 14, 50)],
+  ["E09", rsiBack("E09", 21, 50)],
+  // step 4, round A: E10, E11 stoch_kd_k (k = 5, 14) and E12 rci_9
+  ["E10", stochKd("E10", 5)],
+  ["E11", stochKd("E11", 14)],
+  ["E12", rciItem("E12", 9)],
   ["E13", macdSig("E13", 12, 26, 9)],
+  // step 4, round A: E14 macd_sig (5, 35, 5), E15 macd_zero (12, 26), E16–E18 ema2 ((5,20) (20,50) (50,200)), E19–E21
+  // c_ema (n = 20, 50, 200)
+  ["E14", macdSig("E14", 5, 35, 5)],
+  ["E15", macdZero("E15", 12, 26)],
+  ["E16", ema2("E16", 5, 20)],
+  ["E17", ema2("E17", 20, 50)],
+  ["E18", ema2("E18", 50, 200)],
+  ["E19", cEma("E19", 20)],
+  ["E20", cEma("E20", 50)],
+  ["E21", cEma("E21", 200)],
   ["E26", donchianA("E26", 20)],
   ["E29", insideBrk("E29")],
   ["E30", pdayBrk("E30")],
@@ -444,7 +582,8 @@ const checkRegistry = (what: string, map: ReadonlyMap<string, { id: string }>): 
 checkRegistry("ITEM_MAP", ITEM_MAP);
 checkRegistry("FILTER_MAP", FILTER_MAP);
 
-// the items written now: E04, E26, B06 (spec 19 step 3); E13, E29, E30, B07 (step 4's pilot)
+// the items written now: E04, E26, B06 (spec 19 step 3); E13, E29, E30, B07 (step 4's pilot); E01–E03, E05–E12,
+// E14–E21 (step 4, round A)
 export const ITEMS: ReadonlyMap<string, ItemDef> = ITEM_MAP;
 // the filters written now: F00, F01 (step 3); F02, F02r (step 4's pilot; S02 is F02 through S_OF_F)
 export const FILTERS: ReadonlyMap<string, FilterDef> = FILTER_MAP;

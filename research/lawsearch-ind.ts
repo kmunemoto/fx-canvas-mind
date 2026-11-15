@@ -1,9 +1,10 @@
 // 法則探し (docs §8.136, research/lawsearch-spec.md): the indicator arrays of one series (builder B,
 // research/lawsearch-design.md 5.1).
 //
-// Spec 3.2 and 17.1: EMA, RMA, ATR, RSI and MACD go through the app functions (pine.ts pineEma, pineRma, pineAtr;
-// ultra.ts pineRsi; macd.ts macd); SMA is the research's own, summed oldest first (pine.ts sma sums newest first and
-// is used only by the planted error smaNewestFirst); donchian is §8.113 C1, bigmove §8.113 C17 and rsi2 §8.113 C19
+// Spec 3.2 and 17.1: EMA, RMA, ATR, RSI, MACD and RCI go through the app functions (pine.ts pineEma, pineRma, pineAtr;
+// ultra.ts pineRsi; macd.ts macd; src/lib/rci.ts rci, step 4 round A); SMA is the research's own, summed oldest first
+// (pine.ts sma sums newest first and is used only by the planted error smaNewestFirst), and so is the slow stochastic
+// (step 4 round A, its SMA3 the same SMA); donchian is §8.113 C1, bigmove §8.113 C17 and rsi2 §8.113 C19
 // with spec 17.3's substitutions; E29's inside bar and E30's previous day are spec 4.1's own formulas (17.1: the
 // research writes E29–E32 itself). The app functions return Array<number | null>; this module converts with toF64
 // (null and non-finite → NaN) and never hands an Array to another module. 無し is NaN in a Float64Array and −1 in a
@@ -15,7 +16,8 @@
 import { pineAtr, pineEma, pineRma, sma as pineSmaNewestFirst } from "../supabase/functions/_shared/pine.ts";
 import { pineRsi } from "../supabase/functions/_shared/ultra.ts";
 import { macd as appMacd } from "../supabase/functions/_shared/macd.ts";
-import type { BigmoveOut, BigmoveParams, DonchianOut, Ind, MacdOut, RsiOut, Series, Tri } from "./lawsearch-types.ts";
+import { rci as appRci, RCI_DEFAULTS } from "../src/lib/rci.ts";
+import type { BigmoveOut, BigmoveParams, DonchianOut, Ind, MacdOut, RsiOut, Series, StochOut, Tri } from "./lawsearch-types.ts";
 
 // ---- conversions -------------------------------------------------------------------------------------------
 
@@ -344,6 +346,49 @@ export function mean200Of(s: Series, w = 200): { up: Tri; dn: Tri } {
   return { up, dn };
 }
 
+// ---- spec 3.2 slow stochastic and RCI (step 4, round A: E10, E11, E12) -------------------------------------------
+
+// The slow stochastic's raw %K (spec 3.2, on the mid doubles): HH = max H[i−k+1..i], LL = min L[i−k+1..i], rawK =
+// (100 × (C − LL)) ÷ (HH − LL), in this order; 無し for i < k − 1, where HH = LL, and where a value of the window is
+// not finite. Each window is scanned afresh (k is 5 or 14), so nothing after bar i is read for bar i. %K and %D are
+// SMA3 of rawK and of %K, the study's oldest-first SMA (Ind.stoch, through smaOf: the plant smaNewestFirst reaches it).
+export function rawKOf(s: Series, k: number): Float64Array {
+  const n = s.n;
+  const out = new Float64Array(n).fill(NaN);
+  for (let i = k - 1; i < n; i++) {
+    let hh = -Infinity, ll = Infinity;
+    let ok = Number.isFinite(s.C[i]);
+    for (let j = i - k + 1; ok && j <= i; j++) {
+      const h = s.H[j], l = s.L[j];
+      if (!Number.isFinite(h) || !Number.isFinite(l)) ok = false;
+      else {
+        if (h > hh) hh = h;
+        if (l < ll) ll = l;
+      }
+    }
+    if (!ok || hh === ll) continue;
+    out[i] = (100 * (s.C[i] - ll)) / (hh - ll);
+  }
+  return out;
+}
+
+// The ranks of RCI(n)'s window C[i−n+1..i] (spec 3.2: 順位 ＝ (窓の中でそれより小さい数) ＋ (等しい数 − 1) ÷ 2), oldest
+// first; null for i < n − 1. This is the rank that src/lib/rci.ts makes inside its window (rciOfWindow), written out
+// for the hand examples (A.3.12, A.3.13 「順位」) only: the RCI itself is always rci.ts's (Ind.rci, spec 17.1).
+export function rciRanksOf(C: Float64Array, i: number, n: number): number[] | null {
+  if (i < n - 1) return null;
+  const w: number[] = [];
+  for (let j = i - n + 1; j <= i; j++) w.push(C[j]);
+  return w.map((v) => {
+    let below = 0, equal = 0;
+    for (const u of w) {
+      if (u < v) below++;
+      else if (u === v) equal++;
+    }
+    return below + (equal - 1) / 2;
+  });
+}
+
 // ---- spec 4.1 E29 and E30 (step 4) -------------------------------------------------------------------------
 
 // E29's inside bar (spec 4.1, in points): inside[i] = (Ph[i−1] ≤ Ph[i−2] && Pl[i−1] ≥ Pl[i−2]); 無し for i < 2
@@ -505,6 +550,27 @@ export function indOf(series: Series, higher?: { series: Series; g: Int32Array }
         for (let i = 0; i < C.length; i++) closes.push(C[i]);
         const r = appMacd(closes, { fast: f, slow: sl, signal: m });
         return { line: toF64(r.macd), signal: toF64(r.signal) };
+      }),
+    // step 4, round A (E10, E11): the slow stochastic (k, 3, 3) of spec 3.2, the research's own (spec 17.1 names no app
+    // function for it): rawK (rawKOf), %K = SMA3(rawK) and %D = SMA3(%K) through smaOf (oldest first; a window that
+    // holds 無し is 無し; plant smaNewestFirst: pine.ts sma)
+    stoch: (k: number) =>
+      memo(`stoch:${k}`, (): StochOut => {
+        const rawK = rawKOf(series, k);
+        const K = smaOf(rawK, 3);
+        return { rawK, K, D: smaOf(K, 3) };
+      }),
+    // step 4, round A (E12): the app's rci (src/lib/rci.ts) called with length n, its rci column only (spec 3.2 and
+    // 17.1; the ma it also returns is not used, so its smoothing is left at rci.ts's default). rci.ts squares with
+    // ** 2 where spec 3.2 writes x*x: the ranks less their mean are multiples of 0.5 and t − 4 is a whole number, so
+    // every square and sum is exact either way (spec 3.2's note), and RCI is compared to 1e−9 (spec 17.2; the E12
+    // decisions near ±80 may differ, lawsearch-dump.md 9.2b). The candles are plain objects made by a loop, as for
+    // pineAtr above.
+    rci: (n: number) =>
+      memo(`rci:${n}`, () => {
+        const candles: Array<{ close: number }> = new Array(series.n);
+        for (let i = 0; i < series.n; i++) candles[i] = { close: C[i] };
+        return toF64(appRci(candles, { length: n, smoothing: RCI_DEFAULTS.smoothing }).rci);
       }),
     donchian: (n: number) => memo(`donchian:${n}`, () => donchianOf(series, n)),
     bigmove: (o: BigmoveParams) =>

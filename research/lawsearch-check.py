@@ -565,6 +565,11 @@ def lt0(x):
     return x is not None and not (isinstance(x, float) and math.isnan(x)) and not is_zero(x) and x < 0
 
 
+def rci_near(v):
+    """Spec 3.2 / 17.2, dump.md 9.2b: an RCI value less than 1e-9 from -80 or +80 (「±80 から 1e−9 未満」)."""
+    return v == v and (abs(v - 80) < 1e-9 or abs(v + 80) < 1e-9)
+
+
 def isnum(x):
     return x is not None and not (isinstance(x, float) and math.isnan(x))
 
@@ -3773,9 +3778,12 @@ _HAND_ALL = []
 # 13. The registry of trials (research/ledger/lawsearch-candidates.json)
 # ----------------------------------------------------------------------------------------------------------------
 
-# The small trial's items, then step 4's pilot (the lead, 2026-11-15): E13, E29, E30, F02 / F02r, S02, B07. Every
-# other id of the ledger stays not built: a run whose config.json lists one stops (NotBuilt, exit 3).
-BUILT_E = {"E04", "E26", "E13", "E29", "E30"}
+# The small trial's items, then step 4's pilot (the lead, 2026-11-15): E13, E29, E30, F02 / F02r, S02, B07, then
+# step 4's round A (the lead, 2026-11-15): E01-E03, E05-E12, E14-E21. Every other id of the ledger stays not built: a
+# run whose config.json lists one stops (NotBuilt, exit 3).
+BUILT_E = {"E04", "E26", "E13", "E29", "E30",
+           "E01", "E02", "E03", "E05", "E06", "E07", "E08", "E09", "E10", "E11", "E12", "E14", "E15", "E16", "E17",
+           "E18", "E19", "E20", "E21"}
 BUILT_F = {"F00", "F01", "F02", "F02r"}
 BUILT_S = {"S01", "S02"}
 BUILT_B = {"B06", "B07"}
@@ -4414,16 +4422,39 @@ class Run:
         for t in self.trials:
             if t["kind"] == "B" and t["b"] == "B06":
                 self.ts_sig[t["id"]] = self._read_ts_signals(t["id"])
+        # dump.md 9.2b (step 4, round A): E12's RCI-border bars. A bar is one when, in either implementation, RCI9[i]
+        # or RCI9[i-1] is less than 1e-9 from -80 or +80 (spec 3.2: 「±80 から 1e−9 未満」): the near bars k, read from
+        # the Python's whole RCI9 and from the TS's ind/ rows, give the bars k and k + 1. E12 is a crossing item, so
+        # no later bar reads them (unlike B06's rising edge). The TS's rows of the E12 trials are adopted there.
+        rci_border = {}
+        for tf in TFS:
+            if not any(t["kind"] == "EF" and t["e"] == "E12" for t in self.trials if t["tf"] == tf):
+                continue
+            for pair in PAIRS:
+                b = load.bars[(tf, pair)]
+                near = {i for i, v in enumerate(sig.rci(b["C"], 9)["rci"].tolist()) if rci_near(v)}
+                near |= {i for i, v in self._ts_ind_col(tf, pair, "RCI9").items() if rci_near(v)}
+                bs = near | {i + 1 for i in near}
+                if bs:
+                    rci_border[(tf, pair)] = bs
+        self.rci_border = rci_border
+        for t in self.trials:
+            if t["kind"] == "EF" and t["e"] == "E12":
+                self.ts_sig[t["id"]] = self._read_ts_signals(t["id"])
 
     def _ts_ind_z(self, tf, pair):
+        return self._ts_ind_col(tf, pair, "BM_z")
+
+    def _ts_ind_col(self, tf, pair, col):
+        """The TS's ind/ values of one column (its rows only: every 97th bar and the signal bars), i -> float."""
         p = os.path.join(self.ts, "ind", f"{tf}_{SYM_OF[pair]}.csv")
         out = {}
         if not os.path.exists(p):
             return out
         with open(p, "r", encoding="utf-8", newline="") as f:
             for r in csv.DictReader(f):
-                if r.get("BM_z"):
-                    out[int(r["i"])] = float(r["BM_z"])
+                if r.get(col):
+                    out[int(r["i"])] = float(r[col])
         return out
 
     def _read_ts_signals(self, tid):
@@ -4437,6 +4468,8 @@ class Run:
         return out
 
     def adopt(self, trial, pair, rows):
+        if trial["kind"] == "EF" and trial["e"] == "E12":
+            return self._adopt_rci(trial, pair, rows)
         if trial["kind"] != "B" or trial["b"] != "B06":
             return rows
         bs = self.border.get((trial["tf"], pair))
@@ -4447,8 +4480,15 @@ class Run:
         for i in bs:
             bars_at.add(i)
             bars_at.add(i + 1)
-        keep = [r for r in rows if r[4] not in bars_at]
-        step = STEP[trial["tf"]]
+        keep = [r for r in rows if r[4] not in bars_at] + self._ts_rows_at(tsr, pair, bars_at)
+        for i in sorted(bars_at):
+            self.allowed.append(f"ALLOWED z-border {trial['tf']} {pair} i={i}")
+        return keep
+
+    @staticmethod
+    def _ts_rows_at(tsr, pair, bars_at):
+        """The TS's signals/ rows of one pair at the given bars, as signal_rows rows."""
+        out = []
         for r in tsr:
             if r["pair"] != pair:
                 continue
@@ -4457,10 +4497,25 @@ class Run:
                 continue
             d = int(r["d"])
             T = int(r["T"])
-            keep.append([T, PAIR_INDEX[pair], 0 if d == 1 else 1, pair, i, d, int(r["X"]), r["reason"], r["half"],
-                         r["warm"] == "1", "emit" if r["reason"] not in ("f_none", "both") else r["reason"]])
+            out.append([T, PAIR_INDEX[pair], 0 if d == 1 else 1, pair, i, d, int(r["X"]), r["reason"], r["half"],
+                        r["warm"] == "1", "emit" if r["reason"] not in ("f_none", "both") else r["reason"]])
+        return out
+
+    def _adopt_rci(self, trial, pair, rows):
+        """dump.md 9.2b: at E12's RCI-border bars of the pair, the TS's rows of this E12 trial replace the Python's
+        (every row of that bar, f_none and both included: the rows E12's rules make there). The bar set is
+        build_adoption's (k and k + 1 for each near k). One ALLOWED line per bar, written once per run."""
+        bars_at = getattr(self, "rci_border", {}).get((trial["tf"], pair))
+        tsr = self.ts_sig.get(trial["id"])
+        if not bars_at or tsr is None:
+            return rows
+        keep = [r for r in rows if r[4] not in bars_at] + self._ts_rows_at(tsr, pair, bars_at)
+        seen = self.__dict__.setdefault("_rci_lines", set())
         for i in sorted(bars_at):
-            self.allowed.append(f"ALLOWED z-border {trial['tf']} {pair} i={i}")
+            line = f"ALLOWED rci-border {trial['tf']} {pair} i={i}"
+            if line not in seen:
+                seen.add(line)
+                self.allowed.append(line)
         return keep
 
     # -------------------------------------------------------------------------------------------- stage 0
@@ -4632,8 +4687,8 @@ class Run:
 
     def write_ind(self, load):
         sig = load_sig()
-        order = ["RSI14", "RSI14_U", "RSI14_D", "E04_buy", "E04_sell", "DON20_HH", "DON20_LL", "DON20_s", "EMA200",
-                 "F01_buy", "F01_sell", "BM_r", "BM_ok", "BM_sigma", "BM_z", "B06_buy", "B06_sell", "B06_keep"]
+        # dump.md 5: the small trial's fixed columns, then step 4's pilot's and round A's, each appended in turn
+        order = sig.IND_COLUMN_ORDER
         for tf in TFS:
             trials = [sig_trial(t) for t in self.trials if t["tf"] == tf]
             for pair in PAIRS:
@@ -5110,6 +5165,8 @@ def value_class(name, row, col):
     base = name.split("/")[0]
     if base == "ind" and col in ("BM_r", "BM_sigma", "BM_z"):
         return "ln"
+    if base == "ind" and col == "RCI9":
+        return "real"   # dump.md 5 / 9.2b: RCI is compared to 1e-9 (spec 17.2)
     if col != "value":
         return "exact"
     key = row.get("key", "")
@@ -5182,6 +5239,7 @@ class Comparator:
         self.rows_of = {}     # file -> (ts rows, py rows) as written in the FILE line
         self._diffs_of = {}   # file -> [(key, column, ts, py, class)], after the allowances of 9.2 and 9.3
         self.border = set()   # (tf, pair, i) z-border bars and their next bars
+        self.rci_border = set()   # (tf, pair, i) E12's RCI-border bars (dump.md 9.2b; step 4, round A)
         self.ts_tab = {}
         self.py_tab = {}
         # dump.md 9.3 (spec 23.5): (stage, half, trial, V, "lb" | "p") -> the TS's candidate, adopted where the
@@ -5196,6 +5254,9 @@ class Comparator:
             m = re.match(r"ALLOWED z-border (\S+) (\S+) i=(\d+)", a)
             if m:
                 self.border.add((m.group(1), m.group(2), int(m.group(3))))
+            m = re.match(r"ALLOWED rci-border (\S+) (\S+) i=(\d+)$", a)
+            if m:
+                self.rci_border.add((m.group(1), m.group(2), int(m.group(3))))
         # z-border bars read from either side's BM_z (lawsearch-dump.md 9.2), and the bar after each
         for n in names:
             if not n.startswith("ind/"):
@@ -5207,17 +5268,26 @@ class Comparator:
                 if not os.path.exists(path):
                     continue
                 hd, lines = read_lines(path)
-                if "BM_z" not in hd:
-                    continue
-                zi = hd.index("BM_z")
-                for ln in lines:
-                    f = ln.split(",")
-                    if zi < len(f) and f[zi] != "":
-                        z = float(f[zi])
-                        if abs(z - 2) <= 2e-9 or abs(z + 2) <= 2e-9:
+                if "BM_z" in hd:
+                    zi = hd.index("BM_z")
+                    for ln in lines:
+                        f = ln.split(",")
+                        if zi < len(f) and f[zi] != "":
+                            z = float(f[zi])
+                            if abs(z - 2) <= 2e-9 or abs(z + 2) <= 2e-9:
+                                i = int(f[0])
+                                self.border.add((tf, pair, i))
+                                self.border.add((tf, pair, i + 1))
+                # dump.md 9.2b: RCI-border bars read from either side's RCI9 rows (RCI9[i] near +-80 makes bars i
+                # and i + 1 border bars); the run's adoption also lists the ones it found on the Python's whole RCI9
+                if "RCI9" in hd:
+                    ri = hd.index("RCI9")
+                    for ln in lines:
+                        f = ln.split(",")
+                        if ri < len(f) and f[ri] != "" and rci_near(float(f[ri])):
                             i = int(f[0])
-                            self.border.add((tf, pair, i))
-                            self.border.add((tf, pair, i + 1))
+                            self.rci_border.add((tf, pair, i))
+                            self.rci_border.add((tf, pair, i + 1))
         for n in names:
             if n not in tsf or n not in pyf:
                 self.order.append(n)
@@ -5273,8 +5343,9 @@ class Comparator:
                 cls = value_class(name, rowd, c)
                 if values_equal(va, vb, cls, dec=(base in ("bars", "htf") and c in DEC_COLS)):
                     continue
-                if self._z_allowed(name, k, c):
-                    self.allowed.append(f"ALLOWED z-border {name} {'|'.join(k)} {c} ts={va} py={vb}")
+                kind = self._z_allowed(name, k, c)
+                if kind:
+                    self.allowed.append(f"ALLOWED {kind} {name} {'|'.join(k)} {c} ts={va} py={vb}")
                     continue
                 diffs.append(("|".join(k), c, va, vb, cls))
         if base == "signals":
@@ -5295,11 +5366,16 @@ class Comparator:
         return out
 
     def _z_allowed(self, name, key, col):
-        if name.startswith("ind/") and col in ("B06_buy", "B06_sell"):
+        """The allowance of dump.md 9.2 (B06's z near +-2: "z-border") or 9.2b (E12 near +-80: "rci-border") that
+        excuses a differing ind/ value, or None."""
+        if name.startswith("ind/") and col in ("B06_buy", "B06_sell", "E12_buy", "E12_sell"):
             tf, sym = name[4:-4].split("_", 1)
             pair = PAIR_OF_SYM.get(sym)
-            return (tf, pair, int(key[0])) in self.border
-        return False
+            if col.startswith("B06") and (tf, pair, int(key[0])) in self.border:
+                return "z-border"
+            if col.startswith("E12") and (tf, pair, int(key[0])) in self.rci_border:
+                return "rci-border"
+        return None
 
     def _signal_sha(self, tl, pl):
         out = []

@@ -9,6 +9,11 @@ pday_brk (spec 4.1 and its notes), F02 / F02r (the higher bar's EMA50 slope, spe
 rule) with S02 (spec 4.3) and the reversed state row of spec 8.6 that F02r's D_F needs, and B07 rsi2 (spec 4.4,
 §8.113 C19 with spec 17.3). Their ind/ columns are lawsearch-dump.md 5's table after B06_keep.
 
+Step 4's round A (the lead, 2026-11-15) adds exactly: E01-E03, E05, E06 rsi_back_p_L, E07-E09 rsi_50_p, E10, E11
+stoch_kd_k (spec 3.2's slow stochastic (k, 3, 3)), E12 rci_9 (spec 3.2's RCI(9)), E14 macd_sig (5, 35, 5), E15
+macd_zero, E16-E18 ema2 and E19-E21 c_ema (spec 4.1), all crossing items of spec 5. Their ind/ columns are
+lawsearch-dump.md 5's table after B07_sell (IND_COLUMN_ORDER); E12's allowed difference near +-80 is dump 9.2b.
+
 Written from the spec, the hand examples, research/lawsearch-dump.md and research/lawsearch-py-design.md only. No
 TypeScript was read. This module imports nothing of research/lawsearch-check.py (PY1).
 
@@ -27,7 +32,9 @@ the ledger has an entry; the ones not written yet raise NotBuilt, so a trial tha
 Run alone: python3 -I research/lawsearch_sig.py --hand [--plant NAME]   (groups 3 and 4 of the hand examples)
 """
 
+import bisect
 import datetime
+import decimal
 import hashlib
 import json
 import math
@@ -234,6 +241,91 @@ def rsi(C, p):
             out[i] = 100 - 100 / (1 + u / dd)
     return {"up": np.array(up, dtype=np.float64), "dn": np.array(dn, dtype=np.float64), "U": U, "D": D,
             "rsi": np.array(out, dtype=np.float64)}
+
+
+def stoch(H, L, C, k, plant=""):
+    """Spec 3.2 slow stochastic (k, 3, 3) -> {"HH", "LL", "rawK", "K", "D"} (step 4, round A: E10, E11).
+
+    HH = max H[i-k+1..i], LL = min L[i-k+1..i] (bar i included, by index across gaps), nan for i < k-1.
+    rawK = (100*(C-LL)) / (HH-LL) in this order; 無し when HH == LL. %K = SMA3(rawK), %D = SMA3(%K): the study's own
+    oldest-first SMA (sma above, not pine.ts's), so a window that holds a 無し is 無し. Plant "smaNewestFirst" (spec 16)
+    reaches the two SMA3.
+    """
+    hs, ls, cs = _fl(H), _fl(L), _fl(C)
+    n = len(cs)
+    HH = [NAN] * n
+    LL = [NAN] * n
+    raw = [NAN] * n
+    for i in range(k - 1, n):
+        hh = hs[i - k + 1]
+        ll = ls[i - k + 1]
+        bad = not (math.isfinite(hh) and math.isfinite(ll))
+        for j in range(i - k + 2, i + 1):
+            hj, lj = hs[j], ls[j]
+            if not (math.isfinite(hj) and math.isfinite(lj)):
+                bad = True
+            if hj > hh:
+                hh = hj
+            if lj < ll:
+                ll = lj
+        if bad or not math.isfinite(cs[i]):
+            continue
+        HH[i] = hh
+        LL[i] = ll
+        if hh != ll:
+            raw[i] = (100 * (cs[i] - ll)) / (hh - ll)
+    rawK = np.array(raw, dtype=np.float64)
+    K = sma(rawK, 3, plant=plant)
+    D = sma(K, 3, plant=plant)
+    return {"HH": np.array(HH, dtype=np.float64), "LL": np.array(LL, dtype=np.float64), "rawK": rawK, "K": K, "D": D}
+
+
+def rci(C, n=9):
+    """Spec 3.2 RCI(9) (src/lib/rci.ts's rci with length 9; written here from the spec's text) -> {"rci", "ranks"}.
+
+    Window C[i-n+1..i], time t = 0 (oldest) .. n-1. The rank of a value is (the number of values of the window smaller
+    than it) + (the number equal to it, itself included, - 1) / 2: the same values share their mean rank, 0-based.
+    mr = the ranks summed oldest first, / n. num = sum (t-c)*(rank-mr), vt = sum (t-c)*(t-c), vr = sum
+    (rank-mr)*(rank-mr), every sum from t = 0, with c = (n-1)/2 (4 for n = 9, spec 3.2's t-4). A square is x*x (the
+    TS's rci.ts uses ** 2; spec 3.2's note: every term is exact). RCI = (100*num) / sqrt(vt*vr); 無し when vr == 0 and
+    for i < n-1. Values are compared as doubles (equal mid closes are equal doubles). ranks[i] is the list of the n
+    ranks oldest first (None for i < n-1; given also where vr == 0, as A.3.12 writes them).
+    Spec 17.2: RCI is compared to 1e-9; E12's decision may differ only at a bar whose RCI[i] or RCI[i-1] is within
+    1e-9 of +-80 (lawsearch-dump.md 9.2b).
+    """
+    cs = _fl(C)
+    N = len(cs)
+    out = [NAN] * N
+    ranks = [None] * N
+    c = (n - 1) / 2
+    for i in range(n - 1, N):
+        w = cs[i - n + 1:i + 1]
+        if not all(math.isfinite(v) for v in w):
+            continue
+        srt = sorted(w)
+        rk = []
+        for v in w:
+            less = bisect.bisect_left(srt, v)
+            eq = bisect.bisect_right(srt, v) - less
+            rk.append(less + (eq - 1) / 2)
+        acc = 0.0
+        for v in rk:
+            acc += v
+        mr = acc / n
+        num = 0.0
+        vt = 0.0
+        vr = 0.0
+        for t in range(n):
+            dt = t - c
+            dr = rk[t] - mr
+            num += dt * dr
+            vt += dt * dt
+            vr += dr * dr
+        ranks[i] = rk
+        if vr == 0:
+            continue
+        out[i] = (100 * num) / math.sqrt(vt * vr)
+    return {"rci": np.array(out, dtype=np.float64), "ranks": ranks}
 
 
 def donchian(H, L, C, n):
@@ -810,6 +902,149 @@ def _item_b07(bars, params, answer_knowing=False, plant=""):
                  ("RSI2_AG", "RSI2_AL", "B07_up", "B07_dn", "B07_buy", "B07_sell"))
 
 
+# ---- step 4, round A (spec 19 step 4; the lead, 2026-11-15): E01-E03, E05-E12, E14-E21. Every one is a crossing
+# item of spec 5 (its formula holds X-up / X-down): kind "cross", the signal is the bar where the formula is true, and
+# neither "no signal" bar of spec 5 is applied. Their ind/ columns are lawsearch-dump.md 5's "Step 4, round A" table.
+# An item's dump_columns are every ind/ column it uses (its indicator's columns, even when an earlier item of the
+# dump's order owns their place, e.g. E03's RSI14), then its own buy and sell; ind_columns writes each column once, in
+# IND_COLUMN_ORDER.
+
+# (p, L) of rsi_back; E04 is (14, 30) (_item_e04 of the small trial)
+RSI_BACK = {"E01": (7, 20), "E02": (7, 30), "E03": (14, 20), "E05": (21, 20), "E06": (21, 30)}
+RSI_50 = {"E07": 7, "E08": 14, "E09": 21}                    # p
+STOCH_K = {"E10": 5, "E11": 14}                              # k of the slow stochastic (k, 3, 3)
+MACD_SIG = {"E13": (12, 26, 9), "E14": (5, 35, 5)}           # (f, s, m); E13 is _item_e13
+EMA2 = {"E16": (5, 20), "E17": (20, 50), "E18": (50, 200)}   # (f, s)
+C_EMA = {"E19": 20, "E20": 50, "E21": 200}                   # n
+
+
+def _cross_built(eid, buy, sell, cols, ind_cols, params):
+    """A crossing item: cond = (buy, sell) tri rows; columns = cols + E??_buy / E??_sell."""
+    cols = dict(cols)
+    cols[eid + "_buy"] = buy
+    cols[eid + "_sell"] = sell
+    return Built("cross", np.vstack([buy, sell]).astype(np.int8), None, _item_warmup(eid, params), cols,
+                 tuple(ind_cols) + (eid + "_buy", eid + "_sell"))
+
+
+def _rsi_cols(R, p):
+    name = "RSI%d" % p
+    return {name: R["rsi"], name + "_U": R["U"], name + "_D": R["D"]}, (name, name + "_U", name + "_D")
+
+
+def _item_rsi_back(eid):
+    """E01-E03, E05, E06 rsi_back_p_L (spec 4.1): buy X-up(RSI_p, L), sell X-down(RSI_p, 100 - L). Warm-up p + 1."""
+    p, L = RSI_BACK[eid]
+
+    def build(bars, params, answer_knowing=False, plant=""):
+        R = rsi(bars["C"], p)
+        cols, ind = _rsi_cols(R, p)
+        return _cross_built(eid, x_up(R["rsi"], L), x_dn(R["rsi"], 100 - L), cols, ind, params)
+    build.__doc__ = "%s rsi_back (%d, %d)" % (eid, p, L)
+    return build
+
+
+def _item_rsi_50(eid):
+    """E07-E09 rsi_50_p (spec 4.1): buy X-up(RSI_p, 50), sell X-down(RSI_p, 50). Warm-up p + 1."""
+    p = RSI_50[eid]
+
+    def build(bars, params, answer_knowing=False, plant=""):
+        R = rsi(bars["C"], p)
+        cols, ind = _rsi_cols(R, p)
+        return _cross_built(eid, x_up(R["rsi"], 50), x_dn(R["rsi"], 50), cols, ind, params)
+    build.__doc__ = "%s rsi_50 (%d)" % (eid, p)
+    return build
+
+
+def _item_stoch(eid):
+    """E10, E11 stoch_kd_k (spec 4.1, 3.2's slow stochastic (k, 3, 3)): buy X-up(%K, %D) and %K[i] < 20; sell
+    X-down(%K, %D) and %K[i] > 80. 無し where the crossing is 無し (any of its four values); a crossing that fails the %K
+    gate is false. Warm-up k + 4. Plant "smaNewestFirst" reaches the SMA3 (hand examples only)."""
+    k = STOCH_K[eid]
+
+    def build(bars, params, answer_knowing=False, plant=""):
+        S = stoch(bars["H"], bars["L"], bars["C"], k, plant=plant)
+        K, D = S["K"], S["D"]
+        xu = x_up(K, D)
+        xd = x_dn(K, D)
+        Kl = K.tolist()
+        buy = xu.copy()
+        sell = xd.copy()
+        for i in range(len(Kl)):
+            if buy[i] == 1 and not (Kl[i] < 20):
+                buy[i] = 0
+            if sell[i] == 1 and not (Kl[i] > 80):
+                sell[i] = 0
+        kn = "STOCH%d_K" % k
+        dn = "STOCH%d_D" % k
+        cols = {kn: K, dn: D, "_rawK": S["rawK"], "_HH": S["HH"], "_LL": S["LL"], "_xup": xu, "_xdn": xd}
+        return _cross_built(eid, buy, sell, cols, (kn, dn), params)
+    build.__doc__ = "%s stoch_kd (%d, 3, 3)" % (eid, k)
+    return build
+
+
+def _item_e12(bars, params, answer_knowing=False, plant=""):
+    """E12 rci_9 (spec 4.1, 3.2): buy X-up(RCI9, -80), sell X-down(RCI9, +80). Warm-up 9."""
+    R = rci(bars["C"], 9)
+    r = R["rci"]
+    cols = {"RCI9": r, "_ranks": R["ranks"]}
+    return _cross_built("E12", x_up(r, -80), x_dn(r, 80), cols, ("RCI9",), params)
+
+
+def _item_macd_sig(eid):
+    """E14 macd_sig (5, 35, 5) (spec 4.1, 3.2): buy X-up(MACD line, signal), sell X-down(line, signal). Warm-up
+    s + m - 1 (39). (E13, (12, 26, 9), is _item_e13 of step 4's pilot.)"""
+    f, s, m = MACD_SIG[eid]
+
+    def build(bars, params, answer_knowing=False, plant=""):
+        M = macd(bars["C"], f, s, m)
+        ln = "MACD%d_%d" % (f, s)
+        cols = {ln: M["line"], ln + "_SIG": M["signal"], "_EMA_fast": M["fast"], "_EMA_slow": M["slow"]}
+        return _cross_built(eid, x_up(M["line"], M["signal"]), x_dn(M["line"], M["signal"]), cols,
+                            (ln, ln + "_SIG"), params)
+    build.__doc__ = "%s macd_sig (%d, %d, %d)" % (eid, f, s, m)
+    return build
+
+
+def _item_e15(bars, params, answer_knowing=False, plant=""):
+    """E15 macd_zero (spec 4.1): buy X-up(MACD(12, 26) line, 0), sell X-down(line, 0). The line only (no signal):
+    warm-up s (26; spec 5's table "MACD の線だけ"). Its ind/ column is E13's MACD12_26 (the same line)."""
+    M = macd(bars["C"], 12, 26, 9)
+    line = M["line"]
+    cols = {"MACD12_26": line, "_EMA_fast": M["fast"], "_EMA_slow": M["slow"]}
+    return _cross_built("E15", x_up(line, 0.0), x_dn(line, 0.0), cols, ("MACD12_26",), params)
+
+
+def _item_ema2(eid):
+    """E16-E18 ema2 (spec 4.1): buy X-up(EMA_f, EMA_s), sell X-down(EMA_f, EMA_s) of the mid close. Warm-up the slow
+    s (spec 5's table, 21.5)."""
+    f, s = EMA2[eid]
+
+    def build(bars, params, answer_knowing=False, plant=""):
+        C = bars["C"]
+        a = ema(C, f)
+        b = ema(C, s)
+        fa, fb = "EMA%d" % f, "EMA%d" % s
+        cols = {fa: a, fb: b}
+        return _cross_built(eid, x_up(a, b), x_dn(a, b), cols, (fa, fb), params)
+    build.__doc__ = "%s ema2 (%d, %d)" % (eid, f, s)
+    return build
+
+
+def _item_c_ema(eid):
+    """E19-E21 c_ema (spec 4.1): buy X-up(C, EMA_n), sell X-down(C, EMA_n) (the mid close as a double). Warm-up n."""
+    n = C_EMA[eid]
+
+    def build(bars, params, answer_knowing=False, plant=""):
+        C = np.asarray(bars["C"], dtype=np.float64)
+        e = ema(C, n)
+        en = "EMA%d" % n
+        cols = {en: e}
+        return _cross_built(eid, x_up(C, e), x_dn(C, e), cols, (en,), params)
+    build.__doc__ = "%s c_ema (%d)" % (eid, n)
+    return build
+
+
 # ---- the registry. Keys are the ids of research/ledger/lawsearch-candidates.json; None means "not written yet".
 E_IDS = ["E%02d" % k for k in range(1, 45)]
 B_IDS = ["B%02d" % k for k in range(1, 19)]
@@ -829,6 +1064,37 @@ ITEMS["E13"] = _item_e13          # step 4's pilot
 ITEMS["E29"] = _item_e29
 ITEMS["E30"] = _item_e30
 ITEMS["B07"] = _item_b07
+# step 4, round A (the lead, 2026-11-15): exactly these 19 items; every other id stays None (NotBuilt)
+for _eid in RSI_BACK:
+    ITEMS[_eid] = _item_rsi_back(_eid)
+for _eid in RSI_50:
+    ITEMS[_eid] = _item_rsi_50(_eid)
+for _eid in STOCH_K:
+    ITEMS[_eid] = _item_stoch(_eid)
+ITEMS["E12"] = _item_e12
+ITEMS["E14"] = _item_macd_sig("E14")
+ITEMS["E15"] = _item_e15
+for _eid in EMA2:
+    ITEMS[_eid] = _item_ema2(_eid)
+for _eid in C_EMA:
+    ITEMS[_eid] = _item_c_ema(_eid)
+ROUND_A = ("E01", "E02", "E03", "E05", "E06", "E07", "E08", "E09", "E10", "E11", "E12", "E14", "E15", "E16", "E17",
+           "E18", "E19", "E20", "E21")
+
+# The operands of each built crossing item (A.3.19's "値が最初にある番号" is the first bar where all of them have a
+# value; the mid close C always has one).
+E_OPERANDS = {"E04": ("RSI14",), "E13": ("MACD12_26", "MACD12_26_SIG"), "E12": ("RCI9",),
+              "E14": ("MACD5_35", "MACD5_35_SIG"), "E15": ("MACD12_26",)}
+for _eid, (_rp, _rl) in RSI_BACK.items():
+    E_OPERANDS[_eid] = ("RSI%d" % _rp,)
+for _eid, _rp in RSI_50.items():
+    E_OPERANDS[_eid] = ("RSI%d" % _rp,)
+for _eid, _k in STOCH_K.items():
+    E_OPERANDS[_eid] = ("STOCH%d_K" % _k, "STOCH%d_D" % _k)
+for _eid, (_ef, _es) in EMA2.items():
+    E_OPERANDS[_eid] = ("EMA%d" % _ef, "EMA%d" % _es)
+for _eid, _n in C_EMA.items():
+    E_OPERANDS[_eid] = ("EMA%d" % _n,)
 
 FILTERS = {k: None for k in F_IDS}
 FILTERS["F00"] = _filt_f00
@@ -841,10 +1107,31 @@ S_BUILT = {"S01", "S02", "S02r"}
 # A filter whose ind/ columns are another filter's (lawsearch-dump.md 5: F02r's truth is the other side's F02 column).
 IND_COLUMNS_OF = {"F02r": "F02"}
 
-# The ind/ column order (lawsearch-dump.md 5): the trial's items in this fixed order, later items appended in the
-# table's order (E01..E44, then F, then B).
+# The order in which ind_columns builds the needed items and filters (any order gives the same columns; the columns'
+# own order is IND_COLUMN_ORDER).
 _IND_FIXED = ["E04", "E26", "F01", "B06"]
 IND_ORDER = _IND_FIXED + [k for k in E_IDS + F_IDS + B_IDS if k not in _IND_FIXED]
+
+# The ind/ columns in lawsearch-dump.md 5's order: the small trial's fixed table, then step 4's pilot (after B06_keep),
+# then step 4's round A (after B07_sell). Each round appends its own; a column shared by several items has the place
+# of the first item of its table that uses it ("An indicator column comes with the first item that uses it").
+IND_COLUMN_ORDER = [
+    # the small trial (fixed)
+    "RSI14", "RSI14_U", "RSI14_D", "E04_buy", "E04_sell", "DON20_HH", "DON20_LL", "DON20_s", "EMA200", "F01_buy",
+    "F01_sell", "BM_r", "BM_ok", "BM_sigma", "BM_z", "B06_buy", "B06_sell", "B06_keep",
+    # step 4's pilot
+    "MACD12_26", "MACD12_26_SIG", "E13_buy", "E13_sell", "E29_buy", "E29_sell", "PD_H", "PD_L", "E30_buy", "E30_sell",
+    "HTF_G", "HTF_EMA50", "HTF_EMA50_PREV", "F02_buy", "F02_sell", "RSI2_AG", "RSI2_AL", "B07_up", "B07_dn", "B07_buy",
+    "B07_sell",
+    # step 4, round A
+    "RSI7", "RSI7_U", "RSI7_D", "E01_buy", "E01_sell", "E02_buy", "E02_sell", "E03_buy", "E03_sell",
+    "RSI21", "RSI21_U", "RSI21_D", "E05_buy", "E05_sell", "E06_buy", "E06_sell", "E07_buy", "E07_sell",
+    "E08_buy", "E08_sell", "E09_buy", "E09_sell", "STOCH5_K", "STOCH5_D", "E10_buy", "E10_sell",
+    "STOCH14_K", "STOCH14_D", "E11_buy", "E11_sell", "RCI9", "E12_buy", "E12_sell",
+    "MACD5_35", "MACD5_35_SIG", "E14_buy", "E14_sell", "E15_buy", "E15_sell", "EMA5", "EMA20", "E16_buy", "E16_sell",
+    "EMA50", "E17_buy", "E17_sell", "E18_buy", "E18_sell", "E19_buy", "E19_sell", "E20_buy", "E20_sell",
+    "E21_buy", "E21_sell",
+]
 
 # Column types for a writer (lawsearch-dump.md 3, 5): real | tri | int | bool.
 IND_TYPES = {"RSI14": "real", "RSI14_U": "real", "RSI14_D": "real", "E04_buy": "tri", "E04_sell": "tri",
@@ -857,6 +1144,11 @@ IND_TYPES = {"RSI14": "real", "RSI14_U": "real", "RSI14_D": "real", "E04_buy": "
              "E29_sell": "tri", "PD_H": "real", "PD_L": "real", "E30_buy": "tri", "E30_sell": "tri", "HTF_G": "int",
              "HTF_EMA50": "real", "HTF_EMA50_PREV": "real", "F02_buy": "tri", "F02_sell": "tri", "RSI2_AG": "real",
              "RSI2_AL": "real", "B07_up": "tri", "B07_dn": "tri", "B07_buy": "tri", "B07_sell": "tri"}
+# step 4, round A (lawsearch-dump.md 5, the table after B07_sell): the E??_buy / E??_sell are tris, the rest reals
+for _c in IND_COLUMN_ORDER[IND_COLUMN_ORDER.index("RSI7"):]:
+    IND_TYPES[_c] = "tri" if _c.endswith(("_buy", "_sell")) else "real"
+if sorted(IND_TYPES) != sorted(IND_COLUMN_ORDER):
+    raise AssertionError("IND_TYPES and IND_COLUMN_ORDER name different columns")
 
 
 def item(eid, bars, params=None, answer_knowing=False, plant=""):
@@ -957,6 +1249,21 @@ ITEM_WARMUP = {"E04": lambda pr: int(_p(pr, "rsi", 14)) + 1,           # RSI_p: 
                "E29": lambda pr: 3,                                    # E29: 3 bars
                "E30": lambda pr: 0,                                    # 前の日がそろうこと: the 無し rule itself
                "B07": lambda pr: 200}                                  # §8.113 C19: 200 bars
+# step 4, round A (spec 5's table of E warm-ups; 21.5)
+for _eid, (_rp, _rl) in RSI_BACK.items():
+    ITEM_WARMUP[_eid] = (lambda p: (lambda pr: p + 1))(_rp)          # RSI_p: p + 1
+for _eid, _rp in RSI_50.items():
+    ITEM_WARMUP[_eid] = (lambda p: (lambda pr: p + 1))(_rp)          # RSI_p: p + 1
+for _eid, _k in STOCH_K.items():
+    ITEM_WARMUP[_eid] = (lambda k: (lambda pr: k + 4))(_k)          # ストキャス: k + 4
+ITEM_WARMUP["E12"] = lambda pr: 9                                   # RCI: 9
+ITEM_WARMUP["E14"] = lambda pr: MACD_SIG["E14"][1] + MACD_SIG["E14"][2] - 1   # MACD (line and signal): s + m - 1
+ITEM_WARMUP["E15"] = lambda pr: 26                                  # MACD の線だけ (E15): s
+for _eid, (_ef, _es) in EMA2.items():
+    ITEM_WARMUP[_eid] = (lambda s: (lambda pr: s))(_es)              # EMA の2本の交差: the slow s (21.5)
+for _eid, _n in C_EMA.items():
+    ITEM_WARMUP[_eid] = (lambda n: (lambda pr: n))(_n)              # EMA_n: n
+del _eid, _rp, _rl, _k, _ef, _es, _n, _c   # module-level loop names (none may shadow a helper)
 FILTER_WARMUP = {"F00": lambda pr: 0,
                  "F01": lambda pr: int(_p(pr, "ema", 200)),             # EMA200: 200 bars
                  # F02, F02r: 51 higher bars, kept by warm_ok (the higher bar g >= 51), not by a bar index
@@ -1146,10 +1453,21 @@ def candidates(trial, bars, params=None, plant="", answer_knowing=False):
             "status": [r[2] for r in rows], "warm": np.array(warm, dtype=bool)}
 
 
+def _same_column(a, b):
+    a = np.asarray(a)
+    b = np.asarray(b)
+    if a.shape != b.shape:
+        return False
+    if a.dtype.kind == "f" or b.dtype.kind == "f":
+        return bool(np.array_equal(a.astype(np.float64), b.astype(np.float64), equal_nan=True))
+    return bool(np.array_equal(a, b))
+
+
 def ind_columns(trials, bars, params=None, answer_knowing=False):
     """The ind/ columns of lawsearch-dump.md 5 (name -> array) for the built items of these trials, in the dump's
-    order. Raises NotBuilt when a trial uses an item that is not written. Types: IND_TYPES (tri is int8 with -1 for
-    無し; DON20_s is int64 and never empty; bool columns are bool)."""
+    order (IND_COLUMN_ORDER). Every column an item uses is written (an indicator column once, in the place of the
+    first item of the dump's table that uses it). Raises NotBuilt when a trial uses an item that is not written.
+    Types: IND_TYPES (tri is int8 with -1 for 無し; DON20_s is int64 and never empty; bool columns are bool)."""
     need = set()
     for tr_ in trials:
         t = parse_trial(tr_)
@@ -1168,7 +1486,7 @@ def ind_columns(trials, bars, params=None, answer_knowing=False):
             if ITEMS.get(t["b"]) is None:
                 raise NotBuilt("item %s is not written yet" % t["b"])
             need.add(t["b"])
-    out = {}
+    got = {}
     for key in IND_ORDER:
         if key not in need:
             continue
@@ -1180,8 +1498,15 @@ def ind_columns(trials, bars, params=None, answer_knowing=False):
             col = b.columns[name]
             if name.endswith("_s") and name.startswith("DON"):
                 col = np.asarray(col, dtype=np.int64)
-            out[name] = col
-    return out
+            if name in got:
+                # a shared indicator column (E03's and E04's RSI14 ...): the same function on the same bars
+                if not _same_column(got[name], col):
+                    raise ValueError("ind column %s: two items give different values" % name)
+                continue
+            got[name] = col
+    rank = {c: k for k, c in enumerate(IND_COLUMN_ORDER)}
+    names = sorted((c for c in got if c in rank), key=lambda c: rank[c]) + [c for c in got if c not in rank]
+    return {c: got[c] for c in names}
 
 
 # =====================================================================================================================
@@ -1375,43 +1700,152 @@ def _h_tr_atr14(ex, plant):
     return {"TR": _flist(tr(bars["H"], bars["L"], bars["C"])), "ATR14": _flist(atr(bars["H"], bars["L"], bars["C"], 14))}
 
 
+def _warm_split(cand):
+    """The emitted signals of a trial's candidates split by spec 6 ① (warm-up): (kept, excluded), each {buy, sell}."""
+    kept = {"buy": [], "sell": []}
+    excl = {"buy": [], "sell": []}
+    for i, d, st, w in zip(cand["i"].tolist(), cand["d"].tolist(), cand["status"], cand["warm"].tolist()):
+        if st == "emit":
+            (kept if w else excl)["buy" if d == 1 else "sell"].append(int(i))
+    return kept, excl
+
+
+def _e_view(bars, eids, plant):
+    """Round A's crossing items on a hand example's bars, each as the trial (E, F00): "cond" (the item's buy / sell
+    expression at every bar, null where it is 無し), "signals" (spec 5's signals, before 6's exclusions), "warmup_k",
+    "kept_after_warmup" and "excluded_by_warmup_1" (spec 6 ①), keyed by the item id."""
+    out = {"cond": {}, "signals": {}, "warmup_k": {}, "kept_after_warmup": {}, "excluded_by_warmup_1": {}}
+    for eid in eids:
+        it = item(eid, bars, plant=plant)
+        trial = "%s.%s.F00" % (bars["tf"], eid)
+        c = candidates(trial, bars, plant=plant)
+        out["cond"][eid] = {"buy": _tlist(it.cond[0]), "sell": _tlist(it.cond[1])}
+        out["signals"][eid] = _sig_buy_sell(c)
+        out["warmup_k"][eid] = trial_warmup(trial)
+        out["kept_after_warmup"][eid], out["excluded_by_warmup_1"][eid] = _warm_split(c)
+    return out
+
+
 def _h_a37(ex, plant):
+    """A.3.7: RSI7's edges, and E01, E02, E07 (step 4, round A)."""
     bars = _hand_bars(ex["input"])
     R = rsi(bars["C"], 7)
-    return {"up": _flist(R["up"]), "dn": _flist(R["dn"]), "U": _flist(R["U"]), "D": _flist(R["D"]),
-            "RSI7": _flist(R["rsi"])}
+    out = {"up": _flist(R["up"]), "dn": _flist(R["dn"]), "U": _flist(R["U"]), "D": _flist(R["D"]),
+           "RSI7": _flist(R["rsi"])}
+    v = _e_view(bars, ("E01", "E02", "E07"), plant)
+    for k in ("cond", "signals", "warmup_k", "excluded_by_warmup_1"):
+        out[k] = v[k]
+    return out
 
 
 def _h_a38(ex, plant):
+    """A.3.8: RSI 7, 14, 21 and E01-E09 (E04 of the small trial, the others of step 4's round A)."""
     bars = _hand_bars(ex["input"])
     out = {"RSI7": _flist(rsi(bars["C"], 7)["rsi"]), "RSI14": _flist(rsi(bars["C"], 14)["rsi"]),
            "RSI21": _flist(rsi(bars["C"], 21)["rsi"])}
-    c = candidates("m15.E04.F00", bars, plant=plant)
-    out["signals"] = {"E04": _sig_buy_sell(c)}
+    out["signals"] = _e_view(bars, ("E01", "E02", "E03", "E04", "E05", "E06", "E07", "E08", "E09"), plant)["signals"]
     return out
 
 
 def _h_a39(ex, plant):
+    """A.3.9: RSI14 exactly 50, and E07, E08 (step 4, round A)."""
     bars = _hand_bars(ex["input"])
     R14 = rsi(bars["C"], 14)
     eq = []
     for u, d in zip(R14["U"].tolist(), R14["D"].tolist()):
         eq.append(None if (u != u or d != d) else bool(u == d))
-    return {"up": _flist(R14["up"]), "dn": _flist(R14["dn"]), "U14": _flist(R14["U"]), "D14": _flist(R14["D"]),
-            "RSI14": _flist(R14["rsi"]), "RSI7": _flist(rsi(bars["C"], 7)["rsi"]), "U14_eq_D14": eq}
+    out = {"up": _flist(R14["up"]), "dn": _flist(R14["dn"]), "U14": _flist(R14["U"]), "D14": _flist(R14["D"]),
+           "RSI14": _flist(R14["rsi"]), "RSI7": _flist(rsi(bars["C"], 7)["rsi"]), "U14_eq_D14": eq}
+    v = _e_view(bars, ("E08", "E07"), plant)
+    out["cond"] = v["cond"]
+    out["signals"] = v["signals"]
+    return out
 
 
-def _h_emas(periods):
-    def h(ex, plant):
-        bars = _hand_bars(ex["input"])
-        f = ex["expect"].get("first_index_shown", 0)
-        out = {}
-        for p in periods:
-            out["EMA%d" % p] = _flist(ema(bars["C"], p), f)
-        if "first_index_shown" in ex["expect"]:
-            out["first_index_shown"] = _first_finite(ema(bars["C"], 12))
-        return out
-    return h
+def _stoch_view(bars, eid, plant):
+    """A.3.10, A.3.11: the slow stochastic of E10 / E11 and the item's crossings, gate and signals."""
+    it = item(eid, bars, plant=plant)
+    k = STOCH_K[eid]
+    c = candidates("%s.%s.F00" % (bars["tf"], eid), bars, plant=plant)
+    K = it.columns["STOCH%d_K" % k]
+    xu = it.columns["_xup"].tolist()
+    xd = it.columns["_xdn"].tolist()
+    Kl = K.tolist()
+    return {"k": k, "rawK": _flist(it.columns["_rawK"]), "K": _flist(K), "D": _flist(it.columns["STOCH%d_D" % k]),
+            "xup_K_D": _tlist(it.columns["_xup"]), "xdn_K_D": _tlist(it.columns["_xdn"]),
+            "cond_buy": _tlist(it.cond[0]), "cond_sell": _tlist(it.cond[1]), "signals": _sig_buy_sell(c),
+            "crossings_failing_gate": {
+                "up_with_K_ge_20": [i for i in range(len(Kl)) if xu[i] == 1 and not (Kl[i] < 20)],
+                "down_with_K_le_80": [i for i in range(len(Kl)) if xd[i] == 1 and not (Kl[i] > 80)]}}
+
+
+def _h_a310(ex, plant):
+    bars = _hand_bars(ex["input"])
+    return {"E10": _stoch_view(bars, "E10", plant), "E11": _stoch_view(bars, "E11", plant)}
+
+
+def _h_a311(ex, plant):
+    bars = _hand_bars(ex["input"])
+    v = _stoch_view(bars, "E10", plant)
+    out = {k: v[k] for k in ("rawK", "K", "D", "xup_K_D", "xdn_K_D")}
+    out["signals"] = {"E10": v["signals"]}
+    return out
+
+
+def _rci_near(v):
+    """Spec 3.2 / 17.2: an RCI value less than 1e-9 from -80 or +80 (「±80 から 1e−9 未満」)."""
+    return v is not None and v == v and (abs(v - 80) < 1e-9 or abs(v + 80) < 1e-9)
+
+
+def _h_rci(ex, plant):
+    """A.3.12, A.3.13: RCI(9), its ranks, E12's crossings and signals, and the bars where E12's decision may differ
+    (RCI[i] or RCI[i-1] less than 1e-9 from +-80; spec 3.2, 17.2, 17.4)."""
+    bars = _hand_bars(ex["input"])
+    it = item("E12", bars, plant=plant)
+    c = candidates("%s.E12.F00" % bars["tf"], bars, plant=plant)
+    r = it.columns["RCI9"].tolist()
+    near = [i for i, v in enumerate(r) if _rci_near(v)]
+    allowed = sorted(set(near) | {i + 1 for i in near if i + 1 < len(r)})
+    return {"RCI9": _flist(it.columns["RCI9"]),
+            "ranks": [None if rk is None else [float(v) for v in rk] for rk in it.columns["_ranks"]],
+            "xup_RCI_m80": _tlist(it.cond[0]), "xdn_RCI_p80": _tlist(it.cond[1]),
+            "signals": {"E12": _sig_buy_sell(c)}, "bars_within_1e-9_of_pm80": near,
+            "decisions_allowed_to_differ": allowed}
+
+
+def _rci_allow(exp, got):
+    """Spec 17.4 (and lawsearch-dump.md 9.2b's form): at a bar whose RCI9[i] or RCI9[i-1] is less than 1e-9 from +-80
+    in the example or in this code, E12's decision may differ. There the example's decision is adopted, as the Python
+    adopts the TS's in a run, and the bar is reported as an info line. -> (got, info lines)."""
+    e = exp.get("RCI9") or []
+    g = got.get("RCI9") or []
+    nb = {i for i in range(len(e)) if _rci_near(e[i])} | {i for i in range(len(g)) if _rci_near(g[i])}
+    allowed = sorted(nb | {i + 1 for i in nb})
+    infos = []
+    for key in ("xup_RCI_m80", "xdn_RCI_p80"):
+        if key in exp and key in got:
+            gl = list(got[key])
+            for i in allowed:
+                if i < len(gl) and i < len(exp[key]) and gl[i] != exp[key][i]:
+                    infos.append("ALLOWED rci-border %s i=%d (example %r, computed %r)" % (key, i, exp[key][i], gl[i]))
+                    gl[i] = exp[key][i]
+            got[key] = gl
+    es = (exp.get("signals") or {}).get("E12")
+    gs = (got.get("signals") or {}).get("E12")
+    if isinstance(es, dict) and isinstance(gs, dict):
+        new = {}
+        for side in ("buy", "sell"):
+            a = [i for i in gs.get(side, []) if i not in allowed] + [i for i in es.get(side, []) if i in allowed]
+            a = sorted(a)
+            if a != sorted(gs.get(side, [])):
+                infos.append("ALLOWED rci-border signals.E12.%s (example %r, computed %r)" % (side, es.get(side),
+                                                                                                gs.get(side)))
+            new[side] = a
+        got["signals"] = dict(got["signals"])
+        got["signals"]["E12"] = new
+    if allowed:
+        infos.append("rci-border bars %s (E12's decision may differ there; none differed unless listed)" % allowed)
+    return got, infos
 
 
 def _table_k(text):
@@ -1425,8 +1859,6 @@ def _table_k(text):
     return None
 
 
-# The value whose first index is A.3.19's "first_value_index" of an E row (値が最初にある番号).
-_E_FIRST_VALUE = {"E04": "RSI14", "E13": "MACD12_26_SIG"}
 
 
 def _first_keep(fb, n):
@@ -1442,10 +1874,16 @@ def _h_a319(ex, plant):
     attach_mid_htf(bars, plant)
     tf = bars["tf"]
     e_rows = {}
-    for eid, col in _E_FIRST_VALUE.items():
+    # A.3.19's E rows: "値が最初にある番号" is the first bar where every operand of the item's crossing has a value
+    # (E_OPERANDS; the latest of their first values), "最初に合図が出うる番号" the first bar where its crossing is not
+    # 無し, and k (spec 5's table) both "keep_from_index" and the table's number
+    for eid in E_OPERANDS:
+        if ITEMS.get(eid) is None:
+            continue
         it = item(eid, bars, plant=plant)
         k = trial_warmup("%s.%s.F00" % (tf, eid))
-        e_rows[eid] = {"first_value_index": _first_finite(it.columns[col]),
+        firsts = [_first_finite(it.columns[col]) for col in E_OPERANDS[eid]]
+        e_rows[eid] = {"first_value_index": None if None in firsts else max(firsts),
                        "first_signal_index": min(_first_defined(it.cond[0]), _first_defined(it.cond[1])),
                        "keep_from_index": k, "table": k}
     f_rows = {}
@@ -1473,15 +1911,36 @@ def _h_macd(ex, plant):
         out["EMA%d" % p] = _flist(ema(C, p), f0)
     if "first_index_shown" in exp:
         out["first_index_shown"] = _first_finite(M["fast"])
-    trial = "%s.E13.F00" % bars["tf"]
-    c = candidates(trial, bars, plant=plant)
-    out["signals"] = {"E13": _sig_buy_sell(c)}
-    out["warmup_k"] = {"E13": trial_warmup(trial)}
-    excl = {"buy": [], "sell": []}
-    for i, d, st, w in zip(c["i"].tolist(), c["d"].tolist(), c["status"], c["warm"].tolist()):
-        if st == "emit" and not w:
-            excl["buy" if d == 1 else "sell"].append(int(i))
-    out["excluded_by_warmup_1"] = {"E13": excl}
+    # step 4, round A: E14's MACD(5, 35, 5) (the item's own columns) and its signals, and E15's (the (12, 26) line
+    # against 0)
+    i14 = item("E14", bars, plant=plant)
+    out["line_5_35"] = _flist(i14.columns["MACD5_35"], f0)
+    out["signal_5"] = _flist(i14.columns["MACD5_35_SIG"], f0)
+    out["signal_5_seed_index"] = _first_finite(i14.columns["MACD5_35_SIG"])
+    v = _e_view(bars, ("E13", "E14", "E15"), plant)
+    out["signals"] = v["signals"]
+    out["warmup_k"] = {"E13": v["warmup_k"]["E13"]}
+    out["excluded_by_warmup_1"] = {"E13": v["excluded_by_warmup_1"]["E13"]}
+    return out
+
+
+def _h_a317(ex, plant):
+    """A.3.17: E15 (the MACD(12, 26) line against 0; step 4, round A) and its warm-up s = 26 (spec 5's table)."""
+    bars = _hand_bars(ex["input"])
+    M = macd(bars["C"], 12, 26, 9)
+    it = item("E15", bars, plant=plant)
+    v = _e_view(bars, ("E15",), plant)
+    return {"EMA12": _flist(M["fast"]), "EMA26": _flist(M["slow"]), "line_12_26": _flist(it.columns["MACD12_26"]),
+            "xup_line_0": _tlist(it.cond[0]), "xdn_line_0": _tlist(it.cond[1]), "signals": v["signals"],
+            "warmup_k": v["warmup_k"]["E15"], "kept_after_warmup": v["kept_after_warmup"],
+            "excluded_by_warmup_1": v["excluded_by_warmup_1"]}
+
+
+def _h_a318(ex, plant):
+    """A.3.18: EMA5, EMA20, EMA50, and E16, E17, E19, E20 (step 4, round A)."""
+    bars = _hand_bars(ex["input"])
+    out = {"EMA%d" % p: _flist(ema(bars["C"], p)) for p in (5, 20, 50)}
+    out["signals"] = _e_view(bars, ("E16", "E17", "E19", "E20"), plant)["signals"]
     return out
 
 
@@ -1545,27 +2004,66 @@ def _h_s02(htf_key):
     return h
 
 
-def _h_a328_f02(ex, plant):
-    """A.3.28's F02 / F02r keys. E02 is not built: its two signals are read from the example's own
-    E02_signals_after_rising_edge (bars 9 and 13), and spec 5's ④ and ⑤ (apply_filter) are applied to them with
-    F02 / F02r (the example's EMA3)."""
+def _e_raw_pairs(eid, bars, params=None, plant=""):
+    """An item's signals after spec 5 ② and ③ (before F): [(i, d)] in bar order, buy before sell."""
+    it = item(eid, bars, params, plant=plant)
+    raw = raw_signals(it.kind, it.cond, plant, it.prev)
+    if it.keep is not None:
+        raw = raw & np.asarray(it.keep, dtype=bool)
+    if it.once_per_day is not None:
+        raw = once_per_day(raw, it.once_per_day)
+    out = []
+    for i in np.flatnonzero(raw[0] | raw[1]).tolist():
+        for r, d in ((0, 1), (1, -1)):
+            if raw[r, i]:
+                out.append((int(i), d))
+    return out
+
+
+def _ef_trial_view(bars, eid, fid, params, raw, plant):
+    """A.3.28, A.3.30: the trial (E, F) on a hand example: F's value at each of E's signals (in their order), the
+    signals spec 5 ④ and ⑤ emit (from candidates, the run's own path), the 「F が無し」 count and the ⑤ count."""
+    f = filt(fid, bars, params, plant=plant).f
+    c = candidates("%s.%s.%s" % (bars["tf"], eid, fid), bars, params, plant=plant)
+    em = [{"i": int(i), "T": _ms_iso(bars["T"][i]), "d": int(d)}
+          for i, d, st in zip(c["i"].tolist(), c["d"].tolist(), c["status"]) if st == "emit"]
+    return {"F_values_at_signals": [_tri1(f[0 if d == 1 else 1, i]) for i, d in raw], "emitted": em,
+            "F_null_count": len([x for x in c["status"] if x == "f_none"]),
+            "both_sides_dropped_signals": len([x for x in c["status"] if x == "both"])}
+
+
+def _h_a328(ex, plant):
+    """A.3.28: E02's signals (step 4, round A) and the trials E02 x F of the built F (F00, F01 with the example's
+    EMA12, F02 / F02r with its higher-bar EMA3). The F inputs at the signal bars that need only built indicators
+    (EMA12, F02's slope, ATR14, SMA5(ATR14), RSI14) are computed too; ADX14 (F03) and the day's open (F07) are not."""
     bars = _hand_bars(ex["input"])
     attach_mid_htf(bars, plant)
-    pr = {"htf_ema": int(ex["params"]["F02_EMA"])}
-    e02 = [(int(r["i"]), int(r["d"])) for r in ex["expect"]["E02_signals_after_rising_edge"]]
-    e02.sort(key=lambda r: (r[0], 0 if r[1] == 1 else 1))
-    fb = filt("F02", bars, pr, plant=plant)
-    x = fb.columns["_F02_x"]
-    out = {"filters_at_signals": {"F02_slope": [_pyv(x[i]) for i, _d in e02]}, "trials": {}}
-    for fid in ("F02", "F02r"):
-        f = filt(fid, bars, pr, plant=plant).f
-        rows = apply_filter(e02, f)
-        out["trials"]["E02." + fid] = {
-            "F_values_at_signals": [_tri1(f[0 if d == 1 else 1, i]) for i, d in e02],
-            "emitted": [{"i": i, "T": _ms_iso(bars["T"][i]), "d": d} for i, d, st in rows if st == "emit"],
-            "F_null_count": len([r for r in rows if r[2] == "f_none"]),
-            "both_sides_dropped_signals": len([r for r in rows if r[2] == "both"])}
+    pr = ex["params"]
+    e1, e2, e4 = int(pr["F01_EMA"]), int(pr["F02_EMA"]), int(pr["F04_SMA"])
+    C = bars["C"]
+    raw = _e_raw_pairs("E02", bars, plant=plant)
+    at = [i for i, _d in raw]
+    fb1 = filt("F01", bars, {"ema": e1}, plant=plant)
+    fb2 = filt("F02", bars, {"htf_ema": e2}, plant=plant)
+    A = atr(bars["H"], bars["L"], C, 14)
+    S = sma(A, e4, plant=plant)
+    R14 = rsi(C, 14)["rsi"]
+    out = {"RSI7": _flist(rsi(C, 7)["rsi"]),
+           "E02_signals_after_rising_edge": [{"i": i, "T": _ms_iso(bars["T"][i]), "d": d} for i, d in raw],
+           "filters_at_signals": {"EMA%d" % e1: [_pyv(fb1.columns["EMA%d" % e1][i]) for i in at],
+                                  "F02_slope": [_pyv(fb2.columns["_F02_x"][i]) for i in at],
+                                  "ATR14": [_pyv(A[i]) for i in at], "SMA%d_ATR14" % e4: [_pyv(S[i]) for i in at],
+                                  "RSI14": [_pyv(R14[i]) for i in at]},
+           "trials": {}}
+    for fid, fpr in (("F00", {}), ("F01", {"ema": e1}), ("F02", {"htf_ema": e2}), ("F02r", {"htf_ema": e2})):
+        out["trials"]["E02." + fid] = _ef_trial_view(bars, "E02", fid, fpr, raw, plant)
+    out["warmup_k"] = {"E02": _item_warmup("E02", {}), "F01_EMA%d" % e1: _filter_warmup("F01", {"ema": e1})}
     return out
+
+
+def _dec_shift(text, delta):
+    """A decimal mid string moved by a decimal delta, exactly (A.3.30's 「150.000 にした時」 is the same bars 0.500 lower)."""
+    return str(decimal.Decimal(str(text)) + decimal.Decimal(delta))
 
 
 def _h_a44(ex, plant):
@@ -1697,7 +2195,47 @@ def _h_a330(ex, plant):
                                   "SMA100_ATR14": _first_finite(S), "F02_slope": _first_finite(x)},
             "F02_g": [k if k >= 0 else None for k in g[f:]], "F02_slope": _flist(x, f),
             "hourly_from_k48": _htf_rows(bars, fb, 50, k_from=48, with_k=True),
-            "F02_keep_from_index": _first_keep(fb, bars["n"])}
+            "F02_keep_from_index": _first_keep(fb, bars["n"]),
+            **_a330_e18_e21(bars, plant), "variant_flat_150000": _a330_variant(ex, plant)}
+
+
+def _a330_e18_e21(bars, plant):
+    """A.3.30's keys of E18 and E21 (step 4, round A): their signals, the F inputs at the signal bars that need only
+    built indicators (the bars, T and RSI14; ADX14 is F03's, the day's open F07's) and the trials E x F of the built F
+    (F00, F01, F02, F02r; the spec's own EMA200 and higher-bar EMA50)."""
+    out = {"signals": {}, "trials": {}}
+    bar_set = set()
+    for eid in ("E18", "E21"):
+        raw = _e_raw_pairs(eid, bars, plant=plant)
+        c = candidates("%s.%s.F00" % (bars["tf"], eid), bars, plant=plant)
+        out["signals"][eid] = _sig_buy_sell(c)
+        bar_set.update(i for i, _d in raw)
+        for fid in ("F00", "F01", "F02", "F02r"):
+            out["trials"]["%s.%s" % (eid, fid)] = _ef_trial_view(bars, eid, fid, {}, raw, plant)
+    at = sorted(bar_set)
+    R14 = rsi(bars["C"], 14)["rsi"]
+    out["filters_at_signal_bars"] = {"bars": at, "T": [_ms_iso(bars["T"][i]) for i in at],
+                                     "RSI14": [_pyv(R14[i]) for i in at]}
+    return out
+
+
+def _a330_variant(ex, plant):
+    """A.3.30's 「150.000 にした時」 (variant_flat_150000), a second input with its own answer: "the same shape, bars
+    0-200 at 150.000 and the same moves after", i.e. every mid of the example 0.500 lower (exact decimals)."""
+    v = dict(ex["input"])
+    v["mid"] = [[_dec_shift(t, "-0.500") for t in row] for row in ex["input"]["mid"]]
+    bars = _hand_bars(v)
+    C = bars["C"]
+    E50 = ema(C, 50)
+    E200 = ema(C, 200)
+    ks = {eid: trial_warmup("%s.%s.F00" % (bars["tf"], eid)) for eid in ("E18", "E21")}
+    ev = _e_view(bars, ("E18", "E21"), plant)
+    return {"EMA200_199": _pyv(E200[199]), "EMA200_200": _pyv(E200[200]), "EMA50_200": _pyv(E50[200]),
+            "signals": ev["signals"],
+            "warmup_k": ks["E18"] if ks["E18"] == ks["E21"] else ks,
+            "diff_at_200": {"C_minus_EMA200": _pyv(C[200] - E200[200]),
+                            "EMA50_minus_EMA200": _pyv(E50[200] - E200[200])},
+            "excluded_by_warmup_1": ev["excluded_by_warmup_1"]}
 
 
 def _h_a334(ex, plant):
@@ -1800,18 +2338,19 @@ HAND_TABLE = {
     "A.3.2": (_h_sma20, ["first_index_shown", "SMA20"]),
     "A.3.5": (_h_a35, "all"),
     "A.3.6": (_h_tr_atr14, ["TR", "ATR14"]),
-    "A.3.7": (_h_a37, ["up", "dn", "U", "D", "RSI7"]),
-    "A.3.8": (_h_a38, ["RSI7", "RSI14", "RSI21", "signals.E04"]),
-    "A.3.9": (_h_a39, ["up", "dn", "U14", "D14", "RSI14", "RSI7", "U14_eq_D14"]),
-    # A.3.14-A.3.16: E13 (step 4's pilot) unlocks its MACD line, signal and signals; E14's and E15's keys stay skipped
-    "A.3.14": (_h_macd, ["EMA12", "EMA26", "EMA5", "EMA35", "line_12_26", "signal_9", "signal_9_seed_index",
-                         ("signals", "E13")]),
-    "A.3.15": (_h_macd, ["?first_index_shown", "EMA12", "EMA26", "line_12_26", "signal_9", ("signals", "E13"),
-                         ("warmup_k", "E13"), ("excluded_by_warmup_1", "E13")]),
-    "A.3.16": (_h_macd, ["?first_index_shown", "EMA12", "EMA26", "line_12_26", "signal_9", ("signals", "E13"),
-                         ("warmup_k", "E13"), ("excluded_by_warmup_1", "E13")]),
-    "A.3.17": (_h_emas((12, 26)), ["?first_index_shown", "EMA12", "EMA26"]),
-    "A.3.18": (_h_emas((5, 20, 50)), ["EMA5", "EMA20", "EMA50"]),
+    # step 4, round A (the lead, 2026-11-15): E01-E03, E05-E12, E14-E21 unlock every key of A.3.7-A.3.18
+    "A.3.7": (_h_a37, "all"),
+    "A.3.8": (_h_a38, "all"),
+    "A.3.9": (_h_a39, "all"),
+    "A.3.10": (_h_a310, "all"),
+    "A.3.11": (_h_a311, "all"),
+    "A.3.12": (_h_rci, "all"),
+    "A.3.13": (_h_rci, "all"),
+    "A.3.14": (_h_macd, "all"),
+    "A.3.15": (_h_macd, "all"),
+    "A.3.16": (_h_macd, "all"),
+    "A.3.17": (_h_a317, "all"),
+    "A.3.18": (_h_a318, "all"),
     "A.3.19": (_h_a319, "special"),
     "A.3.20": (_h_a320, ["EMA5", "C_minus_EMA", "F01_buy", "F01_sell", "warmup_k",
                          "F_value_used_signal_excluded_by_warmup_1_at"]),
@@ -1819,12 +2358,22 @@ HAND_TABLE = {
     "A.3.22": (_h_f02, "all"),
     "A.3.24": (_h_a324, ["TR", "ATR14", "SMA5_ATR14"]),
     "A.3.25": (_h_a325, ["RSI14"]),
-    "A.3.28": (_h_a328_f02, [("filters_at_signals", "F02_slope"), ("trials", "E02.F02"), ("trials", "E02.F02r")]),
+    # A.3.28: E02 (round A) with the built F; the keys of F01r, F03-F07r and the list over every F stay skipped
+    "A.3.28": (_h_a328, ["RSI7", "E02_signals_after_rising_edge", ("filters_at_signals", "EMA12"),
+                         ("filters_at_signals", "F02_slope"), ("filters_at_signals", "ATR14"),
+                         ("filters_at_signals", "SMA5_ATR14"), ("filters_at_signals", "RSI14"),
+                         ("trials", "E02.F00"), ("trials", "E02.F01"), ("trials", "E02.F02"), ("trials", "E02.F02r"),
+                         "warmup_k"]),
     "A.3.29": (_h_a329, "all"),
     "A.3.30": (_h_a330, ["first_index_shown", "EMA50", "EMA200", "C_minus_EMA200", "ATR14", "SMA100_ATR14",
                          "first_value_index.EMA50", "first_value_index.EMA200", "first_value_index.SMA100_ATR14",
                          "first_value_index.F02_slope", "F02_g", "F02_slope", "hourly_from_k48",
-                         "F02_keep_from_index"]),
+                         "F02_keep_from_index",
+                         # step 4, round A: E18 and E21, and the 「変えた形」 variant_flat_150000 (a second input)
+                         "signals", ("filters_at_signal_bars", "bars"), ("filters_at_signal_bars", "T"),
+                         ("filters_at_signal_bars", "RSI14"), ("trials", "E18.F00"), ("trials", "E18.F01"),
+                         ("trials", "E18.F02"), ("trials", "E18.F02r"), ("trials", "E21.F00"), ("trials", "E21.F01"),
+                         ("trials", "E21.F02"), ("trials", "E21.F02r"), "variant_flat_150000"]),
     "A.3.31": (_h_sma20, ["first_index_shown", "SMA20"]),
     "A.3.34": (_h_a334, ["TR", "ATR14"]),
     "A.4.1": (_h_don(20, "m15.E26.F00"), "all"),
@@ -1853,15 +2402,20 @@ HAND_TABLE = {
 # Why a key that is not required is skipped (design 9: "skip (not built: E07)"). id -> {path tuple: reason}; "*" is
 # the example's default reason. Keys not listed say "not required in the trial".
 HAND_SKIP_WHY = {
-    "A.3.14": {("line_5_35",): "not built: E14", ("signal_5",): "not built: E14",
-               ("signal_5_seed_index",): "not built: E14", ("signals", "E14"): "not built: E14",
-               ("signals", "E15"): "not built: E15"},
-    "A.3.15": {("signals", "E15"): "not built: E15"},
-    "A.3.16": {("signals", "E15"): "not built: E15"},
-    "A.3.28": {"*": "not built: E02 (A.3.28's F02 / F02r keys only are required)"},
-    "A.3.30": {("signals",): "not built: E18, E21", ("filters_at_signal_bars",): "not built: E18, E21",
-               ("trials",): "not built: E18, E21", ("first_value_index", "ADX14"): "not built: F03"},
+    "A.3.28": {("filters_at_signals", "ADX14"): "not built: F03", ("filters_at_signals", "day_open"): "not built: F07",
+               ("excluded_by_warmup_1",): "a list over the trials of every F of the example: not built: F01r, "
+                                          "F03-F07r"},
+    "A.3.30": {("filters_at_signal_bars", "ADX14"): "not built: F03",
+               ("filters_at_signal_bars", "day_open"): "not built: F07",
+               ("first_value_index", "ADX14"): "not built: F03"},
 }
+
+# Spec 17.2 / 17.4: RCI's values are compared to 1e-9 (absolute), not to the last bit.
+_ABS_TOL = {"RCI9": 1e-9}
+
+# Hand examples whose decisions may differ at named bars (spec 17.4: 「分かれてよい足」): id -> adjust(expect, got)
+# -> (got, info lines), run before the comparison (the example's decision is adopted there).
+HAND_ADJUST = {"A.3.12": _rci_allow, "A.3.13": _rci_allow}
 
 # Alternative answers compared under a plant, for information only (py-design 7): plant -> {id: [(expect key,
 # computed key)]}.
@@ -1902,6 +2456,10 @@ def _cmp(exp, got, leaf, ln_keys, where):
             if exp == got or abs(exp - got) <= 1e-9 * max(abs(exp), abs(got)):
                 return None
             return "%s: expected %r, got %r (relative 1e-9)" % (where, exp, got)
+        if leaf in _ABS_TOL:
+            if abs(exp - got) <= _ABS_TOL[leaf]:
+                return None
+            return "%s: expected %r, got %r (absolute %r)" % (where, exp, got, _ABS_TOL[leaf])
         if exp == got:
             return None
         return "%s: expected %r, got %r" % (where, exp, got)
@@ -1953,16 +2511,23 @@ def _norm_req(q):
 
 def _skip_why(hid, path):
     w = HAND_SKIP_WHY.get(hid, {})
-    return w.get(path, w.get("*", "not required in the trial"))
+    if path in w or "*" in w:
+        return w.get(path, w.get("*"))
+    if len(path) == 2 and path[0] == "trials" and "." in str(path[1]):
+        # a trial "E18.F03r" of an example: skipped because its E or F is not written yet
+        e, f = str(path[1]).split(".", 1)
+        miss = [x for x, reg in ((e, ITEMS), (f, FILTERS)) if reg.get(x) is None]
+        if miss:
+            return "not built: " + ", ".join(miss)
+    return "not required in the trial"
 
 
 # A.3.19's rows: the E row of a built item is required (the E row names its item ids, e.g. "E03・E04（RSI14）"), and
 # the F row of a built filter (its id is the label's first token, e.g. "F02・F02r（…）").
-def _a319_e_id(label):
-    for eid in re.findall(r"E\d\d", str(label)):
-        if eid in _E_FIRST_VALUE and ITEMS.get(eid) is not None:
-            return eid
-    return None
+def _a319_e_ids(label):
+    """The built items an E row names ("E01・E02（RSI7）" -> [E01, E02]; "E22〜E25（BB20）" names E22 and E25, not
+    built). Every built item the row names must give the row's values."""
+    return [eid for eid in re.findall(r"E\d\d", str(label)) if eid in E_OPERANDS and ITEMS.get(eid) is not None]
 
 
 def _a319_f_id(label):
@@ -1986,6 +2551,9 @@ def _run_one(ex, plant):
         return {"id": hid, "status": "fail", "keys": [{"key": "*", "status": "fail",
                                                         "why": "%s: %s" % (type(err).__name__, err)}]}
     exp = ex["expect"]
+    infos = []
+    if hid in HAND_ADJUST:
+        got, infos = HAND_ADJUST[hid](exp, got)
     if hid in ("A.4.32", "A.4.33", "A.4.34", "A.4.36", "A.4.40"):
         ln_keys = _LN_KEYS
     else:
@@ -1994,19 +2562,31 @@ def _run_one(ex, plant):
         for kind, rows in (("E", exp["E"]), ("F", exp["F"])):
             for r in rows:
                 name = r["item"] if kind == "E" else r["filter"]
-                rid = _a319_e_id(name) if kind == "E" else _a319_f_id(name)
-                if rid is None:
+                if kind == "E":
+                    rids = _a319_e_ids(name)
+                else:
+                    rids = [x for x in [_a319_f_id(name)] if x is not None]
+                if not rids:
                     keys.append({"key": "%s %s" % (kind, name), "status": "skip", "why": "not built: %s" % name})
                     continue
-                mine = got["_E_rows"][rid] if kind == "E" else got["_F_rows"][rid]
                 for k, v in r.items():
                     if k in ("item", "filter") or _is_alt(k):
                         continue
-                    if k == "table":
-                        ev = _table_k(v)
-                        why = None if ev == mine["table"] else "expected k %r from %r, got %r" % (ev, v, mine["table"])
-                    else:
-                        why = _cmp(v, mine.get(k), k, (), k) if k in mine else "not computed"
+                    why = None
+                    for rid in rids:      # every built item the row names
+                        mine = got["_E_rows"][rid] if kind == "E" else got["_F_rows"][rid]
+                        if k == "table":
+                            ev = _table_k(v)
+                            if ev != mine["table"]:
+                                why = "%s: expected k %r from %r, got %r" % (rid, ev, v, mine["table"])
+                        elif k not in mine:
+                            why = "%s: not computed" % rid
+                        else:
+                            w = _cmp(v, mine.get(k), k, (), k)
+                            if w:
+                                why = "%s: %s" % (rid, w)
+                        if why:
+                            break
                     keys.append({"key": "%s %s.%s" % (kind, name, k), "status": "fail" if why else "pass",
                                  "why": why or ""})
         for k in exp:
@@ -2059,6 +2639,8 @@ def _run_one(ex, plant):
                     if c not in covered:
                         keys.append({"key": "%s.%s" % (k, c), "status": "skip",
                                      "why": "alternative answer" if _is_alt(c) else _skip_why(hid, (k, c))})
+    for line in infos:
+        keys.append({"key": "info %s" % hid, "status": "info", "why": line})
     for ek, gk in _PLANT_INFO.get(plant, {}).get(hid, []):
         if ek in exp and gk in got:
             why = _cmp(exp[ek], got[gk], gk, ln_keys, ek)

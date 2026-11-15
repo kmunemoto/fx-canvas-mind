@@ -37,6 +37,8 @@ on:
       - research/trend-labels.ts
       - research/trend-stats.ts
       - src/lib/kalmanSupertrend.ts
+      # step 4 round A (spec 17.1): E12 calls the app's RCI
+      - src/lib/rci.ts
       - src/lib/stochastic.ts
       - src/lib/supertrend.ts
       - src/lib/utBot.ts

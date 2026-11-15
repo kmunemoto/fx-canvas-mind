@@ -205,6 +205,14 @@ export interface MacdOut {
   line: Float64Array;
   signal: Float64Array;
 }
+export interface StochOut {
+  // step 4, round A (E10, E11): the slow stochastic (k, 3, 3) of spec 3.2 on the mid doubles: rawK = (100 × (C − LL))
+  // ÷ (HH − LL) with HH = max H[i−k+1..i], LL = min L[i−k+1..i] (無し for i < k − 1 and where HH = LL); K = SMA3(rawK),
+  // D = SMA3(K) (the study's oldest-first SMA; a window holding 無し is 無し)
+  rawK: Float64Array;
+  K: Float64Array;
+  D: Float64Array;
+}
 export interface BigmoveParams {
   // §8.113 C17 with 17.3's substitutions: σ over r[i−288..i−1] with ≥ 250 usable; z over 6 bars; ±2;
   // r unusable after a gap over 12 × STEP (gapMs)
@@ -241,6 +249,11 @@ export interface Ind {
   rsi(p: number): RsiOut;
   // step 4 (E13): MACD(f, s, m) of the mid close by the app's macd (spec 17.1: its line and signal)
   macd(f: number, s: number, m: number): MacdOut;
+  // step 4, round A (E10, E11): the slow stochastic (k, 3, 3), the research's own (spec 3.2, 17.1)
+  stoch(k: number): StochOut;
+  // step 4, round A (E12): RCI(n) of the mid close by the app's rci (src/lib/rci.ts, called with length n; its rci
+  // column only, spec 3.2 and 17.1)
+  rci(n: number): Float64Array;
   donchian(n: number): DonchianOut;
   bigmove(o: BigmoveParams): BigmoveOut;
 }

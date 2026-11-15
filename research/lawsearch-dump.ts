@@ -189,10 +189,17 @@ export async function dumpHoles(dir: string, ctx: Record<TfKey, ExclCtx>): Promi
 
 // lawsearch-dump.md 5: the fixed column order (later items append theirs in table order) and each column's format
 // (step 4's pilot, 2026-11-15) E13's, E29's, E30's, F02's and B07's columns appended after B06_keep in the spec's
-// table order, as lawsearch-dump.md 5's pilot table lists them (F02r and S02 have none of their own)
+// table order, as lawsearch-dump.md 5's pilot table lists them (F02r and S02 have none of their own); (step 4, round A,
+// 2026-11-15) E01–E03's, E05–E12's and E14–E21's after B07_sell, as its round-A table lists them
 export const IND_COLUMNS: readonly string[] = [
   "RSI14", "RSI14_U", "RSI14_D", "E04_buy", "E04_sell", "DON20_HH", "DON20_LL", "DON20_s", "EMA200", "F01_buy", "F01_sell", "BM_r", "BM_ok", "BM_sigma", "BM_z", "B06_buy", "B06_sell", "B06_keep",
   "MACD12_26", "MACD12_26_SIG", "E13_buy", "E13_sell", "E29_buy", "E29_sell", "PD_H", "PD_L", "E30_buy", "E30_sell", "HTF_G", "HTF_EMA50", "HTF_EMA50_PREV", "F02_buy", "F02_sell", "RSI2_AG", "RSI2_AL", "B07_up", "B07_dn", "B07_buy", "B07_sell",
+  // step 4, round A (2026-11-15): lawsearch-dump.md 5's round-A table, after B07_sell (an indicator column comes with
+  // the first item that uses it; RSI14, MACD12_26 and EMA200 keep their places above)
+  "RSI7", "RSI7_U", "RSI7_D", "E01_buy", "E01_sell", "E02_buy", "E02_sell", "E03_buy", "E03_sell", "RSI21", "RSI21_U", "RSI21_D", "E05_buy", "E05_sell", "E06_buy", "E06_sell",
+  "E07_buy", "E07_sell", "E08_buy", "E08_sell", "E09_buy", "E09_sell", "STOCH5_K", "STOCH5_D", "E10_buy", "E10_sell", "STOCH14_K", "STOCH14_D", "E11_buy", "E11_sell", "RCI9", "E12_buy", "E12_sell",
+  "MACD5_35", "MACD5_35_SIG", "E14_buy", "E14_sell", "E15_buy", "E15_sell", "EMA5", "EMA20", "E16_buy", "E16_sell", "EMA50", "E17_buy", "E17_sell", "E18_buy", "E18_sell",
+  "E19_buy", "E19_sell", "E20_buy", "E20_sell", "E21_buy", "E21_sell",
 ];
 const indFormat = (name: string): "tri" | "int" | "bool" | "real" => {
   if (/_(buy|sell)$/.test(name) || name === "B07_up" || name === "B07_dn") return "tri";

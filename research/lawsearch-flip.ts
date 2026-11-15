@@ -148,6 +148,19 @@ export interface FlipSignals {
 // closes' differences, whose mirror swaps AG and AL exactly, and the 200-bar sum, whose mirror swaps above and below
 // exactly, so it is judged; until then every B was printed as B06 was.) An item added later is judged unless it is
 // listed here with its reason.
+// (Step 4, round A, 2026-11-15: none of its 19 items is listed; each is symmetric under the mirror, as E04 and E13 are.)
+//   * E01–E09 (RSI): the mirror swaps up and dn, so U' = D, D' = U and RSI' = 100 − RSI; X↑(RSI, L) mirrors to
+//     X↓(RSI', 100 − L) (E07–E09: L = 50). As for E04, a window with no move at all (U = D = 0, only while every bar
+//     from the series' start is flat) gives RSI = 100 on both sides, and the mirrored doubles can move a last digit.
+//   * E10, E11 (slow stochastic): HH' = 2S − LL and LL' = 2S − HH, so rawK' = 100 − rawK, %K' = 100 − %K, %D' = 100 −
+//     %D; X↑(%K, %D) with %K < 20 mirrors to X↓ with %K' > 80 (HH = LL is 無し on both sides); last digits as above.
+//   * E12 (RCI9): the mirror reverses the order of the closes and keeps their ties, so each rank r becomes 8 − r, num
+//     changes sign and vt, vr stay: RCI' = −RCI exactly, and X↑(RCI, −80) mirrors to X↓(RCI', +80) exactly.
+//   * E14, E15 (MACD) and E16–E21 (EMA): the EMAs are linear with weights summing to 1, so EMA' = 2S − EMA, the line
+//     and signal change sign, and every cross mirrors; last digits as above (a flat run can make a rounding-only cross
+//     on one side, A.3.15).
+// A scratch check on synthetic walks with flat runs (step 4 round A's TS builder) found every E01–E21 × F00 row with its
+// mirrored twin.
 const NOT_SYMMETRIC: Readonly<Record<string, string>> = Object.freeze({ B06: "log returns of mirrored prices" });
 // the item of a trial id: m15.E04.F01 -> E04, h1.B06 -> B06, m15.S01 -> S01
 const itemOfTrial = (id: string): string => id.split(".")[1] ?? id;
