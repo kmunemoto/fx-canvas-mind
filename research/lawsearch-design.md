@@ -2934,6 +2934,42 @@ that path end to end (the table above; 7.8 syn step 3). Stage 2's `suspect13` ch
 - The indicator-only keys of G3 and G4 (EMA, RMA, ATR, TR, RSI, SMA, donchian 55) are required now even where the
   example's item is not built, because `lawsearch-ind.ts` already computes them. They check the wiring of the app
   functions (spec 17.1) before the items that use them are written.
+- (Step 4's round A, 2026-11-15: E01–E03, E05–E12 and E14–E21 built, each with F00 / F01 / F02 / F02r; 200 trials
+  are built in all. TS and Python each 118 pass, 0 fail, 28 skip.) Required now besides the rows above:
+
+| examples | required (new) |
+|---|---|
+| A.3.7, A.3.9 | `cond`, `signals` (A.3.7 also `warmup_k`, `excluded_by_warmup_1`) |
+| A.3.8 | `signals` whole (was E04's part) |
+| A.3.10 E10, E11 | `E10`, `E11` |
+| A.3.11 | `rawK`, `K`, `D`, `xup_K_D`, `xdn_K_D`, `signals` |
+| A.3.12 | `RCI9`, `ranks`, `xup_RCI_m80`, `xdn_RCI_p80`, `signals` |
+| A.3.13 | `RCI9`, `ranks`, `xup_RCI_m80`, `signals`, `bars_within_1e-9_of_pm80`, `decisions_allowed_to_differ` |
+| A.3.14 | `line_5_35`, `signal_5`, `signal_5_seed_index`, `signals` whole (was E13's part) |
+| A.3.15, A.3.16 | `signals`, `warmup_k`, `excluded_by_warmup_1` whole (were E13's parts) |
+| A.3.17 | `line_12_26`, `xup_line_0`, `xdn_line_0`, `signals`, `warmup_k`, `kept_after_warmup`, `excluded_by_warmup_1` |
+| A.3.18 | `signals` |
+| A.3.19 | the `E` rows of E01–E03, E05–E12, E14–E21 (with E04's and E13's: every `E` row but E22–E25's) |
+| A.3.28 | `RSI7`, `E02_signals_after_rising_edge`, `filters_at_signals` `EMA12` / `ATR14` / `SMA5_ATR14` / `RSI14`, `trials` `E02.F00` / `E02.F01` / `E02.F02` / `E02.F02r`, `warmup_k` |
+| A.3.30 | `signals`, `filters_at_signal_bars` `bars` / `T` / `RSI14`, `trials` `E18` and `E21` × `F00` / `F01` / `F02` / `F02r`, `variant_flat_150000` |
+
+- The TS's key path reader now takes a key that holds a dot (`trials["E02.F00"]`), so the TS checks A.3.28's
+  `trials` as the Python has since the pilot. `ATR14`, `SMA5_ATR14` and `RSI14` at A.3.28's signals are F04's and
+  F05's inputs (not built), required by the rule above for indicator-only keys. Still skip inside these examples:
+  `ADX14` (F03), `day_open` (F07), the `trials` rows of F01r and F03–F07r, and A.3.28's `excluded_by_warmup_1` (its
+  answer is a list over E02 with all 15 F).
+- Both runners require the same keys: compared key by key on 2026-11-15, 145 of the 146 examples hold the same set
+  of passed keys on both sides; A.3.19 names its rows differently on the two sides, and both check every built `E` row.
+- What the examples do not pin (both builders, by changing one constant on a copy): the stochastic's gate
+  (%K < 20 / > 80; any gate in (18.06, 36.98] passes A.3.10, and `<=` for `<` passes every example, since no
+  example's %K is exactly 20 or 80), and E12's line (−79 for −80 passes A.3.12 and A.3.13). For these the TS–Python
+  comparison on synthetic runs is the check.
+- E12's RCI is exactly ±80 on many bars (RCI(9) takes finitely many values; 1,110 of the 9! tie-free windows give
+  ±80), so `lawsearch-dump.md` 9.2b (the TS's rows adopted at bars within 1e-9 of ±80, as 9.2 does for B06's z) acts
+  often: on a 4,000-bar walk 18 of E12's 288 signals were on such bars (the Python builder's count).
+- The hand-level plants still fail their named examples on both sides; `smaNewestFirst` now also fails A.3.10 and
+  A.3.11 (the stochastic's %K and %D are the study's SMA3), and `htfOpen` also fails A.3.28's and A.3.30's new
+  `trials` keys with F02. Totals now: TS and Python 118 pass, 0 fail, 28 skip.
 
 - Where an example's keys mix items, the adapter checks the built item's keys and reports the others as "skip (not
   built: E07)".
