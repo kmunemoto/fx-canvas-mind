@@ -215,6 +215,30 @@ Columns: `i,s,bo,bh,bl,bc,ao,ah,al,ac,O,H,L,C,Po,Ph,Pl,Pc` (types as above). Ord
 | B06_buy, B06_sell | tri | exact (but 9.2) | z ≤ −2, z ≥ 2 |
 | B06_keep | bool | exact | 0 when T's UTC time is in [19:35, 24:00) |
 
+- (Step 4's pilot, 2026-11-15, the lead: spec 19 step 4 is started with E13, E29, E30, F02 / F02r (and S02 through F02)
+  and B07 only.) Their columns, appended after B06_keep in the spec's table order. A column is empty where its value
+  is 無し; a tri is the expression's truth at bar i before spec 5's rules (rising edge, keep rules, F, both
+  directions), as E04_buy is. F02r and S02 have no columns of their own (F02r's truth is the other side's F02 column;
+  S02 is F02).
+
+| column | type | class (9) | meaning |
+|---|---|---|---|
+| MACD12_26 | real | exact | E13's MACD line: EMA_12 − EMA_26 of the mid close (spec 3.2) |
+| MACD12_26_SIG | real | exact | E13's signal line: EMA_9 of the MACD line, seeded as spec 3.2 says |
+| E13_buy, E13_sell | tri | exact | X↑(MACD line, signal), X↓(MACD line, signal) |
+| E29_buy, E29_sell | tri | exact | spec 4.1 E29's buy and sell expressions at i (the inside bar i − 1 of bar i − 2, and the close beyond bar i − 2's high or low; points, as the spec says) |
+| PD_H, PD_L | real | exact | E30's previous day's high and low (spec 4.1's notes on E30; empty when the previous day has too few bars) |
+| E30_buy, E30_sell | tri | exact | E30's day-wise condition at i: C > PD_H, C < PD_L |
+| HTF_G | int | exact | the row number g, in `htf/<tf>_<SYM>.csv` (0 for its first row), of the last higher bar that closed by T_i (spec 2's higher-timeframe rule); empty when there is none |
+| HTF_EMA50, HTF_EMA50_PREV | real | exact | EMA_50 of the higher bars' mid close at g and at g − 1 |
+| F02_buy, F02_sell | tri | exact | (EMA50[g] − EMA50[g − 1]) > 0, −(EMA50[g] − EMA50[g − 1]) > 0 |
+| RSI2_AG, RSI2_AL | real | exact | B07's AG and AL (§8.113 C19, in the values that spec 17.3 says B07 reads) |
+| B07_up, B07_dn | tri | exact | B07's 200-bar mean parts: 200 × c > Σ200, 200 × c < Σ200 |
+| B07_buy, B07_sell | tri | exact | B07's B and S of §8.113 C19 (up and RSI2 < 10; dn and RSI2 > 90) |
+
+- If a builder finds that a column above cannot be written as its meaning says without going against the spec, the
+  builder does not rename or reshape it alone: it reports the column and the spec's words to the lead.
+
 ## 6. Signals (stage 0's load) — `signals/<trial>.csv`
 
 One file per trial (`<trial>` is the id, e.g. `m15.E04.F01.csv`). One row per candidate of spec 5 ①–⑤, with its
