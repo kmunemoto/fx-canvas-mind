@@ -239,6 +239,41 @@ Columns: `i,s,bo,bh,bl,bc,ao,ah,al,ac,O,H,L,C,Po,Ph,Pl,Pc` (types as above). Ord
 - If a builder finds that a column above cannot be written as its meaning says without going against the spec, the
   builder does not rename or reshape it alone: it reports the column and the spec's words to the lead.
 
+- (Step 4, round A, 2026-11-15, the lead: E01–E03, E05–E12, E14–E21.) Their columns, appended after B07_sell in the
+  spec's table order. An indicator column comes with the first item that uses it; the same rules as the pilot's
+  (a tri is the item's buy or sell expression at i before spec 5's rules; empty is 無し). All indicators are spec
+  3.2's, of the mid close (or high / low where 3.2 says), with their own seeds and 無し rules.
+
+| column | type | class (9) | meaning |
+|---|---|---|---|
+| RSI7, RSI7_U, RSI7_D | real | exact | RSI_7 and its RMA_7 of up and dn (as RSI14, RSI14_U, RSI14_D) |
+| E01_buy, E01_sell | tri | exact | X↑(RSI7, 20), X↓(RSI7, 80) |
+| E02_buy, E02_sell | tri | exact | X↑(RSI7, 30), X↓(RSI7, 70) |
+| E03_buy, E03_sell | tri | exact | X↑(RSI14, 20), X↓(RSI14, 80) |
+| RSI21, RSI21_U, RSI21_D | real | exact | RSI_21 and its RMA_21 of up and dn |
+| E05_buy, E05_sell | tri | exact | X↑(RSI21, 20), X↓(RSI21, 80) |
+| E06_buy, E06_sell | tri | exact | X↑(RSI21, 30), X↓(RSI21, 70) |
+| E07_buy, E07_sell | tri | exact | X↑(RSI7, 50), X↓(RSI7, 50) |
+| E08_buy, E08_sell | tri | exact | X↑(RSI14, 50), X↓(RSI14, 50) |
+| E09_buy, E09_sell | tri | exact | X↑(RSI21, 50), X↓(RSI21, 50) |
+| STOCH5_K, STOCH5_D | real | exact | the slow stochastic (5, 3, 3)'s %K and %D |
+| E10_buy, E10_sell | tri | exact | X↑(%K, %D) and %K[i] < 20; X↓(%K, %D) and %K[i] > 80 (k = 5) |
+| STOCH14_K, STOCH14_D | real | exact | the slow stochastic (14, 3, 3)'s %K and %D |
+| E11_buy, E11_sell | tri | exact | as E10, k = 14 |
+| RCI9 | real | real | RCI(9) (spec 3.2; 1e−9, spec 17.2) |
+| E12_buy, E12_sell | tri | exact (but 9.2b) | X↑(RCI9, −80), X↓(RCI9, +80) |
+| MACD5_35, MACD5_35_SIG | real | exact | MACD(5, 35, 5)'s line and signal (as MACD12_26 and its signal) |
+| E14_buy, E14_sell | tri | exact | X↑(line, signal), X↓(line, signal) of MACD(5, 35, 5) |
+| E15_buy, E15_sell | tri | exact | X↑(MACD12_26, 0), X↓(MACD12_26, 0) |
+| EMA5, EMA20 | real | exact | EMA_5 and EMA_20 of the mid close |
+| E16_buy, E16_sell | tri | exact | X↑(EMA5, EMA20), X↓(EMA5, EMA20) |
+| EMA50 | real | exact | EMA_50 of the mid close |
+| E17_buy, E17_sell | tri | exact | X↑(EMA20, EMA50), X↓(EMA20, EMA50) |
+| E18_buy, E18_sell | tri | exact | X↑(EMA50, EMA200), X↓(EMA50, EMA200) |
+| E19_buy, E19_sell | tri | exact | X↑(C, EMA20), X↓(C, EMA20) |
+| E20_buy, E20_sell | tri | exact | X↑(C, EMA50), X↓(C, EMA50) |
+| E21_buy, E21_sell | tri | exact | X↑(C, EMA200), X↓(C, EMA200) |
+
 ## 6. Signals (stage 0's load) — `signals/<trial>.csv`
 
 One file per trial (`<trial>` is the id, e.g. `m15.E04.F01.csv`). One row per candidate of spec 5 ①–⑤, with its
@@ -509,6 +544,16 @@ Key: tf, half. All int. late_end must be 0.
   following bar (its rising edge reads the border bar's condition).
 - The comparator lists them as `ALLOWED z-border <tf> <pair> i=<i>`. The Python then adopts the TS's rows for those
   bars before it counts (lawsearch-py-design.md 5.3), and everything after must agree exactly.
+
+### 9.2b Allowed difference: E12's decision near ±80 (spec 3.2 RCI, 17.2; step 4, round A)
+
+- A bar of a pair is an RCI-border bar when, in either implementation, RCI9[i] or RCI9[i − 1] is within 1e−9 of −80
+  or of +80 (spec 3.2: 「判断が分かれてよいのは、RCI[i] か RCI[i−1] が ±80 から 1e−9 未満の足の E12 だけ」).
+- At such a bar, `E12_buy` / `E12_sell` and the E12 trials' rows of `signals/` may differ, and so may the rows that
+  E12's rules make from them (spec 5).
+- The comparator lists them as `ALLOWED rci-border <tf> <pair> i=<i>`, and the Python adopts the TS's rows for those
+  bars before it counts, as 9.2 does for B06; everything after must agree exactly. `RCI9` itself is compared with
+  1e−9 (class real).
 
 ### 9.3 Allowed difference: decisions on quantiles and p (spec 8.5)
 
