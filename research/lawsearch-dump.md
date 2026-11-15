@@ -367,7 +367,10 @@ Key: tf, half. All int. late_end must be 0.
 | c6.a, c6.b | real | exact (stage2 only) |
 
 - V is `delta`, `a`, `pl`, `delta_late`, then `dF` (dF only for a trial with a directional F: (E, F01) against S01
-  of its timeframe).
+  of its timeframe). (Step 4's pilot, 2026-11-15, the lead.) An r filter's trial (E, F01r), (E, F02r), (E, F05r),
+  (E, F07r) is against spec 8.6's "F の逆向きの状態": the plain filter's S row with every direction reversed (each of
+  its blind-table rows replaced by the row of the same pair and T with the other d; the order kept). `dF.against` names
+  it as the S row's id with `r`, e.g. `m15.S02r`; it is not a trial of the ledger and has no file of its own.
 - `<c>` is `week`, `4w` (only when V.four is 1) and `shift` (for delta, a, pl and delta_late; never for dF). A
   candidate that is not built has no rows.
 - `V.use_lb` and `V.use_p` are `week`, `4w`, `shift` or empty.

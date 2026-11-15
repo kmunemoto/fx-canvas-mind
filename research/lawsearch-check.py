@@ -3771,11 +3771,29 @@ _HAND_ALL = []
 # 13. The registry of trials (research/ledger/lawsearch-candidates.json)
 # ----------------------------------------------------------------------------------------------------------------
 
-BUILT_E = {"E04", "E26"}
-BUILT_F = {"F00", "F01"}
-BUILT_S = {"S01"}
-BUILT_B = {"B06"}
+# The small trial's items, then step 4's pilot (the lead, 2026-11-15): E13, E29, E30, F02 / F02r, S02, B07. Every
+# other id of the ledger stays not built: a run whose config.json lists one stops (NotBuilt, exit 3).
+BUILT_E = {"E04", "E26", "E13", "E29", "E30"}
+BUILT_F = {"F00", "F01", "F02", "F02r"}
+BUILT_S = {"S01", "S02"}
+BUILT_B = {"B06", "B07"}
 S_OF_F = {"F01": "S01", "F02": "S02", "F05": "S03", "F07": "S04"}
+
+
+def s_row_of(t):
+    """spec 8.6: the state row that the D_F of a trial (E, F) with a directional F is made against -> (id, trial
+    dict). For F01, F02, F05, F07 it is the ledger's S row (m15.S01 ...). For F01r, F02r, F05r, F07r it is "the reversed
+    state of that F, made the same way" (F01r などには、その F の逆向きの状態を同じ作りで作る): an S row whose condition is
+    the reversed F (PY2's S_REVERSED). It is not a trial of the ledger; its name "<tf>.S02r" (written in dF.against)
+    is this builder's reading, as lawsearch-dump.md does not fix it (step 4's pilot, reported to the lead)."""
+    f = t["f"]
+    if f in S_OF_F:
+        return f"{t['tf']}.{S_OF_F[f]}", None
+    if f.endswith("r") and f[:-1] in S_OF_F:
+        sid = f"{t['tf']}.{S_OF_F[f[:-1]]}r"
+        return sid, {"id": sid, "order": None, "tf": t["tf"], "kind": "S", "e": None, "f": f,
+                     "s": f"{S_OF_F[f[:-1]]}r", "b": None, "name": f"reversed state {f}"}
+    raise NotBuilt(f"D_F of {t['id']}: its S row for {f} is not written yet")
 
 
 def load_registry():
@@ -3794,7 +3812,7 @@ def check_built(trial):
     k = trial["kind"]
     if k == "EF" and (trial["e"] not in BUILT_E or trial["f"] not in BUILT_F):
         raise NotBuilt(f"trial {trial['id']} not written yet")
-    if k == "S" and trial["s"] not in BUILT_S:
+    if k == "S" and trial["s"] not in BUILT_S and not (trial["s"].endswith("r") and trial["f"] in BUILT_F):
         raise NotBuilt(f"trial {trial['id']} not written yet")
     if k == "B" and trial["b"] not in BUILT_B:
         raise NotBuilt(f"trial {trial['id']} not written yet")
@@ -4792,17 +4810,20 @@ class Run:
     def trial_halves(self, load, sigs, bls, half, ids):
         """TrialHalf objects for ids, plus the S rows their D_F needs."""
         need = list(ids)
+        extra = {}
         for tid in ids:
             t = self.reg[tid]
             if t["kind"] == "EF" and t["f"] in DIRECTIONAL_F:
-                sid = f"{t['tf']}.{S_OF_F.get(t['f'], '?')}"
-                if t["f"] not in S_OF_F or sid not in self.reg:
+                sid, pseudo = s_row_of(t)
+                if pseudo is None and sid not in self.reg:
                     raise NotBuilt(f"D_F of {tid}: its S row for {t['f']} is not written yet")
+                if pseudo is not None:
+                    extra[sid] = pseudo
                 if sid not in need:
                     need.append(sid)
         out = {}
         for tid in need:
-            t = self.reg[tid]
+            t = extra[tid] if tid in extra else self.reg[tid]
             if tid not in sigs:
                 check_built(t)
                 sigs[tid] = signal_rows(load, t, self.answer_knowing, self.adopt)
@@ -4838,7 +4859,7 @@ class Run:
             s_th = None
             against = None
             if t["kind"] == "EF" and t["f"] in DIRECTIONAL_F:
-                against = f"{t['tf']}.{S_OF_F[t['f']]}"
+                against = s_row_of(t)[0]
                 s_th = ths[against]
             log(f"  measures {tid}")
             r = measure_trial(th, bls[t["tf"]], s_th)
@@ -4935,7 +4956,7 @@ class Run:
             s_th = None
             against = None
             if t["kind"] == "EF" and t["f"] in DIRECTIONAL_F:
-                against = f"{t['tf']}.{S_OF_F[t['f']]}"
+                against = s_row_of(t)[0]
                 s_th = ths[against]
             log(f"  measures {tid}")
             r = measure_trial(th, bls[t["tf"]], s_th, kappa=self.kappa, stage2=True)

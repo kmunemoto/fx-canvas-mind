@@ -1,17 +1,21 @@
 // 法則探し (docs §8.136, research/lawsearch-spec.md): the indicator arrays of one series (builder B,
 // research/lawsearch-design.md 5.1).
 //
-// Spec 3.2 and 17.1: EMA, RMA, ATR and RSI go through the app functions (pine.ts pineEma, pineRma, pineAtr;
-// ultra.ts pineRsi); SMA is the research's own, summed oldest first (pine.ts sma sums newest first and is used only
-// by the planted error smaNewestFirst); donchian is §8.113 C1 and bigmove §8.113 C17 with spec 17.3's substitutions.
-// The app functions return Array<number | null>; this module converts with toF64 (null and non-finite → NaN) and
-// never hands an Array to another module. 無し is NaN in a Float64Array and −1 in a Tri.
+// Spec 3.2 and 17.1: EMA, RMA, ATR, RSI and MACD go through the app functions (pine.ts pineEma, pineRma, pineAtr;
+// ultra.ts pineRsi; macd.ts macd); SMA is the research's own, summed oldest first (pine.ts sma sums newest first and
+// is used only by the planted error smaNewestFirst); donchian is §8.113 C1, bigmove §8.113 C17 and rsi2 §8.113 C19
+// with spec 17.3's substitutions; E29's inside bar and E30's previous day are spec 4.1's own formulas (17.1: the
+// research writes E29–E32 itself). The app functions return Array<number | null>; this module converts with toF64
+// (null and non-finite → NaN) and never hands an Array to another module. 無し is NaN in a Float64Array and −1 in a
+// Tri.
 //
-// Every comparison here stays on doubles with no tolerance (spec 3.1, 21.5).
+// Every comparison here stays on doubles with no tolerance (spec 3.1, 21.5), or on the integer points where the spec
+// says points (E29, §8.113 C19).
 
 import { pineAtr, pineEma, pineRma, sma as pineSmaNewestFirst } from "../supabase/functions/_shared/pine.ts";
 import { pineRsi } from "../supabase/functions/_shared/ultra.ts";
-import type { BigmoveOut, BigmoveParams, DonchianOut, Ind, RsiOut, Series, Tri } from "./lawsearch-types.ts";
+import { macd as appMacd } from "../supabase/functions/_shared/macd.ts";
+import type { BigmoveOut, BigmoveParams, DonchianOut, Ind, MacdOut, RsiOut, Series, Tri } from "./lawsearch-types.ts";
 
 // ---- conversions -------------------------------------------------------------------------------------------
 
@@ -291,6 +295,110 @@ export function bigmoveOf(s: Series, o: BigmoveParams): BigmoveOut {
   return { r, usable, sigma, z };
 }
 
+// ---- §8.113 C19 rsi2 (spec 3.3, 4.4 B07; step 4) -------------------------------------------------------------
+
+// §8.113 C19's RSI2 on the point closes c = Pc, from bar 0 (S0 から続けて): u[k] = max(c[k] − c[k−1], 0), v[k] =
+// max(c[k−1] − c[k], 0); at bar 2 AG = (u[1] + u[2]) ÷ 2 and AL = (v[1] + v[2]) ÷ 2; from bar 3 AG = (AG × 1 + u[k])
+// ÷ 2 and AL = (AL × 1 + v[k]) ÷ 2, in doubles and in this order (C19's words). 無し before bar 2. Nothing after bar
+// k is read for bar k. The comparisons RSI2 < 10 ⇔ 9 × AG < AL and RSI2 > 90 ⇔ AG > 9 × AL are the item's
+// (lawsearch-items.ts B07).
+export function rsi2Of(s: Series): { AG: Float64Array; AL: Float64Array } {
+  const n = s.n;
+  const c = s.Pc;
+  const AG = new Float64Array(n).fill(NaN);
+  const AL = new Float64Array(n).fill(NaN);
+  if (n < 3) return { AG, AL };
+  const up = (k: number) => Math.max(c[k] - c[k - 1], 0);
+  const dn = (k: number) => Math.max(c[k - 1] - c[k], 0);
+  let ag = (up(1) + up(2)) / 2;
+  let al = (dn(1) + dn(2)) / 2;
+  AG[2] = ag;
+  AL[2] = al;
+  for (let k = 3; k < n; k++) {
+    ag = (ag * 1 + up(k)) / 2;
+    al = (al * 1 + dn(k)) / 2;
+    AG[k] = ag;
+    AL[k] = al;
+  }
+  return { AG, AL };
+}
+
+// §8.113 C19's 200-bar mean parts on the point closes: up[i] = (w × c[i] > Σ c[i−w+1..i]), dn[i] = (w × c[i] <
+// Σ c[i−w+1..i]), 無し for i < w − 1 (w = 200). The closes are integers and every partial sum is an integer below
+// 2^53 (w × 2^31 at most), so each sum is exact whatever the order: the running sum (the new close added, the leaving
+// one taken away) is the same double as the window summed oldest first (spec 3.1), and it reads nothing after bar i.
+export function mean200Of(s: Series, w = 200): { up: Tri; dn: Tri } {
+  const n = s.n;
+  const c = s.Pc;
+  const up = new Int8Array(n).fill(-1);
+  const dn = new Int8Array(n).fill(-1);
+  let sum = 0;
+  for (let i = 0; i < n; i++) {
+    sum += c[i];
+    if (i >= w) sum -= c[i - w];
+    if (i < w - 1) continue;
+    const x = w * c[i];
+    up[i] = x > sum ? 1 : 0;
+    dn[i] = x < sum ? 1 : 0;
+  }
+  return { up, dn };
+}
+
+// ---- spec 4.1 E29 and E30 (step 4) -------------------------------------------------------------------------
+
+// E29's inside bar (spec 4.1, in points): inside[i] = (Ph[i−1] ≤ Ph[i−2] && Pl[i−1] ≥ Pl[i−2]); 無し for i < 2
+// (equal highs or lows are inside)
+export function insideOf(s: Series): Tri {
+  const out = new Int8Array(s.n).fill(-1);
+  for (let i = 2; i < s.n; i++) out[i] = s.Ph[i - 1] <= s.Ph[i - 2] && s.Pl[i - 1] >= s.Pl[i - 2] ? 1 : 0;
+  return out;
+}
+
+// E30's previous day (spec 2 日, 4.1 E30's notes), per bar i: first[i] = 1 at the first bar of its day D(s_i)
+// (series.day); prevDay[i] = the previous day (the latest day before D(s_i) that has a bar, i.e. the day of the
+// bars just before bar i's day) as YYYYMMDD, −1 when there is none; prevBars[i] = that day's bar count; PDH[i] and
+// PDL[i] = the max H and min L of that day's bars (the rounded mid doubles), 無し when there is no previous day or it
+// has fewer than minBars bars. Only bars before bar i's day are read for bar i. The days of a series never go back
+// in time (D is (t + 3 h)'s date, a Saturday moved to the Friday), and this function stops when they do.
+export function pdayOf(s: Series, minBars: number): { first: Uint8Array; prevDay: Int32Array; prevBars: Int32Array; PDH: Float64Array; PDL: Float64Array } {
+  const n = s.n;
+  const first = new Uint8Array(n);
+  const prevDay = new Int32Array(n).fill(-1);
+  const prevBars = new Int32Array(n);
+  const PDH = new Float64Array(n).fill(NaN);
+  const PDL = new Float64Array(n).fill(NaN);
+  // the day being read, and the day before it
+  let day = -1, hi = -Infinity, lo = Infinity, count = 0;
+  let pDay = -1, pHi = NaN, pLo = NaN, pCount = 0;
+  for (let i = 0; i < n; i++) {
+    const d = s.day[i];
+    if (i === 0 || d !== day) {
+      if (i > 0 && d < day) throw new Error(`pdayOf: ${s.pair} ${s.key}: the day goes back at bar ${i} (${day} → ${d})`);
+      if (i > 0) {
+        pDay = day;
+        pHi = hi;
+        pLo = lo;
+        pCount = count;
+      }
+      day = d;
+      hi = -Infinity;
+      lo = Infinity;
+      count = 0;
+      first[i] = 1;
+    }
+    prevDay[i] = pDay;
+    prevBars[i] = pCount;
+    if (pDay !== -1 && pCount >= minBars) {
+      PDH[i] = pHi;
+      PDL[i] = pLo;
+    }
+    count++;
+    if (s.H[i] > hi) hi = s.H[i];
+    if (s.L[i] < lo) lo = s.L[i];
+  }
+  return { first, prevDay, prevBars, PDH, PDL };
+}
+
 // ---- the Ind of one series (lazy, cached per name and parameter) -------------------------------------------
 
 // The indicators of one series (spec 3.2, 17.1). higher: the higher timeframe's series and the usable higher bar
@@ -387,6 +495,16 @@ export function indOf(series: Series, higher?: { series: Series; g: Int32Array }
           },
           rsi,
         };
+      }),
+    // step 4 (E13): the app's macd (_shared/macd.ts: line = pineEma(C, f) − pineEma(C, s), 無し when either is;
+    // signal = pineEma(line, m), seeded where m lines are first present), its line and signal only (spec 17.1). C is
+    // handed as a plain array copied by a loop, as for pineRsi above.
+    macd: (f: number, sl: number, m: number) =>
+      memo(`macd:${f}:${sl}:${m}`, (): MacdOut => {
+        const closes: number[] = [];
+        for (let i = 0; i < C.length; i++) closes.push(C[i]);
+        const r = appMacd(closes, { fast: f, slow: sl, signal: m });
+        return { line: toF64(r.macd), signal: toF64(r.signal) };
       }),
     donchian: (n: number) => memo(`donchian:${n}`, () => donchianOf(series, n)),
     bigmove: (o: BigmoveParams) =>

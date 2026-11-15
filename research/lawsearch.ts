@@ -74,7 +74,7 @@ import { loadUniverse } from "./lawsearch-bars.ts";
 import { GEN_VERSION, genSpecOf, treeBytes, writeRun } from "./lawsearch-gen.ts";
 import { parseCandidates, trialBuilt, trialCopyOf } from "./lawsearch-items.ts";
 import { avoidOf, blindBarsOf, GMO_WRITE, trialSignals } from "./lawsearch-events.ts";
-import { blindTable, followCompare, followRowsOf, lateTable, lateWhyOf, trialRows } from "./lawsearch-trade.ts";
+import { blindTable, followCompare, followRowsOf, lateTable, lateWhyOf, rowKey, trialRows } from "./lawsearch-trade.ts";
 import type { FollowValues } from "./lawsearch-trade.ts";
 import { measureBlindRows, measureTrial, withKappa } from "./lawsearch-stats.ts";
 import { chooseStage1, skipText, stage1Explain, stage2Rows, suspectOf } from "./lawsearch-select.ts";
@@ -411,6 +411,29 @@ const sTrialOf = (all: TrialDef[], tf: TfKey, f: string): TrialDef | null => {
   return s ? all.find((t) => t.tf === tf && t.kind === "S" && t.s === s) ?? null : null;
 };
 
+// spec 8.6: D_F = Δ(E, F) − Δ(S_F) for a trial with a directional F. For an r filter (F01r, F02r, F05r, F07r) S_F is
+// "the F's state in the other direction, made the same way" (2026-11-15, step 4's pilot: F02r is the first r filter
+// built): the rows of the plain filter's S row with every direction reversed. The blind table holds both directions of
+// every bar that passed ①–⑥ and has a trade (spec 8.1), so each reversed row exists, and the rows keep their order
+// (one direction per T and pair). Its name is the S row's id with "r" (e.g. m15.S02r): not a trial of the ledger, no
+// file of its own (lawsearch-dump.md 8). Returns null when the S row is not built.
+const dFOf = (all: TrialDef[], t: TrialDef, table: BlindTable, rowsOfS: (s: TrialDef) => Int32Array): { rows: Int32Array; against: string } | null => {
+  if (t.kind !== "EF" || t.f === null || !DIRECTIONAL_F.includes(t.f)) return null;
+  const rev = t.f.endsWith("r");
+  const sT = sTrialOf(all, t.tf, rev ? t.f.slice(0, -1) : t.f);
+  if (!sT || !trialBuilt(sT)) return null;
+  const rows = rowsOfS(sT);
+  if (!rev) return { rows, against: sT.id };
+  const out = new Int32Array(rows.length);
+  for (let k = 0; k < rows.length; k++) {
+    const r = rows[k];
+    const o = table.index.get(rowKey(table.pi[r], table.T[r], table.d[r] === 1 ? -1 : 1));
+    if (o === undefined) throw new Error(`D_F of ${t.id}: the blind table has no reversed row for its row ${r}`);
+    out[k] = o;
+  }
+  return { rows: out, against: `${sT.id}r` };
+};
+
 // Spec 23.2: the chosen trials cut on every higher-timeframe boundary target of one half, the other kinds as stage 0's
 // (lawsearch-checks.ts cutTargets): "first" on stage 1's universe ([S0, SPLIT)), at the end of stage 1; "second" on
 // stage 2's, its second-half targets only (fromStart = SPLIT). The check is "cut.chosen.<half>"; each failing trial's
@@ -615,11 +638,7 @@ async function pipeline(c: RunCtx): Promise<number> {
     const ms: TrialMeasures[] = [];
     for (const t of measured) {
       const tr = rowsOf(t);
-      let dF: { rows: Int32Array; against: string } | null = null;
-      if (t.kind === "EF" && t.f !== null && DIRECTIONAL_F.includes(t.f)) {
-        const sT = sTrialOf(c.all, t.tf, t.f);
-        if (sT && trialBuilt(sT)) dF = { rows: rowsOf(sT).rows, against: sT.id };
-      }
+      const dF = dFOf(c.all, t, tables[t.tf].t, (s) => rowsOf(s).rows);
       ms.push(measureTrial(tables[t.tf].t, tables[t.tf].late, tr, { w0: W0.first, plant: c.plant, dF }));
       await dumpTrades(dir, tables[t.tf].t, tables[t.tf].late, tr, lateWhyOf(tables[t.tf].late)?.why ?? null);
     }
@@ -764,11 +783,7 @@ async function pipeline(c: RunCtx): Promise<number> {
     // spec 10 記録 / 20: the program refuses the second half of a trial that was not chosen
     const measure2 = (t: TrialDef): TrialMeasures => {
       if (!isChosen(t.id)) refuse(`stage 2 of a trial not chosen (${t.id})`);
-      let dF: { rows: Int32Array; against: string } | null = null;
-      if (t.kind === "EF" && t.f !== null && DIRECTIONAL_F.includes(t.f)) {
-        const sT = sTrialOf(c.all, t.tf, t.f);
-        if (sT && trialBuilt(sT)) dF = { rows: rowsOf(sT).rows, against: sT.id };
-      }
+      const dF = dFOf(c.all, t, tables[t.tf].t, (s) => rowsOf(s).rows);
       return measureTrial(tables[t.tf].t, tables[t.tf].late, rowsOf(t), { w0: W0.second, plant: c.plant, dF });
     };
     const asked = c.plant === "secondHalfAll" ? c.trials : c.trials.filter((t) => isChosen(t.id));

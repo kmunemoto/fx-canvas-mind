@@ -2894,6 +2894,25 @@ that path end to end (the table above; 7.8 syn step 3). Stage 2's `suspect13` ch
 
 - That is 36 + 32 + 20 + 15 = 103 examples with required keys. The 41 others report "skip" (E05–E25 and E27–E44's
   own examples, F02–F07r, S02–S04), and so do the keys of other items inside the 103.
+- (Step 4's pilot, 2026-11-15: E13, E29, E30, F02 / F02r with S02, and B07 built; TS and Python each 112 pass,
+  0 fail, 32 skip.) Required now besides the rows above:
+
+| examples | required (new) |
+|---|---|
+| A.3.14 | `line_12_26`, `signal_9`, `signal_9_seed_index`, `signals.E13` (E14's and E15's keys stay "skip (not built)") |
+| A.3.15, A.3.16 | `line_12_26`, `signal_9`, `signals.E13`, `warmup_k` and `excluded_by_warmup_1` (E13's) |
+| A.3.19 | the `E` row of E13, the `F` row of F02 / F02r, `F02_used_higher_bar_g_at` |
+| A.3.21, A.3.22 F02 / F02r (the higher bars) | all |
+| A.3.28 | `filters_at_signals.F02_slope` (its two bars from the example's own E02 listing; the Python also checks `trials.E02.F02` and `trials.E02.F02r` the same way) |
+| A.3.30 | `F02_g`, `F02_slope`, `hourly_from_k48`, `first_value_index.F02_slope`, `F02_keep_from_index` |
+| A.4.4 E29 | all |
+| A.4.5, A.4.6, A.4.7 E30 | all |
+| A.4.28, A.4.37 S02 | all |
+
+- B07 has no example in 付録 A: both builders checked it against §8.113 C19's hand example (BUY bar 201, SELL bar
+  213; AG / AL at bars 200, 201, 213), on 15-minute and 1-hour bars, in scratch scripts.
+- The hand-level plants (the yml's list) still fail their named examples on both sides; htfOpen now also fails
+  A.3.19, A.3.21, A.3.22, A.3.28, A.3.30, A.4.28 and A.4.37 (8: F02 gives it the catchers design 8 waited for).
 - The indicator-only keys of G3 and G4 (EMA, RMA, ATR, TR, RSI, SMA, donchian 55) are required now even where the
   example's item is not built, because `lawsearch-ind.ts` already computes them. They check the wiring of the app
   functions (spec 17.1) before the items that use them are written.

@@ -199,6 +199,12 @@ export interface DonchianOut {
   LL: Float64Array;
   s: Int8Array;
 }
+export interface MacdOut {
+  // step 4 (E13): MACD(f, s, m) by _shared/macd.ts macd (spec 3.2, 17.1): line = EMA_f(C) − EMA_s(C) (無し when
+  // either is), signal = EMA_m(line) (seeded where m lines are first present: i = s + m − 2)
+  line: Float64Array;
+  signal: Float64Array;
+}
 export interface BigmoveParams {
   // §8.113 C17 with 17.3's substitutions: σ over r[i−288..i−1] with ≥ 250 usable; z over 6 bars; ±2;
   // r unusable after a gap over 12 × STEP (gapMs)
@@ -233,6 +239,8 @@ export interface Ind {
   tr(): Float64Array;
   atr(p: number): Float64Array;
   rsi(p: number): RsiOut;
+  // step 4 (E13): MACD(f, s, m) of the mid close by the app's macd (spec 17.1: its line and signal)
+  macd(f: number, s: number, m: number): MacdOut;
   donchian(n: number): DonchianOut;
   bigmove(o: BigmoveParams): BigmoveOut;
 }
@@ -248,6 +256,8 @@ export interface ItemParams {
   // E26: donchian 20 → n
   donchian?: number;
   bigmove?: Partial<BigmoveParams>;
+  // step 4: F02 / F02r / S02: the higher bars' EMA50 → EMA_htfEma (and the higher warm-up 51 → htfEma + 1)
+  htfEma?: number;
   // the item's warm-up k and the filter's, replaced
   warmup?: number;
   fWarmup?: number;

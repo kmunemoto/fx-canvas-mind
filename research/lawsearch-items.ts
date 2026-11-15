@@ -2,16 +2,17 @@
 // reader of the trial ledger (builder B, research/lawsearch-design.md 5.2).
 //
 // The registry is keyed by the ids of research/ledger/lawsearch-candidates.json. The small trial (spec 19 step 3)
-// defines E04, E26, B06, F00 and F01 (and S01 through F01). Every other id throws "NOT BUILT: <id>", so a mode can
-// refuse a trial before it reads a bar. Adding an item later is one entry of ITEMS (or FILTERS) and nothing else.
+// defines E04, E26, B06, F00 and F01 (and S01 through F01). Step 4's pilot (2026-11-15, the lead) adds E13, E29, E30,
+// F02, F02r (and S02 through F02) and B07. Every other id throws "NOT BUILT: <id>", so a mode can refuse a trial
+// before it reads a bar. Adding an item later is one entry of ITEMS (or FILTERS) and nothing else.
 //
-// Each definition follows spec 4.1–4.4, 5 and 17.3 (§8.113 C1, C17). The dump columns are lawsearch-dump.md 5's;
-// with the hand examples' shrunk params the names keep the default numbers (RSI14, EMA200).
+// Each definition follows spec 4.1–4.4, 5 and 17.3 (§8.113 C1, C17, C19). The dump columns are lawsearch-dump.md 5's;
+// with the hand examples' shrunk params the names keep the default numbers (RSI14, EMA200, HTF_EMA50).
 
 import { DAY, MINUTE } from "./lib.ts";
 import { F_ORDER, S_OF_F, TRIAL_STEP3 } from "./lawsearch-rules.ts";
-import { bigmoveDefault, xDn, xUp } from "./lawsearch-ind.ts";
-import type { FilterBuild, FilterDef, Ind, ItemBuild, ItemDef, ItemKind, ItemParams, TfKey, TrialDef, TrialKind, Tri } from "./lawsearch-types.ts";
+import { bigmoveDefault, insideOf, mean200Of, pdayOf, rsi2Of, xDn, xUp } from "./lawsearch-ind.ts";
+import type { FilterBuild, FilterDef, Ind, ItemBuild, ItemDef, ItemKind, ItemParams, SeriesKey, TfKey, TrialDef, TrialKind, Tri } from "./lawsearch-types.ts";
 
 // ---- not built -----------------------------------------------------------------------------------------------
 
@@ -188,6 +189,143 @@ const bigmoveItem = (id: string): ItemDef => {
   };
 };
 
+// ---- step 4's pilot (2026-11-15): E13, E29, E30, B07; F02 and F02r below ------------------------------------------
+
+// E13–E14 macd_sig (spec 4.1): buy X↑(MACD line, signal), sell X↓(MACD line, signal) on doubles (3.1); a cross item
+// (spec 5); the line and signal are the app's macd (17.1) through the Ind's cache; warm-up s + m − 1 (34 for
+// (12, 26, 9))
+const macdSig = (id: string, f: number, sl: number, m: number): ItemDef => {
+  const warmupFor = (params?: ItemParams) => params?.warmup ?? sl + m - 1;
+  return {
+    id,
+    kind: "cross",
+    warmup: warmupFor(),
+    warmupFor,
+    build(ind: Ind, params?: ItemParams): ItemBuild {
+      const mc = ind.macd(f, sl, m);
+      const buy = xUp(mc.line, mc.signal);
+      const sell = xDn(mc.line, mc.signal);
+      return {
+        kind: "cross",
+        cond: [buy, sell],
+        keep: null,
+        warmup: warmupFor(params),
+        columns: { [`MACD${f}_${sl}`]: mc.line, [`MACD${f}_${sl}_SIG`]: mc.signal, [`${id}_buy`]: buy, [`${id}_sell`]: sell },
+      };
+    },
+  };
+};
+
+// E29 inside_brk (spec 4.1, in points): buy when bar i − 1 is inside bar i − 2 (Ph[i−1] ≤ Ph[i−2], Pl[i−1] ≥
+// Pl[i−2]) and Pc[i] > Ph[i−2]; sell inside and Pc[i] < Pl[i−2]; 無し for i < 2. A condition item (spec 5: its
+// rising edge, and the first bar whose condition is not 無し, bar 2, gives no signal); warm-up 3
+const insideBrk = (id: string): ItemDef => {
+  const warmupFor = (params?: ItemParams) => params?.warmup ?? 3;
+  return {
+    id,
+    kind: "condition",
+    warmup: warmupFor(),
+    warmupFor,
+    build(ind: Ind, params?: ItemParams): ItemBuild {
+      const s = ind.series;
+      const inside = insideOf(s);
+      const buy = triOf(s.n, (i) => (inside[i] === -1 ? -1 : inside[i] === 1 && s.Pc[i] > s.Ph[i - 2] ? 1 : 0));
+      const sell = triOf(s.n, (i) => (inside[i] === -1 ? -1 : inside[i] === 1 && s.Pc[i] < s.Pl[i - 2] ? 1 : 0));
+      return { kind: "condition", cond: [buy, sell], keep: null, warmup: warmupFor(params), columns: { [`${id}_buy`]: buy, [`${id}_sell`]: sell } };
+    },
+  };
+};
+
+// E30's previous day must have at least this many bars (spec 4.1 E30's notes: 58 on 15 minutes, 15 on 1 hour)
+const PDAY_MIN_BARS: Readonly<Partial<Record<SeriesKey, number>>> = Object.freeze({ m15: 58, h1: 15 });
+
+// E30's raw signals of one direction from its day-wise condition (spec 4.1 E30's notes, 5): the condition is a
+// separate condition for each day, so at a day's first bar the condition of bar i − 1 counts as not holding (it is
+// not compared with the previous day's last bar, and it is not 無し); within a day the rising edge is spec 5's (the
+// condition is 無し on every bar of a day or on none, since it is 無し exactly when the previous day is). Spec 5's
+// "the first bar after S0 whose condition is not 無し gives no signal" is applied once for the whole item, not per day.
+// raw: 1 a raw signal (②), 0 none, −1 where the condition is 無し. keep (③, §8.113 置6): once per day and direction,
+// 0 at a raw signal when an earlier raw signal of the direction stands on the same day (the condition and the raw
+// signals are not changed by it, so the next bar still compares with ①'s value).
+const dayEdge = (cond: Tri, first: Uint8Array, day: Int32Array): { raw: Tri; keep: Uint8Array } => {
+  const n = cond.length;
+  const raw = new Int8Array(n).fill(-1);
+  const keep = new Uint8Array(n).fill(1);
+  const firstSet = cond.findIndex((v) => v !== -1);
+  let lastDay = -1;
+  for (let i = 0; i < n; i++) {
+    if (cond[i] === -1) continue;
+    const before = first[i] === 1 ? 0 : cond[i - 1];
+    raw[i] = cond[i] === 1 && before === 0 && i !== firstSet ? 1 : 0;
+    if (raw[i] !== 1) continue;
+    if (day[i] === lastDay) keep[i] = 0;
+    lastDay = day[i];
+  }
+  return { raw, keep };
+};
+
+// E30 pday_brk (spec 4.1 and its notes): the condition is C > PDH (sell C < PDL) on doubles, PDH and PDL the previous
+// day's high and low (lawsearch-ind.ts pdayOf: 無し when that day has fewer than 58 bars on 15 minutes, 15 on 1 hour);
+// a signal is the first bar of the day whose close goes beyond the previous day's high (the day's first bar too), once
+// per day and direction. Spec 5's generic rising edge (cond[i − 1]) cannot express the day-wise edge, so the build
+// hands candidatesOf the raw signals as a cross item's formula (② emits where it is 1) and once per day as the keep
+// rule (③). The dump columns are the day-wise condition before spec 5's rules (lawsearch-dump.md 5). Warm-up: spec 5's
+// table says "前の日がそろうこと": the condition is 無し until the previous day has its bars, so no signal can stand
+// before it and no bar index is needed (0).
+const pdayBrk = (id: string): ItemDef => {
+  const warmupFor = (params?: ItemParams) => params?.warmup ?? 0;
+  return {
+    id,
+    kind: "cross",
+    warmup: warmupFor(),
+    warmupFor,
+    build(ind: Ind, params?: ItemParams): ItemBuild {
+      const s = ind.series;
+      const minBars = PDAY_MIN_BARS[s.key];
+      if (minBars === undefined) throw new Error(`${id}: no previous-day bar count for ${s.key}`);
+      const pd = pdayOf(s, minBars);
+      const buy = triOf(s.n, (i) => (Number.isNaN(pd.PDH[i]) ? -1 : s.C[i] > pd.PDH[i] ? 1 : 0));
+      const sell = triOf(s.n, (i) => (Number.isNaN(pd.PDL[i]) ? -1 : s.C[i] < pd.PDL[i] ? 1 : 0));
+      const b = dayEdge(buy, pd.first, s.day);
+      const x = dayEdge(sell, pd.first, s.day);
+      return {
+        kind: "cross",
+        cond: [b.raw, x.raw],
+        keep: [b.keep, x.keep],
+        warmup: warmupFor(params),
+        columns: { PD_H: pd.PDH, PD_L: pd.PDL, [`${id}_buy`]: buy, [`${id}_sell`]: sell },
+      };
+    },
+  };
+};
+
+// B07 rsi2 (spec 4.4, §8.113 C19, 17.3): a condition item on the point closes; buy B = up and RSI2 < 10 (9 × AG <
+// AL), sell S = dn and RSI2 > 90 (AG > 9 × AL); 無し where either part is (AG before bar 2, the 200-bar mean before bar
+// 199); warm-up 200 (§8.113's count: signals at bar 200 or later)
+const rsi2Item = (id: string): ItemDef => {
+  const warmupFor = (params?: ItemParams) => params?.warmup ?? 200;
+  return {
+    id,
+    kind: "condition",
+    warmup: warmupFor(),
+    warmupFor,
+    build(ind: Ind, params?: ItemParams): ItemBuild {
+      const s = ind.series;
+      const r = rsi2Of(s);
+      const mp = mean200Of(s);
+      const buy = triOf(s.n, (i) => (Number.isNaN(r.AG[i]) || mp.up[i] === -1 ? -1 : mp.up[i] === 1 && 9 * r.AG[i] < r.AL[i] ? 1 : 0));
+      const sell = triOf(s.n, (i) => (Number.isNaN(r.AG[i]) || mp.dn[i] === -1 ? -1 : mp.dn[i] === 1 && r.AG[i] > 9 * r.AL[i] ? 1 : 0));
+      return {
+        kind: "condition",
+        cond: [buy, sell],
+        keep: null,
+        warmup: warmupFor(params),
+        columns: { RSI2_AG: r.AG, RSI2_AL: r.AL, [`${id}_up`]: mp.up, [`${id}_dn`]: mp.dn, [`${id}_buy`]: buy, [`${id}_sell`]: sell },
+      };
+    },
+  };
+};
+
 // F00 (spec 4.2): always true; no warm-up
 const f00: FilterDef = {
   id: "F00",
@@ -227,14 +365,69 @@ const f01: FilterDef = (() => {
   };
 })();
 
+// F02 / F02r (spec 4.2 and 2 上位足; step 4's pilot): with g the last higher bar whose grid slot has ended by T_i
+// (Ind.g, lawsearch-bars.ts htfIndex: the clock decides, even when base bars are missing), x = EMA50[g] − EMA50[g−1]
+// on the higher bars' mid close (pineEma through the higher Ind's cache; g − 1 is the higher series' previous bar, so
+// an hour without bars is closed up as spec 2's numbering does); F02 buy x > 0 and sell −x > 0, F02r buy x < 0 and sell
+// x > 0, on doubles with no tolerance (an equal value is false for every one); −1 where g < 1 or either EMA50 is 無し.
+// The index warm-up is 0; the higher warm-up (spec 5 F の温め: 上位足の51本; 21.5: kept only where g ≥ 51) is the
+// per-bar warmOk. Params: the hand examples' htfEma shrinks EMA50 (and the higher warm-up to htfEma + 1).
+// The dump columns are F02's (lawsearch-dump.md 5: HTF_G, HTF_EMA50, HTF_EMA50_PREV, F02_buy, F02_sell); F02r has none
+// of its own (its truth is the other side's F02 column), so its build gives the same F02 columns, and a run with only
+// F02r trials dumps the same values (dumpInd checks that two builds of a column hold the same values).
+const HTF_EMA = 50;
+const htfSlopeOf = (ind: Ind, params?: ItemParams) => {
+  if (ind.higher === null || ind.g === null) throw new Error("F02: the Ind has no higher timeframe (lawsearch-ind.ts indOf(series, higher))");
+  const p = params?.htfEma ?? HTF_EMA;
+  const warmG = p + 1;
+  const ema = ind.higher.ema(p);
+  const g = ind.g;
+  const n = ind.series.n;
+  const G = new Float64Array(n).fill(NaN);
+  const cur = new Float64Array(n).fill(NaN);
+  const prev = new Float64Array(n).fill(NaN);
+  const buy = new Int8Array(n);
+  const sell = new Int8Array(n);
+  const warmOk = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const k = g[i];
+    if (k >= 0) {
+      G[i] = k;
+      cur[i] = ema[k];
+    }
+    if (k >= 1) prev[i] = ema[k - 1];
+    const x = cur[i] - prev[i];
+    buy[i] = Number.isNaN(x) ? -1 : 1 * x > 0 ? 1 : 0;
+    sell[i] = Number.isNaN(x) ? -1 : -1 * x > 0 ? 1 : 0;
+    warmOk[i] = k >= warmG ? 1 : 0;
+  }
+  return { buy, sell, warmOk, columns: { HTF_G: G, HTF_EMA50: cur, HTF_EMA50_PREV: prev, F02_buy: buy, F02_sell: sell } };
+};
+const htfFilter = (id: "F02" | "F02r"): FilterDef => ({
+  id,
+  directional: true,
+  warmup: 0,
+  warmupFor: (params?: ItemParams) => params?.fWarmup ?? 0,
+  build(ind: Ind, params?: ItemParams): FilterBuild {
+    const x = htfSlopeOf(ind, params);
+    return { f: id === "F02" ? [x.buy, x.sell] : [x.sell, x.buy], warmup: params?.fWarmup ?? 0, warmOk: x.warmOk, columns: x.columns };
+  },
+});
+
 const ITEM_MAP: ReadonlyMap<string, ItemDef> = new Map<string, ItemDef>([
   ["E04", rsiBack("E04", 14, 30)],
+  ["E13", macdSig("E13", 12, 26, 9)],
   ["E26", donchianA("E26", 20)],
+  ["E29", insideBrk("E29")],
+  ["E30", pdayBrk("E30")],
   ["B06", bigmoveItem("B06")],
+  ["B07", rsi2Item("B07")],
 ]);
 const FILTER_MAP: ReadonlyMap<string, FilterDef> = new Map<string, FilterDef>([
   ["F00", f00],
   ["F01", f01],
+  ["F02", htfFilter("F02")],
+  ["F02r", htfFilter("F02r")],
 ]);
 
 // C4b (hardening of the speed-up): lawsearch-events.ts keeps an Ind's item and F builds under the definition's id
@@ -251,9 +444,9 @@ const checkRegistry = (what: string, map: ReadonlyMap<string, { id: string }>): 
 checkRegistry("ITEM_MAP", ITEM_MAP);
 checkRegistry("FILTER_MAP", FILTER_MAP);
 
-// the items written now (spec 19 step 3): E04, E26, B06
+// the items written now: E04, E26, B06 (spec 19 step 3); E13, E29, E30, B07 (step 4's pilot)
 export const ITEMS: ReadonlyMap<string, ItemDef> = ITEM_MAP;
-// the filters written now: F00, F01
+// the filters written now: F00, F01 (step 3); F02, F02r (step 4's pilot; S02 is F02 through S_OF_F)
 export const FILTERS: ReadonlyMap<string, FilterDef> = FILTER_MAP;
 
 export function itemOf(id: string): ItemDef {

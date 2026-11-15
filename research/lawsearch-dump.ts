@@ -188,10 +188,16 @@ export async function dumpHoles(dir: string, ctx: Record<TfKey, ExclCtx>): Promi
 }
 
 // lawsearch-dump.md 5: the fixed column order (later items append theirs in table order) and each column's format
-export const IND_COLUMNS: readonly string[] = ["RSI14", "RSI14_U", "RSI14_D", "E04_buy", "E04_sell", "DON20_HH", "DON20_LL", "DON20_s", "EMA200", "F01_buy", "F01_sell", "BM_r", "BM_ok", "BM_sigma", "BM_z", "B06_buy", "B06_sell", "B06_keep"];
+// (step 4's pilot, 2026-11-15) E13's, E29's, E30's, F02's and B07's columns appended after B06_keep in the spec's
+// table order, as lawsearch-dump.md 5's pilot table lists them (F02r and S02 have none of their own)
+export const IND_COLUMNS: readonly string[] = [
+  "RSI14", "RSI14_U", "RSI14_D", "E04_buy", "E04_sell", "DON20_HH", "DON20_LL", "DON20_s", "EMA200", "F01_buy", "F01_sell", "BM_r", "BM_ok", "BM_sigma", "BM_z", "B06_buy", "B06_sell", "B06_keep",
+  "MACD12_26", "MACD12_26_SIG", "E13_buy", "E13_sell", "E29_buy", "E29_sell", "PD_H", "PD_L", "E30_buy", "E30_sell", "HTF_G", "HTF_EMA50", "HTF_EMA50_PREV", "F02_buy", "F02_sell", "RSI2_AG", "RSI2_AL", "B07_up", "B07_dn", "B07_buy", "B07_sell",
+];
 const indFormat = (name: string): "tri" | "int" | "bool" | "real" => {
-  if (/_(buy|sell)$/.test(name)) return "tri";
-  if (name === "DON20_s") return "int";
+  if (/_(buy|sell)$/.test(name) || name === "B07_up" || name === "B07_dn") return "tri";
+  // HTF_G is held as a double, NaN where there is no closed higher bar (written empty)
+  if (name === "DON20_s" || name === "HTF_G") return "int";
   if (name === "BM_ok" || /_keep$/.test(name)) return "bool";
   return "real";
 };
@@ -227,7 +233,7 @@ export async function dumpInd(dir: string, tf: TfSet, builds: ReadonlyArray<{ pi
       for (const name of names) {
         const v = cols.get(name)![i];
         const f = indFormat(name);
-        row.push(f === "tri" ? fmtTri(v) : f === "bool" ? fmtBool(v === 1) : f === "int" ? fmtInt(v) : fmtReal(v));
+        row.push(f === "tri" ? fmtTri(v) : f === "bool" ? fmtBool(v === 1) : f === "int" ? (Number.isNaN(v) ? "" : fmtInt(v)) : fmtReal(v));
       }
       rows.push(row);
     }
