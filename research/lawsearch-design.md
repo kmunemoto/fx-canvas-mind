@@ -2913,6 +2913,24 @@ that path end to end (the table above; 7.8 syn step 3). Stage 2's `suspect13` ch
   213; AG / AL at bars 200, 201, 213), on 15-minute and 1-hour bars, in scratch scripts.
 - The hand-level plants (the yml's list) still fail their named examples on both sides; htfOpen now also fails
   A.3.19, A.3.21, A.3.22, A.3.28, A.3.30, A.4.28 and A.4.37 (8: F02 gives it the catchers design 8 waited for).
+- (The pilot's review, 2026-11-15: two reviewers, one refuter.) One finding stood, found on both sides: every
+  `variant_*` key (付録 A's 「変えた形」) had been skipped as an "alternative answer" by both runners, so A.4.6's half
+  「57本なら無し」 was never checked (a 15-minute threshold of 57, or the 1-hour 15, passed every E30 example). A variant is
+  a second input with its own answer. Both runners now compare it like any key (`change`, its text of how the input
+  was made, is a note): A.4.5's `variant_thu_15_bars` and A.4.6's `variant_57_bars` (E30), and A.4.41's
+  `variant_150_010` (S01, step 3's own gap: the TS had an adapter for it that was never asked). A.3.30's
+  `variant_flat_150000` is not asked (its keys are E18's and E21's). Checked on copies: a threshold of 57 now fails
+  A.4.6 on both sides.
+- §8.113 19's examples of the B items (spec 17.3 draws them in) are not in the sha-frozen 付録 A. They now live in
+  `research/lawsearch-hand-s8113.json` (copied from docs/OPERATIONS.md's text, the answers as the text gives them; bar
+  213's AG / AL cut to 6 decimals as the text writes "16.880264…"), run by both runners after 付録 A's: `S8113.C19.m15`
+  and `S8113.C19.h1` (B07), all keys required. Checked on copies: B07's 200-bar mean taken without bar i fails both.
+  Each B item of step 4 adds its §8.113 example here the same way. Totals now: TS and Python 114 pass, 0 fail, 32 skip.
+- E30 under the plant `noRisingEdge` (the review's T2, refuted as a spec matter): the TS keeps E30's day-wise edge in
+  its build (kind "cross", lawsearch-items.ts), so the plant does not reach it there; the Python's plant does. Plant
+  runs are not compared between the two, and the plant is still caught by A.4.1, A.4.4, A.4.33 and A.4.34 on both
+  sides. Once per day hides the edge except at the item's first bar that is not 無し, so no plant can catch an E30
+  edge error on either side; A.4.7 (the day's first bar) checks the day-wise reading itself.
 - The indicator-only keys of G3 and G4 (EMA, RMA, ATR, TR, RSI, SMA, donchian 55) are required now even where the
   example's item is not built, because `lawsearch-ind.ts` already computes them. They check the wiring of the app
   functions (spec 17.1) before the items that use them are written.

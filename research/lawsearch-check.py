@@ -2307,8 +2307,10 @@ def _h_a136(ex, plant):
 # ----------------------------------------------------------------------------------------------------------------
 
 def skip_key(k):
-    return ("MISREADING" in k or "misreading" in k or k.startswith("variant_") or k.endswith("_note")
-            or k == "note" or k == "tolerance_rel")
+    # (Step 4's pilot, 2026-11-15: a variant_* key is a second input with its own answer, compared like any key; see
+    # lawsearch_sig.py _is_alt. Groups 1 and 2 have none. "change" is a variant's note.)
+    return ("MISREADING" in k or "misreading" in k or k.endswith("_note")
+            or k == "note" or k == "tolerance_rel" or k == "change")
 
 
 TEXT_KEYS = {"why"}   # explanatory prose inside an answer: not a value (reported as skip)
@@ -6029,6 +6031,9 @@ def cmd_hand(plant=""):
     _HAND_ALL[:] = exs
     g12 = [e for e in exs if e["group"] in ("G1", "G2")]
     g34 = [e for e in exs if e["group"] in ("G3", "G4")]
+    # §8.113 19's examples of the B items (spec 17.3; research/lawsearch-hand-s8113.json, not sha-frozen; step 4's pilot)
+    with open(ROOT / "research/lawsearch-hand-s8113.json", "r", encoding="utf-8") as f:
+        g34 += json.load(f)["examples"]
     res = run_hand_examples(g12, plant)
     try:
         sig = load_sig()

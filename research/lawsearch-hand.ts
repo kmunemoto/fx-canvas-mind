@@ -36,6 +36,10 @@ import type { Bars, BigmoveParams, BlindTable, ExclCtx, FilterBuild, HandExample
 
 const range = (g: number, n: number): string[] => Array.from({ length: n }, (_, k) => `A.${g}.${k + 1}`);
 export const HAND_REQUIRED: Readonly<Record<string, "all" | readonly string[]>> = {
+  // §8.113 19's examples of the B items (research/lawsearch-hand-s8113.json; spec 17.3 draws them in; step 4's pilot,
+  // the review's T3 / P2): run after 付録 A's
+  "S8113.C19.m15": "all",
+  "S8113.C19.h1": "all",
   ...Object.fromEntries(range(1, 36).map((id) => [id, "all" as const])),
   ...Object.fromEntries(range(2, 32).map((id) => [id, "all" as const])),
   "A.3.1": "all",
@@ -91,7 +95,12 @@ export const HAND_REQUIRED: Readonly<Record<string, "all" | readonly string[]>> 
 };
 
 // an alternative answer or a note (lawsearch-design.md 7.6), at any depth
-export const ALT_KEY = /MISREADING|misreading|^variant_|_note$|^note$|^tolerance_rel$/;
+// (Step 4's pilot, 2026-11-15, the lead, on the review's T1 / P1: a variant_* key is NOT an alternative answer. It is a
+// second input with its own answer (付録 A's 「変えた形」: A.4.5's variant_thu_15_bars, A.4.6's variant_57_bars, A.4.41's
+// variant_150_010, A.3.30's variant_flat_150000), so it is compared like any key. Until then every variant_* key was
+// skipped here and in the Python, and A.4.6's 「57本なら無し」 half was never checked. "change" is the variant's text of how
+// its input was made: a note.)
+export const ALT_KEY = /MISREADING|misreading|_note$|^note$|^tolerance_rel$|^change$/;
 
 // ---- values and comparison --------------------------------------------------------------------------------------
 
@@ -1376,6 +1385,8 @@ function e13Flat(e: J, plant: string): Record<string, Thunk> {
 }
 
 const G4: Record<string, Adapter> = {
+  "S8113.C19.m15": (e, plant) => c19Out(e, plant),
+  "S8113.C19.h1": (e, plant) => c19Out(e, plant),
   "A.4.1": (e, plant) => {
     const s = midSeries(e.input, plant);
     const don = indOf(s, null, plant).donchian(20);
@@ -1464,10 +1475,48 @@ const G4: Record<string, Adapter> = {
     };
   },
 };
+// §8.113 19's C19 example (research/lawsearch-hand-s8113.json; spec 17.3): B07's AG and AL in points at the bars the
+// example names (bar 213's cut to 6 decimals, as the example writes "16.880264…"), the 200-bar mean's above and below
+// bars, and the B07 trial's emitted signals
+function c19Out(e: J, plant: string): Record<string, Thunk> {
+  const s = midSeries(e.input, plant);
+  const b = itemOf("B07").build(indOf(s, null, plant));
+  const AG = b.columns.RSI2_AG as Float64Array;
+  const AL = b.columns.RSI2_AL as Float64Array;
+  const up = b.columns.B07_up;
+  const dn = b.columns.B07_dn;
+  const trunc6 = (x: number): string => (Math.trunc(x * 1e6) / 1e6).toFixed(6);
+  const barsWhere = (v: ArrayLike<number>): number[] => Array.from({ length: s.n }, (_, k) => k).filter((k) => v[k] === 1);
+  return {
+    AG_AL_points: () => ({ "200": [AG[200], AL[200]], "201": [AG[201], AL[201]] }),
+    AG_AL_points_trunc6: () => ({ "213": [trunc6(AG[213]), trunc6(AL[213])] }),
+    rsi2_below_10_at_200: () => 9 * AG[200] < AL[200],
+    above_mean_bars: () => barsWhere(up),
+    below_mean_bars: () => barsWhere(dn),
+    signals: () => emittedOf(trialOf(s.key === "m15" ? "m15.B07" : "h1.B07"), s, plant),
+  };
+}
 // step 4: E30 per bar: D(s_i) (spec 2 日), the previous day (lawsearch-ind.ts pdayOf; it does not depend on the bar
 // count), the bars of each day, and the E30 build's PDH, PDL and day-wise condition; the signals by candidatesOf
 function e30Out(e: J, plant: string): Record<string, Thunk> {
-  const s = midSeries(e.input, plant);
+  const ins = e.input as { s: string[]; mid: string[][] };
+  // 付録 A's 「変えた形」 (the review's T1 / P1): each is a second input, made as its "change" text says
+  const variant = (input: J, want: J): Thunk => async () => {
+    const o = e30Core(input, plant);
+    const r: J = {};
+    for (const k of Object.keys(want)) if (!ALT_KEY.test(k) && o[k]) r[k] = await o[k]();
+    return r;
+  };
+  return {
+    ...e30Core(e.input, plant),
+    // A.4.5: 「木曜 06:00 UTC の足 150.000/150.050/149.950/150.000 を先頭に足す（番号は1つずつずれる）」
+    ...(e.expect.variant_thu_15_bars ? { variant_thu_15_bars: variant({ ...e.input, s: ["2024-02-01T06:00:00Z", ...ins.s], mid: [["150.000", "150.050", "149.950", "150.000"], ...ins.mid] }, e.expect.variant_thu_15_bars) } : {}),
+    // A.4.6: 「足0（火 06:00）を消す。火は57本。番号は1つずつ前へ」
+    ...(e.expect.variant_57_bars ? { variant_57_bars: variant({ ...e.input, s: ins.s.slice(1), mid: ins.mid.slice(1) }, e.expect.variant_57_bars) } : {}),
+  };
+}
+function e30Core(input: J, plant: string): Record<string, Thunk> {
+  const s = midSeries(input, plant);
   const b = itemOf("E30").build(indOf(s, null, plant));
   const days = Array.from(s.day);
   const count = new Map<number, number>();
@@ -2261,7 +2310,10 @@ async function runOne(e: HandExample, plant: string): Promise<HandResult> {
 export async function runHand(o: { plant: string; ids?: string[] }): Promise<HandResult[]> {
   const doc = JSON.parse(await Deno.readTextFile(new URL("./lawsearch-hand.json", import.meta.url)));
   if (handTrials.size === 0) for (const t of parseCandidates(JSON.parse(await Deno.readTextFile(new URL("./ledger/lawsearch-candidates.json", import.meta.url))))) handTrials.set(t.id, t);
-  const all = doc.examples as HandExample[];
+  // 付録 A's examples, then §8.113 19's of the B items (spec 17.3; lawsearch-hand-s8113.json, not sha-frozen: copied
+  // from docs/OPERATIONS.md's text, step 4's pilot)
+  const extra = JSON.parse(await Deno.readTextFile(new URL("./lawsearch-hand-s8113.json", import.meta.url)));
+  const all = [...(doc.examples as HandExample[]), ...(extra.examples as HandExample[])];
   for (const e of all) handById.set(e.id, e);
   const pick = o.ids && o.ids.length ? all.filter((e) => o.ids!.includes(e.id)) : all;
   const out: HandResult[] = [];

@@ -1583,9 +1583,52 @@ def _iso_day(ymd):
     return "%04d-%02d-%02d" % (ymd // 10000, ymd // 100 % 100, ymd % 100)
 
 
-def _h_e30(ex, plant):
-    """A.4.5-A.4.7: E30 pday_brk (spec 4.1's notes)."""
+def _h_c19(ex, plant):
+    """§8.113 19's C19 example (research/lawsearch-hand-s8113.json; spec 17.3): B07's AG and AL in points at the bars
+    the example names (bar 213's cut to 6 decimals, as the example writes "16.880264…"), the 200-bar mean's above and
+    below bars, and the B07 trial's emitted signals."""
     bars = _hand_bars(ex["input"])
+    it = item("B07", bars, plant=plant)
+    AG = it.columns["RSI2_AG"]
+    AL = it.columns["RSI2_AL"]
+    up = it.columns["B07_up"].tolist()
+    dn = it.columns["B07_dn"].tolist()
+    c = candidates("%s.B07" % bars["tf"], bars, plant=plant)
+
+    def trunc6(x):
+        return "%.6f" % (math.trunc(float(x) * 1e6) / 1e6)
+
+    return {"AG_AL_points": {"200": [float(AG[200]), float(AL[200])], "201": [float(AG[201]), float(AL[201])]},
+            "AG_AL_points_trunc6": {"213": [trunc6(AG[213]), trunc6(AL[213])]},
+            "rsi2_below_10_at_200": bool(9 * float(AG[200]) < float(AL[200])),
+            "above_mean_bars": [k for k, v in enumerate(up) if v == 1],
+            "below_mean_bars": [k for k, v in enumerate(dn) if v == 1],
+            "signals": _sig_records(c, bars)}
+
+
+def _h_e30(ex, plant):
+    """A.4.5-A.4.7: E30 pday_brk (spec 4.1's notes), and the 「変えた形」 of A.4.5 and A.4.6 (each a second input, made as
+    its "change" text says)."""
+    inp = ex["input"]
+    out = _e30_out(inp, plant)
+    exp = ex.get("expect") or {}
+    if "variant_thu_15_bars" in exp:
+        # A.4.5: 「木曜 06:00 UTC の足 150.000/150.050/149.950/150.000 を先頭に足す（番号は1つずつずれる）」
+        v = dict(inp)
+        v["s"] = ["2024-02-01T06:00:00Z"] + list(inp["s"])
+        v["mid"] = [["150.000", "150.050", "149.950", "150.000"]] + list(inp["mid"])
+        out["variant_thu_15_bars"] = _e30_out(v, plant)
+    if "variant_57_bars" in exp:
+        # A.4.6: 「足0（火 06:00）を消す。火は57本。番号は1つずつ前へ」
+        v = dict(inp)
+        v["s"] = list(inp["s"])[1:]
+        v["mid"] = list(inp["mid"])[1:]
+        out["variant_57_bars"] = _e30_out(v, plant)
+    return out
+
+
+def _e30_out(inp, plant):
+    bars = _hand_bars(inp)
     it = item("E30", bars, plant=plant)
     c = candidates("%s.E30.F00" % bars["tf"], bars, plant=plant)
     pd = it.columns["_E30_prev_day"]
@@ -1711,6 +1754,12 @@ def _h_s01(ex, plant):
         out["seed_sum"] = _seed_sum(xs, e - 1, e)
     out["alpha"] = 2 / (e + 1)
     out["one_minus_alpha"] = 1.0 - out["alpha"]
+    exp = ex.get("expect") or {}
+    if "variant_150_010" in exp:
+        # A.4.41: 「足0〜399 をどれも 150.010/150.010/150.010/150.010 にする」 (a second input with its own answer)
+        v = dict(ex["input"])
+        v["mid"] = [["150.010", "150.010", "150.010", "150.010"] for _ in ex["input"]["mid"]]
+        out["variant_150_010"] = _h_s01({"input": v, "params": ex.get("params")}, plant)
     return out
 
 
@@ -1743,6 +1792,10 @@ _LN_KEYS = ("r", "sigma", "z")
 
 # The coverage table of py-design 7 for PY2: id -> (handler, required paths or "all").
 HAND_TABLE = {
+    # §8.113 19's examples of the B items (research/lawsearch-hand-s8113.json; spec 17.3; step 4's pilot, the review's
+    # T3 / P2), run after 付録 A's
+    "S8113.C19.m15": (_h_c19, "all"),
+    "S8113.C19.h1": (_h_c19, "all"),
     "A.3.1": (_h_a31, "all"),
     "A.3.2": (_h_sma20, ["first_index_shown", "SMA20"]),
     "A.3.5": (_h_a35, "all"),
@@ -1819,9 +1872,13 @@ _PLANT_INFO = {
 
 
 def _is_alt(key):
+    """An alternative answer or a note: not compared. (Step 4's pilot, 2026-11-15, the lead, on the review's T1 / P1: a
+    variant_* key is not one. It is a second input with its own answer (付録 A's 「変えた形」), compared like any key;
+    until then it was skipped, and A.4.6's 「57本なら無し」 half was never checked. "change" is the variant's text of how
+    its input was made: a note.)"""
     k = str(key)
-    return ("MISREADING" in k or "misreading" in k or k.startswith("variant_") or k.endswith("_note")
-            or k in ("note", "tolerance_rel"))
+    return ("MISREADING" in k or "misreading" in k or k.endswith("_note")
+            or k in ("note", "tolerance_rel", "change"))
 
 
 def _num(v):
@@ -2020,7 +2077,7 @@ def run_hand(examples, plant=""):
     out = []   # a PY1 plant changes nothing here
     for ex in examples:
         hid = ex["id"]
-        if not (hid.startswith("A.3.") or hid.startswith("A.4.")):
+        if not (hid.startswith("A.3.") or hid.startswith("A.4.") or hid.startswith("S8113.")):
             continue
         if hid not in HAND_TABLE:
             out.append({"id": hid, "status": "skip", "keys": [{"key": "*", "status": "skip",
@@ -2064,7 +2121,9 @@ def _main(argv):
             print("STOP sha256 of research/%s is %s, not %s" % (name, got, want))
             return 3
     d = json.loads((_HERE / "lawsearch-hand.json").read_text(encoding="utf-8"))
-    res = run_hand(d["examples"], plant=plant)
+    # 付録 A's examples, then §8.113 19's of the B items (spec 17.3; lawsearch-hand-s8113.json, not sha-frozen)
+    extra = json.loads((_HERE / "lawsearch-hand-s8113.json").read_text(encoding="utf-8"))
+    res = run_hand(d["examples"] + extra["examples"], plant=plant)
     n = {"pass": 0, "fail": 0, "skip": 0}
     for r in res:
         n[r["status"]] += 1
