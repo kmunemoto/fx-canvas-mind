@@ -4234,6 +4234,10 @@ class Run:
         self.allowed = []
         self.blind_hits = {}     # stage -> the blind row ids whose spec 13 suspicion hit (C3, D10)
         self.stage2_closed = []  # why stage 2 was not opened (C3, D8 / D10)
+        # dump.md 9.2 / 9.2b (step 4, round A): kind -> [places adopted in stage 0, those holding a row, those where
+        # the Python's own rows differed from the TS's]; written as one INFO line per kind (adoption_info)
+        self.adopt_seen = {}
+        self.in_stage0 = False
 
     # -------------------------------------------------------------------------------------------- setup
     def setup(self, refuse_plant=True, refuse_cut_max=False):
@@ -4480,10 +4484,48 @@ class Run:
         for i in bs:
             bars_at.add(i)
             bars_at.add(i + 1)
-        keep = [r for r in rows if r[4] not in bars_at] + self._ts_rows_at(tsr, pair, bars_at)
+        ts_rows = self._ts_rows_at(tsr, pair, bars_at)
+        self.note_adoption("z-border", rows, ts_rows, bars_at)
+        keep = [r for r in rows if r[4] not in bars_at] + ts_rows
         for i in sorted(bars_at):
             self.allowed.append(f"ALLOWED z-border {trial['tf']} {pair} i={i}")
         return keep
+
+    def note_adoption(self, kind, rows, ts_rows, bars_at):
+        """dump.md 9.2 / 9.2b (step 4, round A): count, in stage 0 only, the (trial, pair, bar) places where the TS's
+        rows are adopted, those that hold a row on either side, and those where the Python's own rows differ from
+        the TS's rows that replace them. Stage 0 loads the whole period [S0, END), as the TS's signals/ dumps do;
+        stage 1's load ends at SPLIT (its later bars have no Python rows) and stage 2 adopts the same rows again, so
+        neither is counted. An ALLOWED line says only that a bar was a border bar; this count says whether the
+        allowance changed anything."""
+        if not self.in_stage0:
+            return
+        py = {}
+        for r in rows:
+            if r[4] in bars_at:
+                py.setdefault(r[4], []).append(tuple(str(v) for v in r))
+        ts = {}
+        for r in ts_rows:
+            ts.setdefault(r[4], []).append(tuple(str(v) for v in r))
+        c = self.adopt_seen.setdefault(kind, [0, 0, 0])
+        for i in bars_at:
+            a = sorted(py.get(i, []))
+            b = sorted(ts.get(i, []))
+            c[0] += 1
+            if a or b:
+                c[1] += 1
+            if a != b:
+                c[2] += 1
+
+    def adoption_info(self):
+        """One INFO line per kind adopted in stage 0 (note_adoption). Not an ALLOWED line: the comparator reads
+        ALLOWED lines only, and RESULT stays the comparison's."""
+        out = []
+        for kind in sorted(self.adopt_seen):
+            n, with_rows, differ = self.adopt_seen[kind]
+            out.append(f"INFO {kind}: stage 0 adopted the TS's rows at {n} (trial, pair, bar) places, {with_rows} of "
+                       f"them holding a row; the Python's own rows differed at {differ}")
+        return out
 
     @staticmethod
     def _ts_rows_at(tsr, pair, bars_at):
@@ -4509,7 +4551,9 @@ class Run:
         tsr = self.ts_sig.get(trial["id"])
         if not bars_at or tsr is None:
             return rows
-        keep = [r for r in rows if r[4] not in bars_at] + self._ts_rows_at(tsr, pair, bars_at)
+        ts_rows = self._ts_rows_at(tsr, pair, bars_at)
+        self.note_adoption("rci-border", rows, ts_rows, bars_at)
+        keep = [r for r in rows if r[4] not in bars_at] + ts_rows
         seen = self.__dict__.setdefault("_rci_lines", set())
         for i in sorted(bars_at):
             line = f"ALLOWED rci-border {trial['tf']} {pair} i={i}"
@@ -5106,8 +5150,13 @@ class Run:
                                                 "hand", "checks_passed"])
         self.blind_hits = {}
         self.stage2_closed = []
+        self.adopt_seen = {}
         try:
-            self.stage0()
+            self.in_stage0 = True
+            try:
+                self.stage0()
+            finally:
+                self.in_stage0 = False
             self.stage1()
             why = self.stage2_closed_why()
             if why:
@@ -6145,16 +6194,17 @@ def run_and_compare(r):
     if not os.path.isdir(r.ts) or not [f for f in list_files(r.ts) if f not in TS_ONLY]:
         print("no TS files to compare yet")
         return 5
-    code = Comparator(r.run, r.allowed).compare()
+    code = Comparator(r.run, r.allowed + r.adoption_info()).compare()
     print_report_tail(r.run)
     return code
 
 
 def print_report_tail(run_dir):
-    """Print report.txt's STOP 13 lines, its `stage 2 not opened` line (C4a, E6) and its RESULT line."""
+    """Print report.txt's STOP 13 lines, its `stage 2 not opened` line (C4a, E6), its INFO lines of 9.2 / 9.2b's
+    adoption (step 4, round A) and its RESULT line."""
     rep = open(os.path.join(run_dir, "cmp", "report.txt"), encoding="utf-8").read().splitlines()
     for ln in rep:
-        if ln.startswith(("STOP 13 ", "stage 2 not opened: ")):
+        if ln.startswith(("STOP 13 ", "stage 2 not opened: ", "INFO z-border: ", "INFO rci-border: ")):
             print(ln)
     print(rep[-1])
 

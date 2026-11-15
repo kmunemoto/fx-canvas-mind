@@ -554,6 +554,10 @@ Key: tf, half. All int. late_end must be 0.
 - The comparator lists them as `ALLOWED rci-border <tf> <pair> i=<i>`, and the Python adopts the TS's rows for those
   bars before it counts, as 9.2 does for B06; everything after must agree exactly. `RCI9` itself is compared with
   1e−9 (class real).
+- (Round A's run, 2026-11-15) RCI(9) lands on exactly ±80 often, so the `ALLOWED rci-border` lines are many (the
+  200-trial run N 1002: 14,880 bars). Whether the adoption changed anything is the `INFO rci-border` line's count
+  (10): on that run the Python's own rows equalled the TS's at all 59,520 stage-0 places (9,724 holding a row), so
+  nothing was changed (measured on a copy before the line existed).
 
 ### 9.3 Allowed difference: decisions on quantiles and p (spec 8.5)
 
@@ -612,6 +616,12 @@ Key: tf, half. All int. late_end must be 0.
   - one line per file: `FILE <name> rows ts=<n> py=<n> diff=<n>`;
   - then up to 20 differences per file: `DIFF <file> <key> <column> ts=<v> py=<v> class=<c>`;
   - then the `ALLOWED …` and `STOP …` lines (the `STOP 13 …` lines after the `ALLOWED` and `STOP 8.5` lines);
+    (step 4, round A, 2026-11-15) with `--run`, after the `ALLOWED` lines of the run, one line per kind of 9.2 /
+    9.2b adoption that happened: `INFO <z-border | rci-border>: stage 0 adopted the TS's rows at <n> (trial, pair,
+    bar) places, <m> of them holding a row; the Python's own rows differed at <k>`. Counted in stage 0 only (the
+    whole period, as the TS's `signals/`); `k` says whether the allowance changed anything (`ALLOWED` lines say only
+    that a bar was a border bar). It is not a difference and not a stop: it changes neither `RESULT` nor the exit,
+    and the comparator does not read it. `--compare` writes none (it computes no Python rows);
   - (C4a, 2026-11-05; the lead's E6) then, when a failed TS check kept stage 2 closed (11.14 (a)), one line
     `stage 2 not opened: <reason>` (its form is in 11.14 (a)). It is not a difference and not a stop: it changes
     neither `RESULT` nor the exit;
