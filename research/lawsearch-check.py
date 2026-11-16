@@ -51,7 +51,7 @@ ROOT = _HERE.parent
 # ----------------------------------------------------------------------------------------------------------------
 
 RULES_SHA256 = {
-    "research/lawsearch-spec.md": "a434362aa418c0be49bb967ea236e4d7663715ae26029656c57f6f4dcc258ffd",
+    "research/lawsearch-spec.md": "673b1040c977b9cb9753799ecedfd424802bcd805a94556cc1ee4f5a1d677573",
     "research/lawsearch-hand.json": "41d4788084630bb4dbc7f6c0a3a46cce40dd604a76b29358f84bf461f53a1d9a",
     "research/lawsearch-hand.md": "f51112b57eb3d62df4afadcf3e838bbf51cb54b62942ca095c881d701840bae7",
     "research/ledger/lawsearch-candidates.json": "92adb97481cf5a7cc7b17a4a31d06da638c2d30246951a6c51b564e7018fdeab",

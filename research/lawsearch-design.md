@@ -2705,7 +2705,17 @@ before that check. Its judgement on N 1001 and FLIP 1001 with the C4g code: exit
     direction error is still found): symmetric code decides exactly equal pairs as mirrors on both sides, so a row
     split there is an asymmetry, not rounding. Measured on round A's run: with E10's buy made strict at an exact
     %K = %D tie (a mutant), 98 of m15 E10.F00's 114 rows in one side only had exactly equal pairs only; they count,
-    and the four m15 E10 trials fail (0.27–0.43%); counting zeros as rounding would have passed them.
+    and the four m15 E10 trials fail (0.27–0.43%); counting zeros as rounding would have passed them. Spec 24 の1
+    names this as the lead's reading. Row by row it is not complete: where one side is exactly equal and the other a
+    last digit off (≈ 1e−12), a tie error's row counts as rounding (the review of 2026-11-16, an independent agent:
+    4 such bars in two mutants, against 342 counted rows in one of them).
+  - The review (2026-11-16, one independent agent, read-only): no code defect. Every `margins` reads the arrays,
+    params and bars its build reads, and covers every pair its decisions compare; E26, E29, E30, B07 and the S rows
+    are exact under the exact mirror (B07's AG and AL swap bit for bit); the 94 rounding rows of round A's run are
+    each split by the near pair; the highest share of rows a trial could call rounding is 0.104% (m15.E11.F01), every
+    trial but E10 / E11 at or below 0.016%; `margins` is called only by the flip judgement. Its two low findings (the
+    zero reading named as the owner's in spec 24 の1; "a tie error is found here" said too strongly) are fixed in the
+    spec's text and here.
   - Measured on round A's run (N 1002, 200 trials): before, m15 E11.F01 0.116% and E11.F02 0.106% failed; every row
     in one side only of E10 / E11 (40 for F00) had a pair in (0, 3e−11) on one side. After: every trial passes, every
     E10 / E11 row in one side only is a rounding difference, and no other trial has one. Mutants (a copy): E10's sell

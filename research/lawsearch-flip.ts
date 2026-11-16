@@ -28,7 +28,10 @@
 //     original's Ind or the mirror's): the item's margins and, for an E × F trial or an S row, the F's (ItemDef /
 //     FilterDef margins, lawsearch-items.ts). A row whose pairs are all exactly equal or 1e−9 or more apart counts as
 //     before: symmetric code makes exactly equal pairs on both sides decide as mirrors, so only an asymmetry can split
-//     them. An item or F without margins (exact under the exact mirror: point comparisons) gets no allowance;
+//     them (the lead's reading of the owner's answer, which said "less than 1e−9"; it only makes the check stricter).
+//     A tie error still shows across a trial, though not on every row: where one side is exactly equal and the other
+//     a last digit off (≈ 1e−12), its row counts as rounding (the review of 2026-11-16 found 4 such bars in two
+//     mutants). An item or F without margins (exact under the exact mirror: point comparisons) gets no allowance;
 //   * an item of NOT_SYMMETRIC (B06: log returns of mirrored prices) is not symmetric: its name, reason and difference
 //     are printed, not judged (spec 14.2: 対称でない項目は、名前と理由を出す).
 // Also judged, so that the judgement is of the original run: the original's signals and blind tables built here equal
