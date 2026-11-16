@@ -66,15 +66,18 @@ section 4 A.4):
   on that side.
 - **The decision's moment**: a minute's read: the read's moment (section 4); the tail: **bar `j`'s close**
   (`open(j) + 1 hour`), whenever the read is made.
-- **The step**, with the chart's rides of side `D` as they stand after this read's reaches (section 4) — exactly
-  `rideCloseStep` of v9 (research/macdride-spec.md section 1) with the bar `j` as the bar:
+- **The step**, with the chart's rides of side `D` as they stand after this read's reaches (section 4) — v9's
+  `rideCloseStep` (research/macdride-spec.md section 1) with the bar `j` as the bar, and one addition (a ride of the
+  side entered in a bar after `j`; for the shares it cannot happen):
   - **at** (the notice): already, and no ride of the side has `reached_bar = open(j)`;
   - **quiet** (no mail): already, and a ride of the side has `reached_bar = open(j)` (normally reached by this very
     read; also one reached by another run in the same minute, or by an earlier run that failed before deciding): its
-    email 2 says the same;
+    email 2 says the same; or already, and a ride of the side was entered in a bar after `j` (only a tail decided late
+    can meet one: a later decision of the side has been mailed, and a notice for an earlier moment would come after it);
   - **skip** (no mail): not already, and a ride of the side entered in a bar before `j` is open, or was reached in a
     bar after `j` (`reached_bar > open(j)`: only a tail can see such a ride, one reached in the next bar before the
-    close was read);
+    close was read); or not already, and a ride of the side was entered in a bar after `j`, open or reached (only a
+    tail decided late, by a later judge of the close, can meet one);
   - **in** (email 1): not already, and no such ride.
 
   An already decision is never skipped and skips nothing (research/macd90m-spec.md way C). For a minute's read, "a
@@ -219,7 +222,9 @@ A ridden chart is held judged by an instance only when the ride's work on the ba
 
 ### B. Each minute (after this run's closes were judged and after the sharp rise, as v9)
 
-1. **One read** of `macd_rides` for all charts followed (as v9: open, or reached in the last 30 minutes), one of
+1. **One read** of `macd_rides` for all charts followed (open, or reached in the last 30 minutes, or reached in bar `F`:
+   `or=(status.eq.open,reached_at.gte.<now − 30 minutes>,reached_bar.gte.<F>)`, so that quiet sees every ride
+   reached in the bar decided), one of
    `macd_ride_moments` (bars `F` and `F − 1 hour`, all charts followed), and the state of `F` (memo, else one read of
    `macd_ride_state` for all charts followed whose memo lacks it; `bar_time = F`, the five numbers and the three new
    columns). Any of these unread → nothing of the ride in this run for the charts it concerns (the record says which).
@@ -301,7 +306,8 @@ Pure, no clock, no I/O, used by the function and the replay (as v9). At least:
 - `rideLineAt` unchanged; `rideTouchAt(state, zside, x, share)` → null or the touch (`rideTouch` at `SHARE_OUT` stays
   its special case).
 - `rideHit(state, zp, hi, lo)` → null or `{ zside, side, x, z, share0, already }` (section 1.1's hit: top first).
-- the step: `rideCloseStep` (v9's, unchanged) with an entry built from the hit (section 1.1).
+- the step: `rideCloseStep` (v9's) with an entry built from the hit, and section 1.1's addition (a ride of the side
+  entered in a bar after the bar judged: skip, or quiet when already); the shares' calls are unchanged by it.
 - the catch-up (`rideCatchUp`) able to include the entry bar (section 4 A.3), and the shares' by close (as v9) at 95%.
 - `rideEntryAt` / `rideCloseStep` stay for the shares (already at 95%).
 
@@ -324,6 +330,8 @@ and kept) over fake tables:
   and price), not doubled by the next minute's read of the new bar; its ride followed from the new bar's first moment
   (the new bar's first read at 95% reaches it, and the new bar's own decision at that read is quiet);
 - a tail decision while a ride of the side was reached in the new bar before the tail was read: skip;
+- a close judged again (a later instance) after the new bar's ride of the same side was opened (and perhaps reached):
+  the tail is skip (quiet when already), no email 1;
 - a ride reached by a read whose touch is also the bar's first 90% touch on that side: email 2, the decision quiet;
   the same when the reach was PATCHed by a run that failed before deciding, or by another run in the same minute;
 - a skip while a ride of the side is open, and an in at a read after that ride was reached;
@@ -372,8 +380,9 @@ variant in both):
   計算します。チャートの作っている途中の足は今の値段で描くので、1通目の時、チャートの青い線は90%より内側に見えることが
   あります」 (en likewise). The recent list labels a ride's out and at rows with the row's own exit level (v9 96%, v10
   95%) read from the id. The sales page (`lp`) quotes no number and no percent (src/test/landing.test.tsx): the FAQ
-  「他のツールと何が違いますか？」 becomes 「…売買サインは確定した足で判定し、後から消えたり動いたりしません（MACD の流れの
-  メールは、足の途中の毎分の確認で決め、決めたことは後から変えません）」; the win-rate answer says, with no number, what
+  「他のツールと何が違いますか？」 becomes 「…売買サインは確定した足で判定し、後から消えたり動いたりしません（FX と金の
+  MACD の流れのメールは、足の途中の毎分の確認でも決め、決めたことは後から変えません。株は1時間足の確定ごとです）」 (en
+  likewise); the win-rate answer says, with no number, what
   R2 shows about profits against losses; the answer saying only email 2 is off the close is corrected. The econ
   digest's footer (「MACD の流れ」) does not change.
 
