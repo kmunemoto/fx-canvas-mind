@@ -38,7 +38,7 @@ import {
   RIDE_IN_SHARE,
   RIDE_OUT_PCT,
   RIDE_OUT_SHARE,
-  RIDE_RULE_TAG,
+  RIDE_TOUCH_TAG,
   rideRuleId,
   rideZoneSideOf,
   type RideEntry,
@@ -62,7 +62,13 @@ import { pairJa } from "../_shared/pair-names.ts";
 import { CHART_BARS, GOLD, LIVE_PAIRS, LIVE_STEP_MS, isGold, isTwelvePair, splitBars } from "../live-chart/logic.ts";
 import { GMO_SYMBOLS, exitSide, fillSide, sideOf, type QuoteCandle } from "../track-outcomes/quotes.ts";
 import { APP_URL, assemble, clock, rideHeldText, tfLabel, type Lang, type Mail } from "./logic.ts";
-import { STOCKMACD_RULE_ID, isStockmacdChart, renderStockMail } from "./stocks.ts";
+import {
+  STOCKMACD_AT_RULE_ID,
+  STOCKMACD_OUT_RULE_ID,
+  STOCKMACD_RULE_ID,
+  isStockmacdChart,
+  renderStockMail,
+} from "./stocks.ts";
 
 // #291: and "sweepx", the owner's video's way on gold's 1-minute chart (the
 // low or high taken, then the cross of EMA 20 and EMA 80; docs §8.112)
@@ -160,13 +166,16 @@ export const MACDX_RULE_ID =
 // MACDH_K is v26's k, kept with the rule it belongs to (decideScaledOnWindow,
 // which the morning check's SQL v3 mirrors); no email uses it from v28.
 export const MACDH_K = 0.8;
-export const MACDH_RIDE_VERSION = 9;
+export const MACDH_RIDE_VERSION = 10;
+// v10 (research/macdride10-spec.md section 2): email 1 the moment the line
+// touches 90%, email 2 at 95%: macdx_12_26_9_w600_1h_touch90to95of120_in_v10,
+// ..._at_v10 and ..._out_v10, each built whole (rideRuleId with RIDE_TOUCH_TAG)
 // email 1's (the entry's): what indicatorRuleId gives for 'macdx'
-export const MACDH_RULE_ID = rideRuleId("macdx", "in", MACDH_RIDE_VERSION);
-// the notice's (already at 96% at the entry bar's close) and email 2's (the
-// ride reached 96%)
-export const MACDH_AT_RULE_ID = rideRuleId("macdx", "at", MACDH_RIDE_VERSION);
-export const MACDH_OUT_RULE_ID = rideRuleId("macdx", "out", MACDH_RIDE_VERSION);
+export const MACDH_RULE_ID = rideRuleId("macdx", RIDE_TOUCH_TAG, "in", MACDH_RIDE_VERSION);
+// the notice's (already at 95% at the decision) and email 2's (the ride
+// reached 95%)
+export const MACDH_AT_RULE_ID = rideRuleId("macdx", RIDE_TOUCH_TAG, "at", MACDH_RIDE_VERSION);
+export const MACDH_OUT_RULE_ID = rideRuleId("macdx", RIDE_TOUCH_TAG, "out", MACDH_RIDE_VERSION);
 // #291: the video's way (docs §8.112, _shared/sweep-cross.ts): EMA 20 and EMA
 // 80, judged on the 600 closed bars ending at the bar, crosses counted from
 // its 241st, the stop a pip beyond the last five bars, the targets 15 and 20
@@ -210,10 +219,17 @@ export const indicatorRuleId = (rule: IndicatorRule): string =>
 // made "at" or "out" (so 'macdx' gives MACDH_AT_RULE_ID and
 // MACDH_OUT_RULE_ID, and 'stockmacd' its own three once its id is email 1's;
 // an id that is not a ride's is left as it is)
-export const rideRuleIdOf = (inId: string, mail: RideMail): string =>
-  inId.replace(`_${RIDE_RULE_TAG}_in_`, `_${RIDE_RULE_TAG}_${mail}_`);
+// v10 (research/macdride10-spec.md section 2): built whole from the rule and
+// the mail, never by replacing text inside another id; a rule that is not a
+// ride's gives its own id whatever the mail
+export const rideRuleIdOf = (rule: IndicatorRule, mail: RideMail): string =>
+  rule === "macdx"
+    ? { in: MACDH_RULE_ID, at: MACDH_AT_RULE_ID, out: MACDH_OUT_RULE_ID }[mail]
+    : rule === "stockmacd"
+    ? { in: STOCKMACD_RULE_ID, at: STOCKMACD_AT_RULE_ID, out: STOCKMACD_OUT_RULE_ID }[mail]
+    : indicatorRuleId(rule);
 export const signalRuleId = (s: Pick<IndicatorSignal, "rule" | "ride">): string =>
-  s.ride ? rideRuleIdOf(indicatorRuleId(s.rule), s.ride.mail) : indicatorRuleId(s.rule);
+  s.ride ? rideRuleIdOf(s.rule, s.ride.mail) : indicatorRuleId(s.rule);
 
 // Every pair the live chart has, on these timeframes; those read from
 // Twelve Data on 1 hour and up only, but gold on 15 minutes too (#212, the

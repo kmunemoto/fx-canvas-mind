@@ -31,6 +31,7 @@ import {
   RIDE_IN_PCT,
   RIDE_IN_SHARE,
   RIDE_OUT_PCT,
+  RIDE_CLOSE_TAG,
   RIDE_OUT_SHARE,
   rideCatchUpByClose,
   rideCloseStep,
@@ -63,10 +64,12 @@ export const isStockmacdChart = (pair: unknown, interval: unknown): boolean =>
 // stockmacd_12_26_9_w600_1h_z95of120_v1, never written again. #397: the ride's three, one a mail, built from the
 // ride's constants (rideRuleId): stockmacd_12_26_9_w600_1h_ride90to96of120_in_v2 (email 1; what indicatorRuleId gives
 // for 'stockmacd'), ..._at_v2 (the notice) and ..._out_v2 (email 2). The subscriptions keep rule = 'stockmacd'.
-export const STOCKMACD_RIDE_VERSION = 2;
-export const STOCKMACD_RULE_ID = rideRuleId("stockmacd", "in", STOCKMACD_RIDE_VERSION);
-export const STOCKMACD_AT_RULE_ID = rideRuleId("stockmacd", "at", STOCKMACD_RIDE_VERSION);
-export const STOCKMACD_OUT_RULE_ID = rideRuleId("stockmacd", "out", STOCKMACD_RIDE_VERSION);
+// v10 (research/macdride10-spec.md sections 2 and 5): the shares keep the close entry, told at 95% from their v3:
+// stockmacd_12_26_9_w600_1h_ride90to95of120_in_v3, ..._at_v3 and ..._out_v3 (rideRuleId with RIDE_CLOSE_TAG).
+export const STOCKMACD_RIDE_VERSION = 3;
+export const STOCKMACD_RULE_ID = rideRuleId("stockmacd", RIDE_CLOSE_TAG, "in", STOCKMACD_RIDE_VERSION);
+export const STOCKMACD_AT_RULE_ID = rideRuleId("stockmacd", RIDE_CLOSE_TAG, "at", STOCKMACD_RIDE_VERSION);
+export const STOCKMACD_OUT_RULE_ID = rideRuleId("stockmacd", RIDE_CLOSE_TAG, "out", STOCKMACD_RIDE_VERSION);
 
 // The shares' names in the emails (the live chart's, src/lib/stocks.ts)
 const NAMES: Record<string, { ja: string; en: string }> = {
