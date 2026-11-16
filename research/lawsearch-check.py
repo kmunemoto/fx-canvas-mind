@@ -51,7 +51,7 @@ ROOT = _HERE.parent
 # ----------------------------------------------------------------------------------------------------------------
 
 RULES_SHA256 = {
-    "research/lawsearch-spec.md": "9c9b5dc08c7fc224c4cf41cea49cef509e0409116a0263cea373451db3f00ff9",
+    "research/lawsearch-spec.md": "673b1040c977b9cb9753799ecedfd424802bcd805a94556cc1ee4f5a1d677573",
     "research/lawsearch-hand.json": "41d4788084630bb4dbc7f6c0a3a46cce40dd604a76b29358f84bf461f53a1d9a",
     "research/lawsearch-hand.md": "f51112b57eb3d62df4afadcf3e838bbf51cb54b62942ca095c881d701840bae7",
     "research/ledger/lawsearch-candidates.json": "92adb97481cf5a7cc7b17a4a31d06da638c2d30246951a6c51b564e7018fdeab",
@@ -563,6 +563,11 @@ def le0(x):
 
 def lt0(x):
     return x is not None and not (isinstance(x, float) and math.isnan(x)) and not is_zero(x) and x < 0
+
+
+def rci_near(v):
+    """Spec 3.2 / 17.2, dump.md 9.2b: an RCI value less than 1e-9 from -80 or +80 (「±80 から 1e−9 未満」)."""
+    return v == v and (abs(v - 80) < 1e-9 or abs(v + 80) < 1e-9)
 
 
 def isnum(x):
@@ -2307,8 +2312,10 @@ def _h_a136(ex, plant):
 # ----------------------------------------------------------------------------------------------------------------
 
 def skip_key(k):
-    return ("MISREADING" in k or "misreading" in k or k.startswith("variant_") or k.endswith("_note")
-            or k == "note" or k == "tolerance_rel")
+    # (Step 4's pilot, 2026-11-15: a variant_* key is a second input with its own answer, compared like any key; see
+    # lawsearch_sig.py _is_alt. Groups 1 and 2 have none. "change" is a variant's note.)
+    return ("MISREADING" in k or "misreading" in k or k.endswith("_note")
+            or k == "note" or k == "tolerance_rel" or k == "change")
 
 
 TEXT_KEYS = {"why"}   # explanatory prose inside an answer: not a value (reported as skip)
@@ -3771,11 +3778,32 @@ _HAND_ALL = []
 # 13. The registry of trials (research/ledger/lawsearch-candidates.json)
 # ----------------------------------------------------------------------------------------------------------------
 
-BUILT_E = {"E04", "E26"}
-BUILT_F = {"F00", "F01"}
-BUILT_S = {"S01"}
-BUILT_B = {"B06"}
+# The small trial's items, then step 4's pilot (the lead, 2026-11-15): E13, E29, E30, F02 / F02r, S02, B07, then
+# step 4's round A (the lead, 2026-11-15): E01-E03, E05-E12, E14-E21. Every other id of the ledger stays not built: a
+# run whose config.json lists one stops (NotBuilt, exit 3).
+BUILT_E = {"E04", "E26", "E13", "E29", "E30",
+           "E01", "E02", "E03", "E05", "E06", "E07", "E08", "E09", "E10", "E11", "E12", "E14", "E15", "E16", "E17",
+           "E18", "E19", "E20", "E21"}
+BUILT_F = {"F00", "F01", "F02", "F02r"}
+BUILT_S = {"S01", "S02"}
+BUILT_B = {"B06", "B07"}
 S_OF_F = {"F01": "S01", "F02": "S02", "F05": "S03", "F07": "S04"}
+
+
+def s_row_of(t):
+    """spec 8.6: the state row that the D_F of a trial (E, F) with a directional F is made against -> (id, trial
+    dict). For F01, F02, F05, F07 it is the ledger's S row (m15.S01 ...). For F01r, F02r, F05r, F07r it is "the reversed
+    state of that F, made the same way" (F01r などには、その F の逆向きの状態を同じ作りで作る): an S row whose condition is
+    the reversed F (PY2's S_REVERSED). It is not a trial of the ledger; its name "<tf>.S02r" (written in dF.against)
+    is this builder's reading, as lawsearch-dump.md does not fix it (step 4's pilot, reported to the lead)."""
+    f = t["f"]
+    if f in S_OF_F:
+        return f"{t['tf']}.{S_OF_F[f]}", None
+    if f.endswith("r") and f[:-1] in S_OF_F:
+        sid = f"{t['tf']}.{S_OF_F[f[:-1]]}r"
+        return sid, {"id": sid, "order": None, "tf": t["tf"], "kind": "S", "e": None, "f": f,
+                     "s": f"{S_OF_F[f[:-1]]}r", "b": None, "name": f"reversed state {f}"}
+    raise NotBuilt(f"D_F of {t['id']}: its S row for {f} is not written yet")
 
 
 def load_registry():
@@ -3794,7 +3822,7 @@ def check_built(trial):
     k = trial["kind"]
     if k == "EF" and (trial["e"] not in BUILT_E or trial["f"] not in BUILT_F):
         raise NotBuilt(f"trial {trial['id']} not written yet")
-    if k == "S" and trial["s"] not in BUILT_S:
+    if k == "S" and trial["s"] not in BUILT_S and not (trial["s"].endswith("r") and trial["f"] in BUILT_F):
         raise NotBuilt(f"trial {trial['id']} not written yet")
     if k == "B" and trial["b"] not in BUILT_B:
         raise NotBuilt(f"trial {trial['id']} not written yet")
@@ -4206,6 +4234,10 @@ class Run:
         self.allowed = []
         self.blind_hits = {}     # stage -> the blind row ids whose spec 13 suspicion hit (C3, D10)
         self.stage2_closed = []  # why stage 2 was not opened (C3, D8 / D10)
+        # dump.md 9.2 / 9.2b (step 4, round A): kind -> [places adopted in stage 0, those holding a row, those where
+        # the Python's own rows differed from the TS's]; written as one INFO line per kind (adoption_info)
+        self.adopt_seen = {}
+        self.in_stage0 = False
 
     # -------------------------------------------------------------------------------------------- setup
     def setup(self, refuse_plant=True, refuse_cut_max=False):
@@ -4394,16 +4426,39 @@ class Run:
         for t in self.trials:
             if t["kind"] == "B" and t["b"] == "B06":
                 self.ts_sig[t["id"]] = self._read_ts_signals(t["id"])
+        # dump.md 9.2b (step 4, round A): E12's RCI-border bars. A bar is one when, in either implementation, RCI9[i]
+        # or RCI9[i-1] is less than 1e-9 from -80 or +80 (spec 3.2: 「±80 から 1e−9 未満」): the near bars k, read from
+        # the Python's whole RCI9 and from the TS's ind/ rows, give the bars k and k + 1. E12 is a crossing item, so
+        # no later bar reads them (unlike B06's rising edge). The TS's rows of the E12 trials are adopted there.
+        rci_border = {}
+        for tf in TFS:
+            if not any(t["kind"] == "EF" and t["e"] == "E12" for t in self.trials if t["tf"] == tf):
+                continue
+            for pair in PAIRS:
+                b = load.bars[(tf, pair)]
+                near = {i for i, v in enumerate(sig.rci(b["C"], 9)["rci"].tolist()) if rci_near(v)}
+                near |= {i for i, v in self._ts_ind_col(tf, pair, "RCI9").items() if rci_near(v)}
+                bs = near | {i + 1 for i in near}
+                if bs:
+                    rci_border[(tf, pair)] = bs
+        self.rci_border = rci_border
+        for t in self.trials:
+            if t["kind"] == "EF" and t["e"] == "E12":
+                self.ts_sig[t["id"]] = self._read_ts_signals(t["id"])
 
     def _ts_ind_z(self, tf, pair):
+        return self._ts_ind_col(tf, pair, "BM_z")
+
+    def _ts_ind_col(self, tf, pair, col):
+        """The TS's ind/ values of one column (its rows only: every 97th bar and the signal bars), i -> float."""
         p = os.path.join(self.ts, "ind", f"{tf}_{SYM_OF[pair]}.csv")
         out = {}
         if not os.path.exists(p):
             return out
         with open(p, "r", encoding="utf-8", newline="") as f:
             for r in csv.DictReader(f):
-                if r.get("BM_z"):
-                    out[int(r["i"])] = float(r["BM_z"])
+                if r.get(col):
+                    out[int(r["i"])] = float(r[col])
         return out
 
     def _read_ts_signals(self, tid):
@@ -4417,6 +4472,8 @@ class Run:
         return out
 
     def adopt(self, trial, pair, rows):
+        if trial["kind"] == "EF" and trial["e"] == "E12":
+            return self._adopt_rci(trial, pair, rows)
         if trial["kind"] != "B" or trial["b"] != "B06":
             return rows
         bs = self.border.get((trial["tf"], pair))
@@ -4427,8 +4484,53 @@ class Run:
         for i in bs:
             bars_at.add(i)
             bars_at.add(i + 1)
-        keep = [r for r in rows if r[4] not in bars_at]
-        step = STEP[trial["tf"]]
+        ts_rows = self._ts_rows_at(tsr, pair, bars_at)
+        self.note_adoption("z-border", rows, ts_rows, bars_at)
+        keep = [r for r in rows if r[4] not in bars_at] + ts_rows
+        for i in sorted(bars_at):
+            self.allowed.append(f"ALLOWED z-border {trial['tf']} {pair} i={i}")
+        return keep
+
+    def note_adoption(self, kind, rows, ts_rows, bars_at):
+        """dump.md 9.2 / 9.2b (step 4, round A): count, in stage 0 only, the (trial, pair, bar) places where the TS's
+        rows are adopted, those that hold a row on either side, and those where the Python's own rows differ from
+        the TS's rows that replace them. Stage 0 loads the whole period [S0, END), as the TS's signals/ dumps do;
+        stage 1's load ends at SPLIT (its later bars have no Python rows) and stage 2 adopts the same rows again, so
+        neither is counted. An ALLOWED line says only that a bar was a border bar; this count says whether the
+        allowance changed anything."""
+        if not self.in_stage0:
+            return
+        py = {}
+        for r in rows:
+            if r[4] in bars_at:
+                py.setdefault(r[4], []).append(tuple(str(v) for v in r))
+        ts = {}
+        for r in ts_rows:
+            ts.setdefault(r[4], []).append(tuple(str(v) for v in r))
+        c = self.adopt_seen.setdefault(kind, [0, 0, 0])
+        for i in bars_at:
+            a = sorted(py.get(i, []))
+            b = sorted(ts.get(i, []))
+            c[0] += 1
+            if a or b:
+                c[1] += 1
+            if a != b:
+                c[2] += 1
+
+    def adoption_info(self):
+        """One INFO line per kind adopted in stage 0 (note_adoption). Not an ALLOWED line: the comparator reads
+        ALLOWED lines only, and RESULT stays the comparison's."""
+        out = []
+        for kind in sorted(self.adopt_seen):
+            n, with_rows, differ = self.adopt_seen[kind]
+            out.append(f"INFO {kind}: stage 0 adopted the TS's rows at {n} (trial, pair, bar) places, {with_rows} of "
+                       f"them holding a row; the Python's own rows differed at {differ}")
+        return out
+
+    @staticmethod
+    def _ts_rows_at(tsr, pair, bars_at):
+        """The TS's signals/ rows of one pair at the given bars, as signal_rows rows."""
+        out = []
         for r in tsr:
             if r["pair"] != pair:
                 continue
@@ -4437,10 +4539,27 @@ class Run:
                 continue
             d = int(r["d"])
             T = int(r["T"])
-            keep.append([T, PAIR_INDEX[pair], 0 if d == 1 else 1, pair, i, d, int(r["X"]), r["reason"], r["half"],
-                         r["warm"] == "1", "emit" if r["reason"] not in ("f_none", "both") else r["reason"]])
+            out.append([T, PAIR_INDEX[pair], 0 if d == 1 else 1, pair, i, d, int(r["X"]), r["reason"], r["half"],
+                        r["warm"] == "1", "emit" if r["reason"] not in ("f_none", "both") else r["reason"]])
+        return out
+
+    def _adopt_rci(self, trial, pair, rows):
+        """dump.md 9.2b: at E12's RCI-border bars of the pair, the TS's rows of this E12 trial replace the Python's
+        (every row of that bar, f_none and both included: the rows E12's rules make there). The bar set is
+        build_adoption's (k and k + 1 for each near k). One ALLOWED line per bar, written once per run."""
+        bars_at = getattr(self, "rci_border", {}).get((trial["tf"], pair))
+        tsr = self.ts_sig.get(trial["id"])
+        if not bars_at or tsr is None:
+            return rows
+        ts_rows = self._ts_rows_at(tsr, pair, bars_at)
+        self.note_adoption("rci-border", rows, ts_rows, bars_at)
+        keep = [r for r in rows if r[4] not in bars_at] + ts_rows
+        seen = self.__dict__.setdefault("_rci_lines", set())
         for i in sorted(bars_at):
-            self.allowed.append(f"ALLOWED z-border {trial['tf']} {pair} i={i}")
+            line = f"ALLOWED rci-border {trial['tf']} {pair} i={i}"
+            if line not in seen:
+                seen.add(line)
+                self.allowed.append(line)
         return keep
 
     # -------------------------------------------------------------------------------------------- stage 0
@@ -4612,8 +4731,8 @@ class Run:
 
     def write_ind(self, load):
         sig = load_sig()
-        order = ["RSI14", "RSI14_U", "RSI14_D", "E04_buy", "E04_sell", "DON20_HH", "DON20_LL", "DON20_s", "EMA200",
-                 "F01_buy", "F01_sell", "BM_r", "BM_ok", "BM_sigma", "BM_z", "B06_buy", "B06_sell", "B06_keep"]
+        # dump.md 5: the small trial's fixed columns, then step 4's pilot's and round A's, each appended in turn
+        order = sig.IND_COLUMN_ORDER
         for tf in TFS:
             trials = [sig_trial(t) for t in self.trials if t["tf"] == tf]
             for pair in PAIRS:
@@ -4792,17 +4911,20 @@ class Run:
     def trial_halves(self, load, sigs, bls, half, ids):
         """TrialHalf objects for ids, plus the S rows their D_F needs."""
         need = list(ids)
+        extra = {}
         for tid in ids:
             t = self.reg[tid]
             if t["kind"] == "EF" and t["f"] in DIRECTIONAL_F:
-                sid = f"{t['tf']}.{S_OF_F.get(t['f'], '?')}"
-                if t["f"] not in S_OF_F or sid not in self.reg:
+                sid, pseudo = s_row_of(t)
+                if pseudo is None and sid not in self.reg:
                     raise NotBuilt(f"D_F of {tid}: its S row for {t['f']} is not written yet")
+                if pseudo is not None:
+                    extra[sid] = pseudo
                 if sid not in need:
                     need.append(sid)
         out = {}
         for tid in need:
-            t = self.reg[tid]
+            t = extra[tid] if tid in extra else self.reg[tid]
             if tid not in sigs:
                 check_built(t)
                 sigs[tid] = signal_rows(load, t, self.answer_knowing, self.adopt)
@@ -4838,7 +4960,7 @@ class Run:
             s_th = None
             against = None
             if t["kind"] == "EF" and t["f"] in DIRECTIONAL_F:
-                against = f"{t['tf']}.{S_OF_F[t['f']]}"
+                against = s_row_of(t)[0]
                 s_th = ths[against]
             log(f"  measures {tid}")
             r = measure_trial(th, bls[t["tf"]], s_th)
@@ -4935,7 +5057,7 @@ class Run:
             s_th = None
             against = None
             if t["kind"] == "EF" and t["f"] in DIRECTIONAL_F:
-                against = f"{t['tf']}.{S_OF_F[t['f']]}"
+                against = s_row_of(t)[0]
                 s_th = ths[against]
             log(f"  measures {tid}")
             r = measure_trial(th, bls[t["tf"]], s_th, kappa=self.kappa, stage2=True)
@@ -5028,8 +5150,13 @@ class Run:
                                                 "hand", "checks_passed"])
         self.blind_hits = {}
         self.stage2_closed = []
+        self.adopt_seen = {}
         try:
-            self.stage0()
+            self.in_stage0 = True
+            try:
+                self.stage0()
+            finally:
+                self.in_stage0 = False
             self.stage1()
             why = self.stage2_closed_why()
             if why:
@@ -5087,6 +5214,8 @@ def value_class(name, row, col):
     base = name.split("/")[0]
     if base == "ind" and col in ("BM_r", "BM_sigma", "BM_z"):
         return "ln"
+    if base == "ind" and col == "RCI9":
+        return "real"   # dump.md 5 / 9.2b: RCI is compared to 1e-9 (spec 17.2)
     if col != "value":
         return "exact"
     key = row.get("key", "")
@@ -5159,6 +5288,7 @@ class Comparator:
         self.rows_of = {}     # file -> (ts rows, py rows) as written in the FILE line
         self._diffs_of = {}   # file -> [(key, column, ts, py, class)], after the allowances of 9.2 and 9.3
         self.border = set()   # (tf, pair, i) z-border bars and their next bars
+        self.rci_border = set()   # (tf, pair, i) E12's RCI-border bars (dump.md 9.2b; step 4, round A)
         self.ts_tab = {}
         self.py_tab = {}
         # dump.md 9.3 (spec 23.5): (stage, half, trial, V, "lb" | "p") -> the TS's candidate, adopted where the
@@ -5173,6 +5303,9 @@ class Comparator:
             m = re.match(r"ALLOWED z-border (\S+) (\S+) i=(\d+)", a)
             if m:
                 self.border.add((m.group(1), m.group(2), int(m.group(3))))
+            m = re.match(r"ALLOWED rci-border (\S+) (\S+) i=(\d+)$", a)
+            if m:
+                self.rci_border.add((m.group(1), m.group(2), int(m.group(3))))
         # z-border bars read from either side's BM_z (lawsearch-dump.md 9.2), and the bar after each
         for n in names:
             if not n.startswith("ind/"):
@@ -5184,17 +5317,26 @@ class Comparator:
                 if not os.path.exists(path):
                     continue
                 hd, lines = read_lines(path)
-                if "BM_z" not in hd:
-                    continue
-                zi = hd.index("BM_z")
-                for ln in lines:
-                    f = ln.split(",")
-                    if zi < len(f) and f[zi] != "":
-                        z = float(f[zi])
-                        if abs(z - 2) <= 2e-9 or abs(z + 2) <= 2e-9:
+                if "BM_z" in hd:
+                    zi = hd.index("BM_z")
+                    for ln in lines:
+                        f = ln.split(",")
+                        if zi < len(f) and f[zi] != "":
+                            z = float(f[zi])
+                            if abs(z - 2) <= 2e-9 or abs(z + 2) <= 2e-9:
+                                i = int(f[0])
+                                self.border.add((tf, pair, i))
+                                self.border.add((tf, pair, i + 1))
+                # dump.md 9.2b: RCI-border bars read from either side's RCI9 rows (RCI9[i] near +-80 makes bars i
+                # and i + 1 border bars); the run's adoption also lists the ones it found on the Python's whole RCI9
+                if "RCI9" in hd:
+                    ri = hd.index("RCI9")
+                    for ln in lines:
+                        f = ln.split(",")
+                        if ri < len(f) and f[ri] != "" and rci_near(float(f[ri])):
                             i = int(f[0])
-                            self.border.add((tf, pair, i))
-                            self.border.add((tf, pair, i + 1))
+                            self.rci_border.add((tf, pair, i))
+                            self.rci_border.add((tf, pair, i + 1))
         for n in names:
             if n not in tsf or n not in pyf:
                 self.order.append(n)
@@ -5250,8 +5392,9 @@ class Comparator:
                 cls = value_class(name, rowd, c)
                 if values_equal(va, vb, cls, dec=(base in ("bars", "htf") and c in DEC_COLS)):
                     continue
-                if self._z_allowed(name, k, c):
-                    self.allowed.append(f"ALLOWED z-border {name} {'|'.join(k)} {c} ts={va} py={vb}")
+                kind = self._z_allowed(name, k, c)
+                if kind:
+                    self.allowed.append(f"ALLOWED {kind} {name} {'|'.join(k)} {c} ts={va} py={vb}")
                     continue
                 diffs.append(("|".join(k), c, va, vb, cls))
         if base == "signals":
@@ -5272,11 +5415,16 @@ class Comparator:
         return out
 
     def _z_allowed(self, name, key, col):
-        if name.startswith("ind/") and col in ("B06_buy", "B06_sell"):
+        """The allowance of dump.md 9.2 (B06's z near +-2: "z-border") or 9.2b (E12 near +-80: "rci-border") that
+        excuses a differing ind/ value, or None."""
+        if name.startswith("ind/") and col in ("B06_buy", "B06_sell", "E12_buy", "E12_sell"):
             tf, sym = name[4:-4].split("_", 1)
             pair = PAIR_OF_SYM.get(sym)
-            return (tf, pair, int(key[0])) in self.border
-        return False
+            if col.startswith("B06") and (tf, pair, int(key[0])) in self.border:
+                return "z-border"
+            if col.startswith("E12") and (tf, pair, int(key[0])) in self.rci_border:
+                return "rci-border"
+        return None
 
     def _signal_sha(self, tl, pl):
         out = []
@@ -6008,6 +6156,9 @@ def cmd_hand(plant=""):
     _HAND_ALL[:] = exs
     g12 = [e for e in exs if e["group"] in ("G1", "G2")]
     g34 = [e for e in exs if e["group"] in ("G3", "G4")]
+    # §8.113 19's examples of the B items (spec 17.3; research/lawsearch-hand-s8113.json, not sha-frozen; step 4's pilot)
+    with open(ROOT / "research/lawsearch-hand-s8113.json", "r", encoding="utf-8") as f:
+        g34 += json.load(f)["examples"]
     res = run_hand_examples(g12, plant)
     try:
         sig = load_sig()
@@ -6043,16 +6194,17 @@ def run_and_compare(r):
     if not os.path.isdir(r.ts) or not [f for f in list_files(r.ts) if f not in TS_ONLY]:
         print("no TS files to compare yet")
         return 5
-    code = Comparator(r.run, r.allowed).compare()
+    code = Comparator(r.run, r.allowed + r.adoption_info()).compare()
     print_report_tail(r.run)
     return code
 
 
 def print_report_tail(run_dir):
-    """Print report.txt's STOP 13 lines, its `stage 2 not opened` line (C4a, E6) and its RESULT line."""
+    """Print report.txt's STOP 13 lines, its `stage 2 not opened` line (C4a, E6), its INFO lines of 9.2 / 9.2b's
+    adoption (step 4, round A) and its RESULT line."""
     rep = open(os.path.join(run_dir, "cmp", "report.txt"), encoding="utf-8").read().splitlines()
     for ln in rep:
-        if ln.startswith(("STOP 13 ", "stage 2 not opened: ")):
+        if ln.startswith(("STOP 13 ", "stage 2 not opened: ", "INFO z-border: ", "INFO rci-border: ")):
             print(ln)
     print(rep[-1])
 

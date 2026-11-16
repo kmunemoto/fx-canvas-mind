@@ -215,6 +215,65 @@ Columns: `i,s,bo,bh,bl,bc,ao,ah,al,ac,O,H,L,C,Po,Ph,Pl,Pc` (types as above). Ord
 | B06_buy, B06_sell | tri | exact (but 9.2) | z ≤ −2, z ≥ 2 |
 | B06_keep | bool | exact | 0 when T's UTC time is in [19:35, 24:00) |
 
+- (Step 4's pilot, 2026-11-15, the lead: spec 19 step 4 is started with E13, E29, E30, F02 / F02r (and S02 through F02)
+  and B07 only.) Their columns, appended after B06_keep in the spec's table order. A column is empty where its value
+  is 無し; a tri is the expression's truth at bar i before spec 5's rules (rising edge, keep rules, F, both
+  directions), as E04_buy is. F02r and S02 have no columns of their own (F02r's truth is the other side's F02 column;
+  S02 is F02).
+
+| column | type | class (9) | meaning |
+|---|---|---|---|
+| MACD12_26 | real | exact | E13's MACD line: EMA_12 − EMA_26 of the mid close (spec 3.2) |
+| MACD12_26_SIG | real | exact | E13's signal line: EMA_9 of the MACD line, seeded as spec 3.2 says |
+| E13_buy, E13_sell | tri | exact | X↑(MACD line, signal), X↓(MACD line, signal) |
+| E29_buy, E29_sell | tri | exact | spec 4.1 E29's buy and sell expressions at i (the inside bar i − 1 of bar i − 2, and the close beyond bar i − 2's high or low; points, as the spec says) |
+| PD_H, PD_L | real | exact | E30's previous day's high and low (spec 4.1's notes on E30; empty when the previous day has too few bars) |
+| E30_buy, E30_sell | tri | exact | E30's day-wise condition at i: C > PD_H, C < PD_L |
+| HTF_G | int | exact | the row number g, in `htf/<tf>_<SYM>.csv` (0 for its first row), of the last higher bar that closed by T_i (spec 2's higher-timeframe rule); empty when there is none |
+| HTF_EMA50, HTF_EMA50_PREV | real | exact | EMA_50 of the higher bars' mid close at g and at g − 1 |
+| F02_buy, F02_sell | tri | exact | (EMA50[g] − EMA50[g − 1]) > 0, −(EMA50[g] − EMA50[g − 1]) > 0 |
+| RSI2_AG, RSI2_AL | real | exact | B07's AG and AL (§8.113 C19, in the values that spec 17.3 says B07 reads) |
+| B07_up, B07_dn | tri | exact | B07's 200-bar mean parts: 200 × c > Σ200, 200 × c < Σ200 |
+| B07_buy, B07_sell | tri | exact | B07's B and S of §8.113 C19 (up and RSI2 < 10; dn and RSI2 > 90) |
+
+- If a builder finds that a column above cannot be written as its meaning says without going against the spec, the
+  builder does not rename or reshape it alone: it reports the column and the spec's words to the lead.
+
+- (Step 4, round A, 2026-11-15, the lead: E01–E03, E05–E12, E14–E21.) Their columns, appended after B07_sell in the
+  spec's table order. An indicator column comes with the first item that uses it; the same rules as the pilot's
+  (a tri is the item's buy or sell expression at i before spec 5's rules; empty is 無し). All indicators are spec
+  3.2's, of the mid close (or high / low where 3.2 says), with their own seeds and 無し rules.
+
+| column | type | class (9) | meaning |
+|---|---|---|---|
+| RSI7, RSI7_U, RSI7_D | real | exact | RSI_7 and its RMA_7 of up and dn (as RSI14, RSI14_U, RSI14_D) |
+| E01_buy, E01_sell | tri | exact | X↑(RSI7, 20), X↓(RSI7, 80) |
+| E02_buy, E02_sell | tri | exact | X↑(RSI7, 30), X↓(RSI7, 70) |
+| E03_buy, E03_sell | tri | exact | X↑(RSI14, 20), X↓(RSI14, 80) |
+| RSI21, RSI21_U, RSI21_D | real | exact | RSI_21 and its RMA_21 of up and dn |
+| E05_buy, E05_sell | tri | exact | X↑(RSI21, 20), X↓(RSI21, 80) |
+| E06_buy, E06_sell | tri | exact | X↑(RSI21, 30), X↓(RSI21, 70) |
+| E07_buy, E07_sell | tri | exact | X↑(RSI7, 50), X↓(RSI7, 50) |
+| E08_buy, E08_sell | tri | exact | X↑(RSI14, 50), X↓(RSI14, 50) |
+| E09_buy, E09_sell | tri | exact | X↑(RSI21, 50), X↓(RSI21, 50) |
+| STOCH5_K, STOCH5_D | real | exact | the slow stochastic (5, 3, 3)'s %K and %D |
+| E10_buy, E10_sell | tri | exact | X↑(%K, %D) and %K[i] < 20; X↓(%K, %D) and %K[i] > 80 (k = 5) |
+| STOCH14_K, STOCH14_D | real | exact | the slow stochastic (14, 3, 3)'s %K and %D |
+| E11_buy, E11_sell | tri | exact | as E10, k = 14 |
+| RCI9 | real | real | RCI(9) (spec 3.2; 1e−9, spec 17.2) |
+| E12_buy, E12_sell | tri | exact (but 9.2b) | X↑(RCI9, −80), X↓(RCI9, +80) |
+| MACD5_35, MACD5_35_SIG | real | exact | MACD(5, 35, 5)'s line and signal (as MACD12_26 and its signal) |
+| E14_buy, E14_sell | tri | exact | X↑(line, signal), X↓(line, signal) of MACD(5, 35, 5) |
+| E15_buy, E15_sell | tri | exact | X↑(MACD12_26, 0), X↓(MACD12_26, 0) |
+| EMA5, EMA20 | real | exact | EMA_5 and EMA_20 of the mid close |
+| E16_buy, E16_sell | tri | exact | X↑(EMA5, EMA20), X↓(EMA5, EMA20) |
+| EMA50 | real | exact | EMA_50 of the mid close |
+| E17_buy, E17_sell | tri | exact | X↑(EMA20, EMA50), X↓(EMA20, EMA50) |
+| E18_buy, E18_sell | tri | exact | X↑(EMA50, EMA200), X↓(EMA50, EMA200) |
+| E19_buy, E19_sell | tri | exact | X↑(C, EMA20), X↓(C, EMA20) |
+| E20_buy, E20_sell | tri | exact | X↑(C, EMA50), X↓(C, EMA50) |
+| E21_buy, E21_sell | tri | exact | X↑(C, EMA200), X↓(C, EMA200) |
+
 ## 6. Signals (stage 0's load) — `signals/<trial>.csv`
 
 One file per trial (`<trial>` is the id, e.g. `m15.E04.F01.csv`). One row per candidate of spec 5 ①–⑤, with its
@@ -343,7 +402,10 @@ Key: tf, half. All int. late_end must be 0.
 | c6.a, c6.b | real | exact (stage2 only) |
 
 - V is `delta`, `a`, `pl`, `delta_late`, then `dF` (dF only for a trial with a directional F: (E, F01) against S01
-  of its timeframe).
+  of its timeframe). (Step 4's pilot, 2026-11-15, the lead.) An r filter's trial (E, F01r), (E, F02r), (E, F05r),
+  (E, F07r) is against spec 8.6's "F の逆向きの状態": the plain filter's S row with every direction reversed (each of
+  its blind-table rows replaced by the row of the same pair and T with the other d; the order kept). `dF.against` names
+  it as the S row's id with `r`, e.g. `m15.S02r`; it is not a trial of the ledger and has no file of its own.
 - `<c>` is `week`, `4w` (only when V.four is 1) and `shift` (for delta, a, pl and delta_late; never for dF). A
   candidate that is not built has no rows.
 - `V.use_lb` and `V.use_p` are `week`, `4w`, `shift` or empty.
@@ -483,6 +545,24 @@ Key: tf, half. All int. late_end must be 0.
 - The comparator lists them as `ALLOWED z-border <tf> <pair> i=<i>`. The Python then adopts the TS's rows for those
   bars before it counts (lawsearch-py-design.md 5.3), and everything after must agree exactly.
 
+### 9.2b Allowed difference: E12's decision near ±80 (spec 3.2 RCI, 17.2; step 4, round A)
+
+- A bar of a pair is an RCI-border bar when, in either implementation, RCI9[i] or RCI9[i − 1] is within 1e−9 of −80
+  or of +80 (spec 3.2: 「判断が分かれてよいのは、RCI[i] か RCI[i−1] が ±80 から 1e−9 未満の足の E12 だけ」).
+- At such a bar, `E12_buy` / `E12_sell` and the E12 trials' rows of `signals/` may differ, and so may the rows that
+  E12's rules make from them (spec 5).
+- The comparator lists them as `ALLOWED rci-border <tf> <pair> i=<i>`, and the Python adopts the TS's rows for those
+  bars before it counts, as 9.2 does for B06; everything after must agree exactly. `RCI9` itself is compared with
+  1e−9 (class real).
+- (Round A's run, 2026-11-15) RCI(9) lands on exactly ±80 often, so the `ALLOWED rci-border` lines are many (the
+  200-trial run N 1002: 14,880 bars). Whether the adoption changed anything is the `INFO rci-border` line's count
+  (10): on that run the Python's own rows equalled the TS's at all 59,520 stage-0 places (9,724 holding a row), so
+  nothing was changed (measured on a copy, then by the line itself on a copy of the run's folder). On a copy whose
+  Python E12 compared with −80 − 1e−12 and +80 + 1e−12 (the equality rule reversed at exactly ±80), every hand
+  example still passed and the comparison still said `RESULT agree` (the adoption hides it, as spec 17.2 allows),
+  while the line said `differed at 16466`. A count above 0 is allowed by the spec, so it does not fail the run; the
+  lead reads it.
+
 ### 9.3 Allowed difference: decisions on quantiles and p (spec 8.5)
 
 - A decision that compares two values may differ when the two values compared are within 1e−9 of each other in
@@ -540,6 +620,12 @@ Key: tf, half. All int. late_end must be 0.
   - one line per file: `FILE <name> rows ts=<n> py=<n> diff=<n>`;
   - then up to 20 differences per file: `DIFF <file> <key> <column> ts=<v> py=<v> class=<c>`;
   - then the `ALLOWED …` and `STOP …` lines (the `STOP 13 …` lines after the `ALLOWED` and `STOP 8.5` lines);
+    (step 4, round A, 2026-11-15) with `--run`, after the `ALLOWED` lines of the run, one line per kind of 9.2 /
+    9.2b adoption that happened: `INFO <z-border | rci-border>: stage 0 adopted the TS's rows at <n> (trial, pair,
+    bar) places, <m> of them holding a row; the Python's own rows differed at <k>`. Counted in stage 0 only (the
+    whole period, as the TS's `signals/`); `k` says whether the allowance changed anything (`ALLOWED` lines say only
+    that a bar was a border bar). It is not a difference and not a stop: it changes neither `RESULT` nor the exit,
+    and the comparator does not read it. `--compare` writes none (it computes no Python rows);
   - (C4a, 2026-11-05; the lead's E6) then, when a failed TS check kept stage 2 closed (11.14 (a)), one line
     `stage 2 not opened: <reason>` (its form is in 11.14 (a)). It is not a difference and not a stop: it changes
     neither `RESULT` nor the exit;

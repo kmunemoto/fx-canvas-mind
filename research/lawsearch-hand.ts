@@ -8,6 +8,9 @@
 //   * a "12 significant digits" string (A.2.12, A.2.31) equals the computed double's toPrecision(12) read as a number;
 //   * an explanatory sentence inside a compared object (Prose: A.2.32's shifted_signals) is not compared (listed);
 //   * a key matching ALT_KEY at any depth is an alternative answer or a note: not compared;
+//   * (step 4, round A) E12's decisions at the bars where RCI[i] or RCI[i−1] is within 1e−9 of ±80 may differ (spec
+//     17.4, AllowAt; a pass through it is listed on the example's line as "allowed"), and RCI9 is compared to 1e−9;
+//   * (step 4, round A) a key that holds a dot (A.3.28's and A.3.30's trials, "E02.F00") is named trials["E02.F00"];
 //   * a key whose computation throws NOT BUILT (an item not written yet) is "skip"; a required key skipped or failed
 //     fails the example.
 // The caller has checked HAND_JSON_SHA256 (lawsearch.ts' gates). Examples given as bars write temporary GMO files under
@@ -17,7 +20,7 @@ import { filterOf, isNotBuilt, itemOf, parseCandidates, sFilterOf, trialWarmup }
 import { C6_PARTS, DIRECTIONAL_F, LATE_MS, QUESTIONS, REASONS, S_OF_F, STATUS, W0 } from "./lawsearch-rules.ts";
 import { MID_DIGITS, N_BARS, PAIRS, POINTS_PER_PRICE, SPLIT, STEP, wk } from "./lawsearch-const.ts";
 import { coarsenSeries, dayOf, hourOf, htfIndex, isGmoHoliday, klineNum, loadPairTf, londonSummer, midOf, nySummer, pointsOf, rawPointsOf, reportOfStop, rightFormOf, scanBody, seasonGroupOf, seriesFromMid, seriesOf, tfSetOf } from "./lawsearch-bars.ts";
-import { bigmoveDefault, donchianOf, indOf, smaOldest, toF64, xDn, xUp } from "./lawsearch-ind.ts";
+import { bigmoveDefault, donchianOf, indOf, insideOf, pdayOf, rciRanksOf, smaOldest, toF64, xDn, xUp } from "./lawsearch-ind.ts";
 import { applyBoth, candidatesOf, exclCtxOf, halfOf, holesOf, r2, r3, r4, r5, r6, reasonOf } from "./lawsearch-events.ts";
 import { blindFromRows, blindTable, lateTable, lateTradeOf, rowKey, tradeOf, trialRows, trialRowsExtra } from "./lawsearch-trade.ts";
 import { emptyBars } from "./trend-labels.ts";
@@ -30,38 +33,67 @@ import { chooseStage1, failRuleOf, holm, holmThreshold, skipText, stage1Explain,
 import type { Stage2In } from "./lawsearch-select.ts";
 import { floorPass, gOf, mdeOf, overlapCount, overlapGroups, plEstimate, sameTrials, sigListOf, stage3Estimate } from "./lawsearch-select0.ts";
 import { aOf, choose, deltaOf, estA, estDelta, estDiff, estPl, influenceOf, isZero, kappaOf, measureTrial, nGate, nGateL, nonOverlap, plExtras, plOf, point95, pOneSided, shiftMap, strataOf, tCdf, tq, withKappa, zq } from "./lawsearch-stats.ts";
-import type { Bars, BigmoveParams, BlindTable, ExclCtx, HandExample, HandKeyResult, HandResult, ItemParams, Pair, SeCand, Series, ShiftRun, Stage1Cand, TfKey, TrialDef, TrialKind, ValueEst } from "./lawsearch-types.ts";
+import type { Bars, BigmoveParams, BlindTable, ExclCtx, FilterBuild, HandExample, HandKeyResult, HandResult, ItemBuild, ItemParams, Pair, SeCand, Series, ShiftRun, Stage1Cand, TfKey, TrialDef, TrialKind, ValueEst } from "./lawsearch-types.ts";
 
 // ---- what the trial requires (lawsearch-design.md 9) ------------------------------------------------------------
 
 const range = (g: number, n: number): string[] => Array.from({ length: n }, (_, k) => `A.${g}.${k + 1}`);
 export const HAND_REQUIRED: Readonly<Record<string, "all" | readonly string[]>> = {
+  // §8.113 19's examples of the B items (research/lawsearch-hand-s8113.json; spec 17.3 draws them in; step 4's pilot,
+  // the review's T3 / P2): run after 付録 A's
+  "S8113.C19.m15": "all",
+  "S8113.C19.h1": "all",
   ...Object.fromEntries(range(1, 36).map((id) => [id, "all" as const])),
   ...Object.fromEntries(range(2, 32).map((id) => [id, "all" as const])),
   "A.3.1": "all",
   "A.3.2": ["first_index_shown", "SMA20"],
   "A.3.5": "all",
   "A.3.6": ["TR", "ATR14"],
-  "A.3.7": ["up", "dn", "U", "D", "RSI7"],
-  "A.3.8": ["RSI7", "RSI14", "RSI21", "signals.E04"],
-  "A.3.9": ["up", "dn", "U14", "D14", "RSI14", "RSI7", "U14_eq_D14"],
-  "A.3.14": ["EMA12", "EMA26", "EMA5", "EMA35"],
-  "A.3.15": ["first_index_shown", "EMA12", "EMA26"],
-  "A.3.16": ["first_index_shown", "EMA12", "EMA26"],
-  "A.3.17": ["EMA12", "EMA26"],
-  "A.3.18": ["EMA5", "EMA20", "EMA50"],
-  // the E row naming E04 (RSI14) and the F rows of F00 and F01 (row index in the example's lists)
-  "A.3.19": ["E[1]", "F[0]", "F[1]"],
+  // step 4, round A (2026-11-15): E01–E09 (RSI), E10–E11 (stochastic), E12 (RCI), E14–E15 (MACD), E16–E21 (EMA) are
+  // built, so every key of these examples is asked (A.3.12 and A.3.13 with spec 17.4's allowed difference of E12)
+  "A.3.7": "all",
+  "A.3.8": "all",
+  "A.3.9": "all",
+  "A.3.10": "all",
+  "A.3.11": "all",
+  "A.3.12": "all",
+  "A.3.13": "all",
+  "A.3.14": "all",
+  "A.3.15": "all",
+  "A.3.16": "all",
+  "A.3.17": "all",
+  "A.3.18": "all",
+  // the E rows of E01–E21 (row index in the example's lists; E[18], E22–E25, waits for its items), the F rows of F00,
+  // F01 and F02 / F02r (step 4), and F02's g at the listed bars (step 4)
+  "A.3.19": [...Array.from({ length: 18 }, (_, k) => `E[${k}]`), "F[0]", "F[1]", "F[2]", "F02_used_higher_bar_g_at"],
   "A.3.20": ["EMA5", "C_minus_EMA", "F01_buy", "F01_sell", "warmup_k", "F_value_used_signal_excluded_by_warmup_1_at"],
+  // step 4: F02 / F02r on 15 minutes (1-hour bars) and 1 hour (4-hour bars)
+  "A.3.21": "all",
+  "A.3.22": "all",
   "A.3.24": ["TR", "ATR14", "SMA5_ATR14"],
   "A.3.25": ["RSI14"],
+  // step 4: F02's slope at E02's signal bars; round A: E02's own keys, the indicator values at its signals, and the
+  // trials of E02 with the built F (F00, F01, F02, F02r; a key with a dot is named as trials["E02.F00"])
+  "A.3.28": ["RSI7", "E02_signals_after_rising_edge", "filters_at_signals.EMA12", "filters_at_signals.F02_slope", "filters_at_signals.ATR14", "filters_at_signals.SMA5_ATR14", "filters_at_signals.RSI14", 'trials["E02.F00"]', 'trials["E02.F01"]', 'trials["E02.F02"]', 'trials["E02.F02r"]', "warmup_k"],
   "A.3.29": "all",
-  "A.3.30": ["first_index_shown", "EMA50", "EMA200", "C_minus_EMA200", "ATR14", "SMA100_ATR14", "first_value_index.EMA50", "first_value_index.EMA200", "first_value_index.SMA100_ATR14"],
+  // round A: E18's and E21's signals, the indicator values at their bars, their trials with the built F, and the
+  // 「変えた形」 variant_flat_150000 (a second input with its own answer)
+  "A.3.30": [
+    "first_index_shown", "EMA50", "EMA200", "C_minus_EMA200", "ATR14", "SMA100_ATR14", "first_value_index.EMA50", "first_value_index.EMA200", "first_value_index.SMA100_ATR14", "F02_g", "F02_slope", "hourly_from_k48", "first_value_index.F02_slope", "F02_keep_from_index",
+    "signals", "filters_at_signal_bars.bars", "filters_at_signal_bars.T", "filters_at_signal_bars.RSI14", ...["E18", "E21"].flatMap((id) => ["F00", "F01", "F02", "F02r"].map((f) => `trials["${id}.${f}"]`)), "variant_flat_150000",
+  ],
   "A.3.31": ["first_index_shown", "SMA20"],
   "A.3.34": ["TR", "ATR14"],
   "A.4.1": "all",
   "A.4.2": ["HH", "LL", "target_s"],
   "A.4.3": ["TR", "ATR10", "EMA20"],
+  // step 4: E29, E30, S02
+  "A.4.4": "all",
+  "A.4.5": "all",
+  "A.4.6": "all",
+  "A.4.7": "all",
+  "A.4.28": "all",
+  "A.4.37": "all",
   "A.4.9": ["TR", "ATR14"],
   "A.4.10": ["TR15", "ATR14_14"],
   "A.4.26": "all",
@@ -77,7 +109,12 @@ export const HAND_REQUIRED: Readonly<Record<string, "all" | readonly string[]>> 
 };
 
 // an alternative answer or a note (lawsearch-design.md 7.6), at any depth
-export const ALT_KEY = /MISREADING|misreading|^variant_|_note$|^note$|^tolerance_rel$/;
+// (Step 4's pilot, 2026-11-15, the lead, on the review's T1 / P1: a variant_* key is NOT an alternative answer. It is a
+// second input with its own answer (付録 A's 「変えた形」: A.4.5's variant_thu_15_bars, A.4.6's variant_57_bars, A.4.41's
+// variant_150_010, A.3.30's variant_flat_150000), so it is compared like any key. Until then every variant_* key was
+// skipped here and in the Python, and A.4.6's 「57本なら無し」 half was never checked. "change" is the variant's text of how
+// its input was made: a note.)
+export const ALT_KEY = /MISREADING|misreading|_note$|^note$|^tolerance_rel$|^change$/;
 
 // ---- values and comparison --------------------------------------------------------------------------------------
 
@@ -105,6 +142,15 @@ export class Prose {
 export class Sig12 {
   constructor(readonly x: number) {}
 }
+// (step 4, round A) spec 17.4's allowed difference of E12 (17.2 許す違い; lawsearch-dump.md 9.2b): at the bars where
+// RCI[i] or RCI[i−1] is within 1e−9 of ±80 in either the module's values or the example's (「分かれてよい足」), E12's
+// decision may differ. v is the module's answer: "perBar", a per-bar truth list (index = bar); "sides", a {buy, sell}
+// list of bars. A difference at those bars only is allowed (listed in allowedSeen); any other is a difference.
+export class AllowAt {
+  constructor(readonly v: unknown, readonly bars: ReadonlySet<number>, readonly shape: "perBar" | "sides") {}
+}
+// the allowed differences met in a run (path and bars; reported, not failed)
+export const allowedSeen: string[] = [];
 // the Prose keys met in a run (reported, not compared)
 export const proseSeen: string[] = [];
 export type Thunk = () => unknown | Promise<unknown>;
@@ -145,6 +191,25 @@ export function diffOf(got: unknown, want: unknown, cls: TolClass = "exact", pat
     const g = Number.isFinite(got.x) ? Number(got.x.toPrecision(12)) : NaN;
     return g === Number(want) ? null : `${path || "."}: got ${got.x.toPrecision(12)} (${got.x}), want ${want}`;
   }
+  if (got instanceof AllowAt) {
+    const allow = got;
+    const exact = diffOf(allow.v, want, cls, path);
+    if (exact === null) return null;
+    // the same comparison with the allowed bars taken out of both sides
+    let a: unknown = toPlain(allow.v), b: unknown = want;
+    if (allow.shape === "perBar") {
+      if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return exact;
+      a = (a as unknown[]).map((x, i) => (allow.bars.has(i) ? "allowed" : x));
+      b = (b as unknown[]).map((x, i) => (allow.bars.has(i) ? "allowed" : x));
+    } else {
+      const drop = (o: unknown) => (o !== null && typeof o === "object" && !Array.isArray(o) ? Object.fromEntries(Object.entries(o as Record<string, unknown>).map(([k, xs]) => [k, Array.isArray(xs) ? xs.filter((i) => !allow.bars.has(i as number)) : xs])) : o);
+      a = drop(a);
+      b = drop(b);
+    }
+    if (diffOf(a, b, cls, path) !== null) return exact;
+    allowedSeen.push(`${path || "."}: E12 at bars ${[...allow.bars].join(",")} (${exact})`);
+    return null;
+  }
   if (got instanceof PartialList) {
     if (!Array.isArray(want) || want.length !== got.v.length) return `${path || "."}: ${got.v.length} elements, want ${Array.isArray(want) ? want.length : "a list"}`;
     for (let k = 0; k < want.length; k++) {
@@ -179,12 +244,13 @@ export function diffOf(got: unknown, want: unknown, cls: TolClass = "exact", pat
   return got === want ? null : `${path || "."}: got ${show(got)}, want ${show(want)}`;
 }
 
-// expect's value at a key path ("a.b", "a[2]")
+// expect's value at a key path ("a.b", "a[2]"; step 4, round A: 'a["E02.F00"]' names a key that holds a dot, as A.3.28's
+// and A.3.30's trials do)
 const at = (o: unknown, path: string): unknown => {
   let cur: unknown = o;
-  for (const part of path.match(/[^.[\]]+/g) ?? []) {
+  for (const m of path.matchAll(/\["([^"]*)"\]|[^.[\]]+/g)) {
     if (cur === null || typeof cur !== "object") return undefined;
-    cur = (cur as Record<string, unknown>)[part];
+    cur = (cur as Record<string, unknown>)[m[1] ?? m[0]];
   }
   return cur;
 };
@@ -599,17 +665,29 @@ const rowsByDay = (starts: number[], bid: string[], ask: string[]) => {
   }
   return rows;
 };
-// the candidates' emitted rows of a trial on one series (the examples' {i, d: BUY|SELL})
-const emittedOf = (trial: TrialDef, s: Series, plant: string, params?: ItemParams, warmOnly = false) => {
-  const c = candidatesOf(trial, indOf(s, null, plant), { params, plant });
+// (step 4) the Ind of a hand series with its higher bars (spec 2 上位足: m15 → 1 hour, h1 → 4 hours), made as the checks'
+// indFor makes it (lawsearch-checks.ts): coarsenSeries of the series, and htfIndex (plant htfOpen reaches it here)
+const indHtf = (s: Series, plant: string) => {
+  const h = coarsenSeries(s, s.key === "m15" ? "h1" : "h4", plant);
+  return indOf(s, { series: h, g: htfIndex(s, h, plant) }, plant);
+};
+// does a trial read the higher timeframe (F02, F02r, S02; lawsearch-checks.ts readsHigher)
+const readsHigherT = (t: TrialDef): boolean => (t.f !== null && t.f.startsWith("F02")) || t.s === "S02";
+// the candidates' emitted rows of a trial on one series (the examples' {i, d: BUY|SELL}); warmOnly: those at or past
+// every warm-up; warmOut: those before a warm-up (6 ①)
+const emittedOf = (trial: TrialDef, s: Series, plant: string, params?: ItemParams, warmOnly = false, warmOut = false) => {
+  const c = candidatesOf(trial, readsHigherT(trial) ? indHtf(s, plant) : indOf(s, null, plant), { params, plant });
   const out: Array<{ i: number; d: "BUY" | "SELL" }> = [];
   for (let r = 0; r < c.n; r++) {
     if (c.status[r] !== STATUS.indexOf("emit")) continue;
     if (warmOnly && c.warmOk[r] !== 1) continue;
+    if (warmOut && c.warmOk[r] !== 0) continue;
     out.push({ i: c.i[r], d: c.d[r] === 1 ? "BUY" : "SELL" });
   }
   return out;
 };
+// an emitted list as {buy: [i…], sell: [i…]} (the examples' "signals": {"E13": {"buy", "sell"}})
+const bySide = (xs: ReadonlyArray<{ i: number; d: "BUY" | "SELL" }>) => ({ buy: xs.filter((x) => x.d === "BUY").map((x) => x.i), sell: xs.filter((x) => x.d === "SELL").map((x) => x.i) });
 // the first Friday 21:00 UTC at or after T (④'s t_F)
 const firstFriday2100 = (T: number): number => {
   const d = new Date(T);
@@ -1097,37 +1175,76 @@ const G3: Record<string, Adapter> = {
   },
   "A.3.6": (e, plant) => trAtr(e, plant, "TR", "ATR14", 14),
   "A.3.34": (e, plant) => trAtr(e, plant, "TR", "ATR14", 14),
+  // round A: E01, E02, E07 (RSI7's edges): cond, signals, warm-up and the signals it excludes
   "A.3.7": (e, plant) => {
-    const r = indOf(midSeries(e.input, plant), null, plant).rsi(7);
-    return { up: () => r.up, dn: () => r.dn, U: () => r.U, D: () => r.D, RSI7: () => r.rsi };
+    const s = midSeries(e.input, plant);
+    const r = indOf(s, null, plant).rsi(7);
+    return { up: () => r.up, dn: () => r.dn, U: () => r.U, D: () => r.D, RSI7: () => r.rsi, ...itemKeys(e, s, plant) };
   },
+  // round A: E01–E09's signals (E04's since step 3)
   "A.3.8": (e, plant) => {
     const s = midSeries(e.input, plant);
     const ind = indOf(s, null, plant);
-    const out: Record<string, Thunk> = { RSI7: () => ind.rsi(7).rsi, RSI14: () => ind.rsi(14).rsi, RSI21: () => ind.rsi(21).rsi };
-    for (const k of Object.keys(e.expect.signals)) {
-      out[`signals.${k}`] = k === "E04" ? () => {
-        const o = emittedOf(trialOf("m15.E04.F00"), s, plant);
-        return { buy: o.filter((x) => x.d === "BUY").map((x) => x.i), sell: o.filter((x) => x.d === "SELL").map((x) => x.i) };
-      } : () => new Skip(`not built: ${k}`);
-    }
-    return out;
+    return { RSI7: () => ind.rsi(7).rsi, RSI14: () => ind.rsi(14).rsi, RSI21: () => ind.rsi(21).rsi, ...itemKeys(e, s, plant) };
   },
+  // round A: E07 and E08 at an RSI of exactly 50 (cond and signals)
   "A.3.9": (e, plant) => {
-    const ind = indOf(midSeries(e.input, plant), null, plant);
+    const s = midSeries(e.input, plant);
+    const ind = indOf(s, null, plant);
     const r = ind.rsi(14);
-    return { up: () => r.up, dn: () => r.dn, U14: () => r.U, D14: () => r.D, RSI14: () => r.rsi, RSI7: () => ind.rsi(7).rsi, U14_eq_D14: () => Array.from(r.U, (u, k) => (Number.isNaN(u) ? null : u === r.D[k])) };
+    return { up: () => r.up, dn: () => r.dn, U14: () => r.U, D14: () => r.D, RSI14: () => r.rsi, RSI7: () => ind.rsi(7).rsi, U14_eq_D14: () => Array.from(r.U, (u, k) => (Number.isNaN(u) ? null : u === r.D[k])), ...itemKeys(e, s, plant) };
   },
+  // round A: the slow stochastic (k = 5 and 14) and E10, E11; each item's record from its own build
+  "A.3.10": (e, plant) => {
+    const s = midSeries(e.input, plant);
+    return Object.fromEntries(Object.keys(e.expect).filter((k) => /^E[0-9]{2}$/.test(k)).map((id) => [id, () => (isBuilt(id) ? stochOut(s, id, plant) : new Skip(`not built: ${id}`))]));
+  },
+  // round A: the stochastic's 無し (HH = LL) and E10's signal right after it
+  "A.3.11": (e, plant) => {
+    const s = midSeries(e.input, plant);
+    let o: Record<string, unknown> | null = null;
+    const of = (k: string) => () => (o ??= stochOut(s, "E10", plant))[k];
+    return { rawK: of("rawK"), K: of("K"), D: of("D"), xup_K_D: of("xup_K_D"), xdn_K_D: of("xdn_K_D"), ...itemKeys(e, s, plant) };
+  },
+  // round A: RCI(9) by rci.ts, its ranks, and E12 (spec 17.4: RCI to 1e−9; E12's decisions near ±80 may differ)
+  "A.3.12": (e, plant) => rciOut(e, plant),
+  "A.3.13": (e, plant) => rciOut(e, plant),
   "A.3.14": (e, plant) => {
-    const ind = indOf(midSeries(e.input, plant), null, plant);
-    return Object.fromEntries([12, 26, 5, 35].map((p) => [`EMA${p}`, () => ind.ema(p)]));
+    const s = midSeries(e.input, plant);
+    const ind = indOf(s, null, plant);
+    const out: Record<string, Thunk> = Object.fromEntries([12, 26, 5, 35].map((p) => [`EMA${p}`, () => ind.ema(p)]));
+    // step 4: E13's line and signal as its build gives them (the dump's MACD12_26, MACD12_26_SIG); round A: E14's
+    // (5, 35, 5) as its build gives them (MACD5_35, MACD5_35_SIG), and the signals of E13, E14 and E15
+    const cols = (id: string) => itemOf(id).build(ind).columns;
+    out.line_12_26 = () => cols("E13").MACD12_26;
+    out.signal_9 = () => cols("E13").MACD12_26_SIG;
+    out.signal_9_seed_index = () => firstVal(cols("E13").MACD12_26_SIG);
+    out.line_5_35 = () => cols("E14").MACD5_35;
+    out.signal_5 = () => cols("E14").MACD5_35_SIG;
+    out.signal_5_seed_index = () => firstVal(cols("E14").MACD5_35_SIG);
+    return { ...out, ...itemKeys(e, s, plant) };
   },
-  "A.3.15": (e, plant) => emaFlat(e, plant),
-  "A.3.16": (e, plant) => emaFlat(e, plant),
-  "A.3.17": (e, plant) => emaFlat(e, plant),
+  "A.3.15": (e, plant) => e13Flat(e, plant),
+  "A.3.16": (e, plant) => e13Flat(e, plant),
+  // round A: E15 (the MACD line alone): its line, crosses, signals and its own warm-up s = 26
+  "A.3.17": (e, plant) => {
+    const s = midSeries(e.input, plant);
+    const ind = indOf(s, null, plant);
+    const b = () => itemOf("E15").build(ind);
+    return {
+      ...emaFlat(e, plant),
+      line_12_26: () => b().columns.MACD12_26,
+      xup_line_0: () => tri(b().cond[0]),
+      xdn_line_0: () => tri(b().cond[1]),
+      ...itemKeys(e, s, plant),
+      warmup_k: () => trialWarmup(f00Of(s, "E15")),
+    };
+  },
+  // round A: E16, E17, E19, E20's signals
   "A.3.18": (e, plant) => {
-    const ind = indOf(midSeries(e.input, plant), null, plant);
-    return Object.fromEntries([5, 20, 50].map((p) => [`EMA${p}`, () => ind.ema(p)]));
+    const s = midSeries(e.input, plant);
+    const ind = indOf(s, null, plant);
+    return { ...Object.fromEntries([5, 20, 50].map((p) => [`EMA${p}`, () => ind.ema(p)])), ...itemKeys(e, s, plant) };
   },
   "A.3.19": (e, plant) => {
     // the table column is text ("15（p＋1）", "200", "—"): its leading integer ("—" is 0) must be the module's warm-up;
@@ -1142,21 +1259,65 @@ const G3: Record<string, Adapter> = {
     const rowsE = e.expect.E as J[];
     const rowsF = e.expect.F as J[];
     const out: Record<string, Thunk> = {};
+    // an E row names its items ("E01・E02（RSI7）", "E22〜E25（BB20）"): when every one is built, each item's answer
+    // from its own build must be the row's (and the same for every item of the row). The first value is the first bar
+    // where every value the item's formula reads is present (its real dump columns: RSI and its U and D; line and
+    // signal for E13 and E14, the line alone for E15; %K and %D; RCI; both EMAs, or the EMA for E19–E21), the first
+    // possible signal the first bar where its cross is not 無し, and the first bar kept its E × F00 trial's warm-up.
     rowsE.forEach((row, k) => {
-      out[`E[${k}]`] = String(row.item).includes("E04") ? () => {
-        const b = itemOf("E04").build(ind);
-        const firstSig = Math.min(...b.cond.map((c) => c.findIndex((v) => v !== -1)));
-        return { item: row.item, table: tableText(row.table, itemOf("E04").warmup), first_value_index: firstVal(ind.rsi(14).rsi), first_signal_index: firstSig, keep_from_index: trialWarmup(trialOf("m15.E04.F00")) };
-      } : () => new Skip(`not built: ${row.item}`);
+      const ids = idsOfLabel(String(row.item));
+      if (ids.length === 0 || !ids.every(isBuilt)) {
+        out[`E[${k}]`] = () => new Skip(`not built: ${row.item}`);
+        return;
+      }
+      out[`E[${k}]`] = () => {
+        const one = (id: string) => {
+          const b = itemOf(id).build(ind);
+          const vals = Object.values(b.columns).filter((c): c is Float64Array => c instanceof Float64Array);
+          let firstValue = -1;
+          for (let i = 0; i < s.n && firstValue < 0; i++) if (vals.every((v) => !Number.isNaN(v[i]))) firstValue = i;
+          const firstSig = Math.min(...b.cond.map((c) => c.findIndex((v) => v !== -1)));
+          return { table: tableText(row.table, itemOf(id).warmup), first_value_index: firstValue, first_signal_index: firstSig, keep_from_index: trialWarmup(f00Of(s, id)) };
+        };
+        const all = ids.map(one);
+        const same = all.every((x) => JSON.stringify(x) === JSON.stringify(all[0]));
+        return same ? { item: row.item, ...all[0] } : { item: row.item, table: `the row's items differ: ${ids.map((id, j) => `${id} ${JSON.stringify(all[j])}`).join("; ")}` };
+      };
     });
+    // step 4: F02 and F02r read the higher bars, made from this series (bar 0 at 00:00, no hole)
+    const indH = indHtf(s, plant);
     rowsF.forEach((row, k) => {
       const id = String(row.filter);
-      out[`F[${k}]`] = id === "F00" || id.startsWith("F01") ? () => {
-        const f = filterOf(id.startsWith("F01") ? "F01" : "F00");
-        const fb = f.build(ind);
-        return { ...row, table: tableText(row.table, f.warmup), first_value_index: fb.f[0].findIndex((v) => v !== -1), keep_from_index: f.warmup };
-      } : () => new Skip(`not built: ${id}`);
+      if (id === "F00" || id.startsWith("F01")) {
+        out[`F[${k}]`] = () => {
+          const f = filterOf(id.startsWith("F01") ? "F01" : "F00");
+          const fb = f.build(ind);
+          return { ...row, table: tableText(row.table, f.warmup), first_value_index: fb.f[0].findIndex((v) => v !== -1), keep_from_index: f.warmup };
+        };
+      } else if (id.startsWith("F02")) {
+        // the table's "上位足51本" must be the higher bar g of the first bar kept (21.5: kept where g ≥ 51); F02 and F02r
+        // must give the same first value and the same first kept bar
+        out[`F[${k}]`] = () => {
+          const one = (fid: string) => {
+            const fb = filterOf(fid).build(indH);
+            return { first: fb.f[0].findIndex((v) => v !== -1), keep: Array.from(fb.warmOk ?? []).findIndex((v) => v === 1) };
+          };
+          const a = one("F02"), r = one("F02r");
+          const m = /上位足([0-9]+)本/.exec(String(row.table));
+          const gKeep = a.keep >= 0 ? indH.g![a.keep] : -1;
+          return {
+            ...row,
+            table: m && Number(m[1]) === gKeep ? row.table : `the module's first kept bar has g ${gKeep}`,
+            first_value_index: a.first === r.first ? a.first : `F02 ${a.first}, F02r ${r.first}`,
+            keep_from_index: a.keep === r.keep ? a.keep : `F02 ${a.keep}, F02r ${r.keep}`,
+          };
+        };
+      } else out[`F[${k}]`] = () => new Skip(`not built: ${id}`);
     });
+    out.F02_used_higher_bar_g_at = () => {
+      const G = filterOf("F02").build(indH).columns.HTF_G;
+      return Object.fromEntries(Object.keys(e.expect.F02_used_higher_bar_g_at).map((i) => [i, G[Number(i)]]));
+    };
     return out;
   },
   "A.3.20": (e, plant) => {
@@ -1201,9 +1362,86 @@ const G3: Record<string, Adapter> = {
       EMA50: () => fromIdx(ind.ema(50), off), EMA200: () => fromIdx(ind.ema(200), off), C_minus_EMA200: () => fromIdx(Array.from(s.C, (x, k) => x - ind.ema(200)[k]), off),
       ATR14: () => fromIdx(ind.atr(14), off), SMA100_ATR14: () => fromIdx(ind.smaOf(ind.atr(14), 100), off),
       "first_value_index.EMA50": () => firstVal(ind.ema(50)), "first_value_index.EMA200": () => firstVal(ind.ema(200)), "first_value_index.SMA100_ATR14": () => firstVal(ind.smaOf(ind.atr(14), 100)),
+      "first_value_index.ADX14": () => new Skip("not built: F03"),
+      ...f02Of30(e, s, off, plant),
+      ...e18e21Of30(e, s, plant),
+    };
+  },
+  // step 4: A.3.21 (15 minutes → 1 hour) and A.3.22 (1 hour → 4 hours), F02 and F02r per bar with the higher EMA shrunk
+  "A.3.21": (e, plant) => f02PerBar(e, plant, "higher_bars"),
+  "A.3.22": (e, plant) => f02PerBar(e, plant, "higher_bars"),
+  // step 4: A.3.28's F02 key; round A (E02 built): E02's raw signals (spec 5 ②) are the module's, the values the F
+  // read at them are the module's (EMA12 is F01's with the example's EMA12, the slope F02's with its EMA3; ATR14,
+  // SMA5(ATR14) and RSI14 the indicators; ADX14 and the day's open wait for F03 and F07), and the trials of E02 with
+  // the built F are candidatesOf's (named trials["E02.F00"]: the key holds a dot). The list of signals that 6 ①'s
+  // warm-up excludes covers E02 with every F, so it waits for the other F.
+  "A.3.28": (e, plant) => {
+    const s = midSeries(e.input, plant);
+    const ind = indOf(s, null, plant);
+    const params: ItemParams = { ema: e.params.F01_EMA, htfEma: e.params.F02_EMA };
+    const raw = () => rawSignalsOf(s, "E02", params, plant);
+    const atSig = (a: ArrayLike<number>) => raw().map((x) => a[x.i]);
+    const c = () => filterOf("F02").build(indHtf(s, plant), { htfEma: e.params.F02_EMA }).columns;
+    return {
+      RSI7: () => ind.rsi(7).rsi,
+      E02_signals_after_rising_edge: () => raw().map((x) => ({ i: x.i, T: isoOf(s.T[x.i]), d: x.d })),
+      "filters_at_signals.EMA12": () => atSig(filterOf("F01").build(ind, { ema: e.params.F01_EMA }).columns.EMA200),
+      "filters_at_signals.F02_slope": () => raw().map((x) => c().HTF_EMA50[x.i] - c().HTF_EMA50_PREV[x.i]),
+      "filters_at_signals.ATR14": () => atSig(ind.atr(14)),
+      [`filters_at_signals.SMA${e.params.F04_SMA}_ATR14`]: () => atSig(ind.smaOf(ind.atr(14), e.params.F04_SMA)),
+      "filters_at_signals.RSI14": () => atSig(ind.rsi(14).rsi),
+      "filters_at_signals.ADX14": () => new Skip("not built: F03"),
+      "filters_at_signals.day_open": () => new Skip("not built: F07"),
+      warmup_k: () => ({ E02: itemOf("E02").warmupFor(params), [`F01_EMA${e.params.F01_EMA}`]: filterOf("F01").warmupFor(params) }),
+      excluded_by_warmup_1: () => new Skip("not built: F01r, F03–F07r (the list covers E02 with every F)"),
+      ...efTrials(e.expect.trials, s, params, plant),
     };
   },
 };
+// step 4: A.3.30's F02 keys (the 15-minute series' 1-hour bars and EMA50, spec sizes): g and the slope per bar from the
+// first shown index, the hourly bars from the example's first k, the first bar with a slope and the first bar kept
+function f02Of30(e: J, s: Series, off: number, plant: string): Record<string, Thunk> {
+  const indH = indHtf(s, plant);
+  let built: FilterBuild | null = null;
+  const fb = (): FilterBuild => (built ??= filterOf("F02").build(indH));
+  const slope = () => {
+    const c = fb().columns;
+    return Array.from(c.HTF_EMA50, (v, i) => v - c.HTF_EMA50_PREV[i]);
+  };
+  const k0 = (e.expect.hourly_from_k48 as J[])[0].k as number;
+  return {
+    F02_g: () => fromIdx(fb().columns.HTF_G, off),
+    F02_slope: () => fromIdx(slope(), off),
+    hourly_from_k48: () => {
+      const h = indH.higher!.series;
+      const ema = indH.higher!.ema(50);
+      return Array.from({ length: Math.max(0, h.n - k0) }, (_, j) => ({ k: k0 + j, start: isoOf(h.s[k0 + j]), close: h.C[k0 + j], EMA50: ema[k0 + j] }));
+    },
+    "first_value_index.F02_slope": () => firstVal(slope()),
+    F02_keep_from_index: () => Array.from(fb().warmOk ?? []).findIndex((v) => v === 1),
+  };
+}
+// step 4: F02 / F02r per bar (A.3.21, A.3.22): the higher bars with the shrunk EMA (params F02_EMA), and per base bar
+// its g's start, the slope and the four truths, all from the module's F02 and F02r builds
+function f02PerBar(e: J, plant: string, listKey: string): Record<string, Thunk> {
+  const s = midSeries(e.input, plant);
+  const ind = indHtf(s, plant);
+  const p = e.params.F02_EMA as number;
+  const fb = filterOf("F02").build(ind, { htfEma: p });
+  const fr = filterOf("F02r").build(ind, { htfEma: p });
+  const h = ind.higher!.series;
+  const ema = ind.higher!.ema(p);
+  const G = fb.columns.HTF_G, cur = fb.columns.HTF_EMA50, prev = fb.columns.HTF_EMA50_PREV;
+  const tb = (v: number) => (v === -1 ? null : v === 1);
+  return {
+    [listKey]: () => Array.from({ length: h.n }, (_, k) => ({ start: isoOf(h.s[k]), close: h.C[k], [`EMA${p}`]: ema[k] })),
+    per_bar: () =>
+      Array.from({ length: s.n }, (_, i) => ({
+        i, s: isoOf(s.s[i]), T: isoOf(s.T[i]), g_start: Number.isNaN(G[i]) ? null : isoOf(h.s[G[i]]), slope: cur[i] - prev[i],
+        F02_buy: tb(fb.f[0][i]), F02_sell: tb(fb.f[1][i]), F02r_buy: tb(fr.f[0][i]), F02r_sell: tb(fr.f[1][i]),
+      })),
+  };
+}
 function smaAdapter(e: J, plant: string): Record<string, Thunk> {
   const s = midSeries(e.input, plant);
   const sma = smaOldest(s.C, 20, plant);
@@ -1220,8 +1458,205 @@ function emaFlat(e: J, plant: string): Record<string, Thunk> {
   if (e.expect.first_index_shown !== undefined) out.first_index_shown = () => firstVal(ind.ema(12));
   return out;
 }
+// step 4: A.3.15 / A.3.16, E13 on a flat price: emaFlat's keys, and E13's line, signal, signals, warm-up and the
+// signals its warm-up excludes (6 ①); round A: E15's signals
+function e13Flat(e: J, plant: string): Record<string, Thunk> {
+  const s = midSeries(e.input, plant);
+  const ind = indOf(s, null, plant);
+  const off = e.expect.first_index_shown as number;
+  const cols = () => itemOf("E13").build(ind).columns;
+  return {
+    ...emaFlat(e, plant),
+    line_12_26: () => fromIdx(cols().MACD12_26, off),
+    signal_9: () => fromIdx(cols().MACD12_26_SIG, off),
+    // signals (E13; round A: E15), warmup_k and excluded_by_warmup_1 (E13)
+    ...itemKeys(e, s, plant),
+  };
+}
+
+// ---- step 4, round A (2026-11-15): the keys of E01–E03, E05–E12 and E14–E21 ------------------------------------------
+
+// is the item (E…, B…) or the filter (F…) written (lawsearch-items.ts); any error but NOT BUILT is thrown
+const builtOf = (get: (id: string) => unknown) => (id: string): boolean => {
+  try {
+    get(id);
+    return true;
+  } catch (err) {
+    if (isNotBuilt(err)) return false;
+    throw err;
+  }
+};
+const isBuilt = builtOf(itemOf);
+const filterBuilt = builtOf(filterOf);
+// an item's E × F00 trial on the series' timeframe
+const f00Of = (s: Series, id: string): TrialDef => trialOf(`${s.key}.${id}.F00`);
+// the item ids an example's row names: "E01・E02（RSI7）" → E01, E02; "E22〜E25（BB20）" → E22 … E25
+const idsOfLabel = (label: string): string[] => {
+  const m = /(E[0-9]{2})〜(E[0-9]{2})/.exec(label);
+  if (m) {
+    const a = Number(m[1].slice(1)), b = Number(m[2].slice(1));
+    return Array.from({ length: b - a + 1 }, (_, k) => `E${String(a + k).padStart(2, "0")}`);
+  }
+  return label.match(/E[0-9]{2}/g) ?? [];
+};
+// an object keyed by item ids (the examples' cond, signals, warmup_k, excluded_by_warmup_1, kept_after_warmup): one
+// value per id; while one of its items is not built the key is "skip (not built: …)"
+const perItem = (want: J, f: (id: string) => unknown): Thunk => () => {
+  const ids = Object.keys(want).filter((k) => !ALT_KEY.test(k));
+  const missing = ids.filter((id) => !isBuilt(id));
+  if (missing.length > 0) return new Skip(`not built: ${missing.join(", ")}`);
+  return Object.fromEntries(ids.map((id) => [id, f(id)]));
+};
+// the per-item keys of an example, each only where its expect holds an object of item ids: cond (the item's formula
+// per bar, buy and sell, from its build), signals (its E × F00 trial's emitted rows, candidatesOf), warmup_k (that
+// trial's warm-up, trialWarmup), excluded_by_warmup_1 and kept_after_warmup (its emitted rows before and at or past the
+// warm-up, 6 ①)
+function itemKeys(e: J, s: Series, plant: string): Record<string, Thunk> {
+  const ex = e.expect;
+  const isObj = (k: string) => ex[k] !== null && typeof ex[k] === "object" && !Array.isArray(ex[k]);
+  const out: Record<string, Thunk> = {};
+  if (isObj("cond")) {
+    const ind = indOf(s, null, plant);
+    out.cond = perItem(ex.cond, (id) => {
+      const b = itemOf(id).build(ind);
+      return { buy: tri(b.cond[0]), sell: tri(b.cond[1]) };
+    });
+  }
+  if (isObj("signals")) out.signals = perItem(ex.signals, (id) => bySide(emittedOf(f00Of(s, id), s, plant)));
+  if (isObj("warmup_k")) out.warmup_k = perItem(ex.warmup_k, (id) => trialWarmup(f00Of(s, id)));
+  if (isObj("excluded_by_warmup_1")) out.excluded_by_warmup_1 = perItem(ex.excluded_by_warmup_1, (id) => bySide(emittedOf(f00Of(s, id), s, plant, undefined, false, true)));
+  if (isObj("kept_after_warmup")) out.kept_after_warmup = perItem(ex.kept_after_warmup, (id) => bySide(emittedOf(f00Of(s, id), s, plant, undefined, true)));
+  return out;
+}
+// A.3.10 / A.3.11: a stochastic item's record (E10 k = 5, E11 k = 14) from its own build: k (read from its column
+// names), rawK (Ind.stoch), %K and %D (its columns), the crosses X↑(%K, %D) and X↓(%K, %D), its formula (cond), its
+// signals, and the crosses its gate (%K < 20, %K > 80) refuses
+function stochOut(s: Series, id: string, plant: string): Record<string, unknown> {
+  const ind = indOf(s, null, plant);
+  const b = itemOf(id).build(ind);
+  const kName = Object.keys(b.columns).find((c) => /^STOCH[0-9]+_K$/.test(c));
+  if (kName === undefined) throw new Error(`${id}: no STOCH<k>_K column`);
+  const k = Number(/^STOCH([0-9]+)_K$/.exec(kName)![1]);
+  const K = b.columns[kName] as Float64Array, D = b.columns[`STOCH${k}_D`] as Float64Array;
+  const up = xUp(K, D), dn = xDn(K, D);
+  const barsWhere = (x: Int8Array, ok: (i: number) => boolean) => Array.from(x.keys()).filter((i) => x[i] === 1 && ok(i));
+  return {
+    k, rawK: ind.stoch(k).rawK, K, D, xup_K_D: tri(up), xdn_K_D: tri(dn), cond_buy: tri(b.cond[0]), cond_sell: tri(b.cond[1]),
+    signals: bySide(emittedOf(f00Of(s, id), s, plant)),
+    crossings_failing_gate: { up_with_K_ge_20: barsWhere(up, (i) => !(K[i] < 20)), down_with_K_le_80: barsWhere(dn, (i) => !(K[i] > 80)) },
+  };
+}
+// A.3.12 / A.3.13: RCI9 (rci.ts through E12's build; 1e−9, spec 17.4), its ranks (rciRanksOf), E12's crosses and
+// signals with spec 17.4's allowed difference (AllowAt: the bars where RCI[i] or RCI[i−1] is within 1e−9 of ±80 in the
+// module's values or the example's), and the module's own near bars and allowed bars
+function rciOut(e: J, plant: string): Record<string, Thunk> {
+  const s = midSeries(e.input, plant);
+  const ind = indOf(s, null, plant);
+  let built: ItemBuild | null = null;
+  const b = () => (built ??= itemOf("E12").build(ind));
+  const rci = () => b().columns.RCI9 as Float64Array;
+  const near = (x: number) => Math.abs(x - 80) < 1e-9 || Math.abs(x + 80) < 1e-9;
+  const nearMine = () => Array.from(rci().keys()).filter((i) => near(rci()[i]));
+  const allowed = () => {
+    const wantR = (Array.isArray(e.expect.RCI9) ? e.expect.RCI9 : []) as Array<number | null>;
+    const nearAny = new Set([...nearMine(), ...wantR.flatMap((x, i) => (typeof x === "number" && near(x) ? [i] : []))]);
+    return new Set(Array.from(rci().keys()).filter((i) => nearAny.has(i) || nearAny.has(i - 1)));
+  };
+  return {
+    RCI9: () => tol(rci(), "real"),
+    ranks: () => Array.from(rci().keys(), (i) => rciRanksOf(s.C, i, 9)),
+    xup_RCI_m80: () => new AllowAt(tri(b().cond[0]), allowed(), "perBar"),
+    xdn_RCI_p80: () => new AllowAt(tri(b().cond[1]), allowed(), "perBar"),
+    signals: perItem(e.expect.signals, (id) => (id === "E12" ? new AllowAt(bySide(emittedOf(f00Of(s, id), s, plant)), allowed(), "sides") : bySide(emittedOf(f00Of(s, id), s, plant)))),
+    "bars_within_1e-9_of_pm80": () => nearMine(),
+    decisions_allowed_to_differ: () => Array.from(rci().keys()).filter((i) => near(rci()[i]) || (i >= 1 && near(rci()[i - 1]))),
+  };
+}
+// an item's raw signals (spec 5 ①–③, before F): its E × F00 trial's rows (F00 is always true, so every row is emitted
+// or dropped by ⑤ only), in bar order, buy before sell
+const rawSignalsOf = (s: Series, eId: string, params: ItemParams | undefined, plant: string): Array<{ i: number; d: number }> => {
+  const c = candidatesOf(f00Of(s, eId), indOf(s, null, plant), { params, plant });
+  return Array.from({ length: c.n }, (_, r) => ({ i: c.i[r], d: c.d[r] }));
+};
+// the example's record of one trial (E, F) (A.3.28, A.3.30): F's truth at each of E's raw signals (null where F is
+// 無し), the rows spec 5 ④ and ⑤ emit (candidatesOf on the series, with its higher bars when F reads them), how many
+// F made 無し (f_none) and how many ⑤ dropped
+function efTrialOut(s: Series, eId: string, fId: string, params: ItemParams | undefined, plant: string) {
+  const t = trialOf(`${s.key}.${eId}.${fId}`);
+  const ind = readsHigherT(t) ? indHtf(s, plant) : indOf(s, null, plant);
+  const fb = filterOf(fId).build(ind, params);
+  const c = candidatesOf(t, ind, { params, plant });
+  const rows = Array.from({ length: c.n }, (_, r) => ({ i: c.i[r], d: c.d[r], st: STATUS[c.status[r]] }));
+  return {
+    F_values_at_signals: rawSignalsOf(s, eId, params, plant).map((x) => {
+      const v = fb.f[x.d === 1 ? 0 : 1][x.i];
+      return v === -1 ? null : v === 1;
+    }),
+    emitted: rows.filter((r) => r.st === "emit").map((r) => ({ i: r.i, T: isoOf(s.T[r.i]), d: r.d })),
+    F_null_count: rows.filter((r) => r.st === "f_none").length,
+    both_sides_dropped_signals: rows.filter((r) => r.st === "both").length,
+  };
+}
+// an example's trials ("E02.F00", …; the keys hold a dot, so each is named trials["E02.F00"]): the built ones by
+// efTrialOut, the others "skip (not built: …)"
+function efTrials(want: J, s: Series, params: ItemParams | undefined, plant: string): Record<string, Thunk> {
+  const out: Record<string, Thunk> = {};
+  for (const name of Object.keys(want ?? {})) {
+    const [eId, fId] = name.split(".");
+    const missing = [eId, fId].filter((id) => !(id.startsWith("F") ? filterBuilt(id) : isBuilt(id)));
+    out[`trials["${name}"]`] = missing.length > 0 ? () => new Skip(`not built: ${missing.join(", ")}`) : () => efTrialOut(s, eId, fId, params, plant);
+  }
+  return out;
+}
+// a mid string moved by pts points, its decimals kept ("150.500", −500 → "150.000")
+const shiftMid = (x: string, pts: number): string => {
+  const digits = (x.split(".")[1] ?? "").length;
+  const mult = 10 ** digits;
+  return ((Math.round(Number(x) * mult) + pts) / mult).toFixed(digits);
+};
+// A.3.30's keys of E18 and E21 (round A): their signals, the bars of those signals with their T and RSI14 (ADX14 and the
+// day's open wait for F03 and F07), their trials with the built F, and the 「変えた形」 variant_flat_150000
+function e18e21Of30(e: J, s: Series, plant: string): Record<string, Thunk> {
+  const ind = indOf(s, null, plant);
+  const ids = Object.keys(e.expect.signals ?? {});
+  const sigBars = () => [...new Set(ids.flatMap((id) => emittedOf(f00Of(s, id), s, plant).map((x) => x.i)))].sort((a, b) => a - b);
+  return {
+    ...itemKeys(e, s, plant),
+    "filters_at_signal_bars.bars": sigBars,
+    "filters_at_signal_bars.T": () => sigBars().map((i) => isoOf(s.T[i])),
+    "filters_at_signal_bars.RSI14": () => sigBars().map((i) => ind.rsi(14).rsi[i]),
+    "filters_at_signal_bars.ADX14": () => new Skip("not built: F03"),
+    "filters_at_signal_bars.day_open": () => new Skip("not built: F07"),
+    ...efTrials(e.expect.trials, s, undefined, plant),
+    // 付録 A's 「150.000 にした時」 (同じ形で、番号0〜200 を 150.000、その後も同じ動き): the input's bars with every mid value
+    // 0.500 lower (−500 points: closes 150.000 for bars 0–200, and the same moves after), a second input with its own
+    // answer, from E18's and E21's builds and trials on it
+    variant_flat_150000: () => {
+      const want = e.expect.variant_flat_150000;
+      const v = midSeries({ ...e.input, mid: (e.input.mid as string[][]).map((r) => r.map((x) => shiftMid(x, -500))) }, plant);
+      const vi = indOf(v, null, plant);
+      const c18 = itemOf("E18").build(vi).columns, c21 = itemOf("E21").build(vi).columns;
+      const e50 = c18.EMA50 as Float64Array, e200 = c18.EMA200 as Float64Array;
+      const keys = itemKeys({ expect: want }, v, plant);
+      const signals = keys.signals(), excluded = keys.excluded_by_warmup_1();
+      if (signals instanceof Skip) return signals;
+      if (excluded instanceof Skip) return excluded;
+      const warm = [...new Set(Object.keys(want.signals).map((id) => trialWarmup(f00Of(v, id))))];
+      return {
+        EMA200_199: e200[199], EMA200_200: e200[200], EMA50_200: e50[200],
+        // E21's EMA200 must be E18's (one pineEma through the Ind's cache)
+        ...(c21.EMA200 === e200 ? {} : { EMA200_200: `E21's EMA200 is not E18's` }),
+        signals, warmup_k: warm.length === 1 ? warm[0] : `the items' warm-ups ${warm.join(", ")}`,
+        diff_at_200: { C_minus_EMA200: v.C[200] - e200[200], EMA50_minus_EMA200: e50[200] - e200[200] },
+        excluded_by_warmup_1: excluded,
+      };
+    },
+  };
+}
 
 const G4: Record<string, Adapter> = {
+  "S8113.C19.m15": (e, plant) => c19Out(e, plant),
+  "S8113.C19.h1": (e, plant) => c19Out(e, plant),
   "A.4.1": (e, plant) => {
     const s = midSeries(e.input, plant);
     const don = indOf(s, null, plant).donchian(20);
@@ -1235,6 +1670,25 @@ const G4: Record<string, Adapter> = {
     const ind = indOf(midSeries(e.input, plant), null, plant);
     return { TR: () => ind.tr(), ATR10: () => ind.atr(10), EMA20: () => ind.ema(20) };
   },
+  // step 4: E29 inside_brk (points): the inside bar and the condition from the module (lawsearch-ind.ts insideOf, the
+  // E29 build), the signals by candidatesOf
+  "A.4.4": (e, plant) => {
+    const s = midSeries(e.input, plant);
+    const b = () => itemOf("E29").build(indOf(s, null, plant));
+    return {
+      Ph: () => s.Ph, Pl: () => s.Pl, Pc: () => s.Pc,
+      inside_i_minus_1: () => tri(insideOf(s)),
+      cond_buy: () => tri(b().cond[0]), cond_sell: () => tri(b().cond[1]),
+      signals: () => emittedOf(trialOf("m15.E29.F00"), s, plant),
+    };
+  },
+  // step 4: E30 pday_brk (1 hour: A.4.5, A.4.7; 15 minutes: A.4.6)
+  "A.4.5": (e, plant) => e30Out(e, plant),
+  "A.4.6": (e, plant) => e30Out(e, plant),
+  "A.4.7": (e, plant) => e30Out(e, plant),
+  // step 4: S02 (F02's state row; A.4.28 15 minutes → 1 hour, A.4.37 1 hour → 4 hours; the higher EMA shrunk)
+  "A.4.28": (e, plant) => s02Out(e, plant, "hour_bars"),
+  "A.4.37": (e, plant) => s02Out(e, plant, "four_hour_bars"),
   "A.4.9": (e, plant) => trAtr(e, plant, "TR", "ATR14", 14),
   "A.4.10": (e, plant) => {
     const ind = indOf(midSeries(e.input, plant), null, plant);
@@ -1291,6 +1745,80 @@ const G4: Record<string, Adapter> = {
     };
   },
 };
+// §8.113 19's C19 example (research/lawsearch-hand-s8113.json; spec 17.3): B07's AG and AL in points at the bars the
+// example names (bar 213's cut to 6 decimals, as the example writes "16.880264…"), the 200-bar mean's above and below
+// bars, and the B07 trial's emitted signals
+function c19Out(e: J, plant: string): Record<string, Thunk> {
+  const s = midSeries(e.input, plant);
+  const b = itemOf("B07").build(indOf(s, null, plant));
+  const AG = b.columns.RSI2_AG as Float64Array;
+  const AL = b.columns.RSI2_AL as Float64Array;
+  const up = b.columns.B07_up;
+  const dn = b.columns.B07_dn;
+  const trunc6 = (x: number): string => (Math.trunc(x * 1e6) / 1e6).toFixed(6);
+  const barsWhere = (v: ArrayLike<number>): number[] => Array.from({ length: s.n }, (_, k) => k).filter((k) => v[k] === 1);
+  return {
+    AG_AL_points: () => ({ "200": [AG[200], AL[200]], "201": [AG[201], AL[201]] }),
+    AG_AL_points_trunc6: () => ({ "213": [trunc6(AG[213]), trunc6(AL[213])] }),
+    rsi2_below_10_at_200: () => 9 * AG[200] < AL[200],
+    above_mean_bars: () => barsWhere(up),
+    below_mean_bars: () => barsWhere(dn),
+    signals: () => emittedOf(trialOf(s.key === "m15" ? "m15.B07" : "h1.B07"), s, plant),
+  };
+}
+// step 4: E30 per bar: D(s_i) (spec 2 日), the previous day (lawsearch-ind.ts pdayOf; it does not depend on the bar
+// count), the bars of each day, and the E30 build's PDH, PDL and day-wise condition; the signals by candidatesOf
+function e30Out(e: J, plant: string): Record<string, Thunk> {
+  const ins = e.input as { s: string[]; mid: string[][] };
+  // 付録 A's 「変えた形」 (the review's T1 / P1): each is a second input, made as its "change" text says
+  const variant = (input: J, want: J): Thunk => async () => {
+    const o = e30Core(input, plant);
+    const r: J = {};
+    for (const k of Object.keys(want)) if (!ALT_KEY.test(k) && o[k]) r[k] = await o[k]();
+    return r;
+  };
+  return {
+    ...e30Core(e.input, plant),
+    // A.4.5: 「木曜 06:00 UTC の足 150.000/150.050/149.950/150.000 を先頭に足す（番号は1つずつずれる）」
+    ...(e.expect.variant_thu_15_bars ? { variant_thu_15_bars: variant({ ...e.input, s: ["2024-02-01T06:00:00Z", ...ins.s], mid: [["150.000", "150.050", "149.950", "150.000"], ...ins.mid] }, e.expect.variant_thu_15_bars) } : {}),
+    // A.4.6: 「足0（火 06:00）を消す。火は57本。番号は1つずつ前へ」
+    ...(e.expect.variant_57_bars ? { variant_57_bars: variant({ ...e.input, s: ins.s.slice(1), mid: ins.mid.slice(1) }, e.expect.variant_57_bars) } : {}),
+  };
+}
+function e30Core(input: J, plant: string): Record<string, Thunk> {
+  const s = midSeries(input, plant);
+  const b = itemOf("E30").build(indOf(s, null, plant));
+  const days = Array.from(s.day);
+  const count = new Map<number, number>();
+  for (const d of days) count.set(d, (count.get(d) ?? 0) + 1);
+  const trial = trialOf(s.key === "m15" ? "m15.E30.F00" : "h1.E30.F00");
+  return {
+    day: () => days.map(dateOf),
+    prev_day: () => Array.from(pdayOf(s, 0).prevDay, (d) => (d === -1 ? null : dateOf(d))),
+    bars_per_day: () => Object.fromEntries([...count.entries()].map(([d, n]) => [dateOf(d), n])),
+    PDH: () => b.columns.PD_H, PDL: () => b.columns.PD_L,
+    cond_buy: () => tri(b.columns.E30_buy), cond_sell: () => tri(b.columns.E30_sell),
+    signals: () => emittedOf(trial, s, plant).map((x) => ({ ...x, T: isoOf(s.T[x.i]) })),
+  };
+}
+// step 4: S02 = F02's state row (spec 4.3): the higher bars with the shrunk EMA (params htf_ema_period), g per bar, F02's
+// truth, and the S02 trial's signals (candidatesOf on the series with its higher bars)
+function s02Out(e: J, plant: string, listKey: string): Record<string, Thunk> {
+  const s = midSeries(e.input, plant);
+  const ind = indHtf(s, plant);
+  const params: ItemParams = { htfEma: e.params.htf_ema_period };
+  const fb = sFilterOf("S02").build(ind, params);
+  const h = ind.higher!.series;
+  const ema = ind.higher!.ema(params.htfEma!);
+  const G = fb.columns.HTF_G;
+  const trial = trialOf(s.key === "m15" ? "m15.S02" : "h1.S02");
+  return {
+    [listKey]: () => Array.from({ length: h.n }, (_, k) => ({ start: isoOf(h.s[k]), close: h.C[k], [`EMA${params.htfEma}`]: ema[k] })),
+    g_index: () => Array.from(G, (v) => (Number.isNaN(v) ? null : v)),
+    F_buy: () => tri(fb.f[0]), F_sell: () => tri(fb.f[1]),
+    signals: () => emittedOf(trial, s, plant, params).map((x) => ({ ...x, T: isoOf(s.T[x.i]) })),
+  };
+}
 function rsiUD(e: J, plant: string): Record<string, Thunk> {
   const r = indOf(midSeries(e.input, plant), null, plant).rsi(14);
   return { U: () => r.U, D: () => r.D, RSI14: () => r.rsi };
@@ -2029,8 +2557,10 @@ async function runOne(e: HandExample, plant: string): Promise<HandResult> {
         keys.push({ key, status: "skip", why: got.why });
         continue;
       }
+      const seen = allowedSeen.length;
       const d = diffOf(got, want);
-      if (d === null) keys.push({ key, status: "pass", why: "" });
+      // (step 4, round A) a pass through spec 17.4's allowed difference (AllowAt) keeps its note
+      if (d === null) keys.push({ key, status: "pass", why: allowedSeen.length > seen ? `allowed: ${allowedSeen.slice(seen).join("; ")}` : "" });
       else {
         let why = d;
         if (plant) {
@@ -2052,7 +2582,10 @@ async function runOne(e: HandExample, plant: string): Promise<HandResult> {
 export async function runHand(o: { plant: string; ids?: string[] }): Promise<HandResult[]> {
   const doc = JSON.parse(await Deno.readTextFile(new URL("./lawsearch-hand.json", import.meta.url)));
   if (handTrials.size === 0) for (const t of parseCandidates(JSON.parse(await Deno.readTextFile(new URL("./ledger/lawsearch-candidates.json", import.meta.url))))) handTrials.set(t.id, t);
-  const all = doc.examples as HandExample[];
+  // 付録 A's examples, then §8.113 19's of the B items (spec 17.3; lawsearch-hand-s8113.json, not sha-frozen: copied
+  // from docs/OPERATIONS.md's text, step 4's pilot)
+  const extra = JSON.parse(await Deno.readTextFile(new URL("./lawsearch-hand-s8113.json", import.meta.url)));
+  const all = [...(doc.examples as HandExample[]), ...(extra.examples as HandExample[])];
   for (const e of all) handById.set(e.id, e);
   const pick = o.ids && o.ids.length ? all.filter((e) => o.ids!.includes(e.id)) : all;
   const out: HandResult[] = [];
@@ -2063,7 +2596,7 @@ export async function runHand(o: { plant: string; ids?: string[] }): Promise<Han
 // one line per example: "<status> <id> [<key>: <why>; …]"
 export function handLines(rs: HandResult[]): string[] {
   return rs.map((r) => {
-    const notes = r.keys.filter((k) => k.status !== "pass").map((k) => `${k.key} ${k.status}${k.why ? `: ${k.why}` : ""}`);
+    const notes = r.keys.filter((k) => k.status !== "pass" || k.why.startsWith("allowed: ")).map((k) => `${k.key} ${k.status}${k.why ? `: ${k.why}` : ""}`);
     return `${r.status.toUpperCase().padEnd(4)} ${r.id}${notes.length ? "  " + notes.join("; ") : ""}`;
   });
 }

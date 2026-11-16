@@ -199,6 +199,20 @@ export interface DonchianOut {
   LL: Float64Array;
   s: Int8Array;
 }
+export interface MacdOut {
+  // step 4 (E13): MACD(f, s, m) by _shared/macd.ts macd (spec 3.2, 17.1): line = EMA_f(C) − EMA_s(C) (無し when
+  // either is), signal = EMA_m(line) (seeded where m lines are first present: i = s + m − 2)
+  line: Float64Array;
+  signal: Float64Array;
+}
+export interface StochOut {
+  // step 4, round A (E10, E11): the slow stochastic (k, 3, 3) of spec 3.2 on the mid doubles: rawK = (100 × (C − LL))
+  // ÷ (HH − LL) with HH = max H[i−k+1..i], LL = min L[i−k+1..i] (無し for i < k − 1 and where HH = LL); K = SMA3(rawK),
+  // D = SMA3(K) (the study's oldest-first SMA; a window holding 無し is 無し)
+  rawK: Float64Array;
+  K: Float64Array;
+  D: Float64Array;
+}
 export interface BigmoveParams {
   // §8.113 C17 with 17.3's substitutions: σ over r[i−288..i−1] with ≥ 250 usable; z over 6 bars; ±2;
   // r unusable after a gap over 12 × STEP (gapMs)
@@ -233,6 +247,13 @@ export interface Ind {
   tr(): Float64Array;
   atr(p: number): Float64Array;
   rsi(p: number): RsiOut;
+  // step 4 (E13): MACD(f, s, m) of the mid close by the app's macd (spec 17.1: its line and signal)
+  macd(f: number, s: number, m: number): MacdOut;
+  // step 4, round A (E10, E11): the slow stochastic (k, 3, 3), the research's own (spec 3.2, 17.1)
+  stoch(k: number): StochOut;
+  // step 4, round A (E12): RCI(n) of the mid close by the app's rci (src/lib/rci.ts, called with length n; its rci
+  // column only, spec 3.2 and 17.1)
+  rci(n: number): Float64Array;
   donchian(n: number): DonchianOut;
   bigmove(o: BigmoveParams): BigmoveOut;
 }
@@ -248,6 +269,8 @@ export interface ItemParams {
   // E26: donchian 20 → n
   donchian?: number;
   bigmove?: Partial<BigmoveParams>;
+  // step 4: F02 / F02r / S02: the higher bars' EMA50 → EMA_htfEma (and the higher warm-up 51 → htfEma + 1)
+  htfEma?: number;
   // the item's warm-up k and the filter's, replaced
   warmup?: number;
   fWarmup?: number;
@@ -276,6 +299,12 @@ export interface ItemDef {
   // trialWarmup needs it, so every item written later provides it too.
   warmupFor(params?: ItemParams): number;
   build(ind: Ind, params?: ItemParams): ItemBuild;
+  // spec 24 の1 (the owner's answer, 2026-11-16; lawsearch-flip.ts): |x − y| of every pair of values the item's buy
+  // and sell decisions compare at bar i on this Ind (a crossing also at bar i − 1); a pair holding a 無し is left out.
+  // Read only by the flip judgement, on a row that has no mirrored twin: a value above 0 and below 1e−9 on either side
+  // makes the row a rounding difference. Optional: an item without it (its comparisons are exact under the exact
+  // mirror, as point comparisons are, or it is not judged) gets no rounding allowance (every such row counts).
+  margins?(ind: Ind, i: number, params?: ItemParams): number[];
 }
 
 // A filter F (spec 4.2) on one series
@@ -295,6 +324,8 @@ export interface FilterDef {
   // as ItemDef.warmupFor
   warmupFor(params?: ItemParams): number;
   build(ind: Ind, params?: ItemParams): FilterBuild;
+  // as ItemDef.margins: the pairs the filter's buy and sell decisions compare at bar i (spec 24 の1)
+  margins?(ind: Ind, i: number, params?: ItemParams): number[];
 }
 
 // One row of research/ledger/lawsearch-candidates.json

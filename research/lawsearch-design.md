@@ -2694,6 +2694,36 @@ before that check. Its judgement on N 1001 and FLIP 1001 with the C4g code: exit
   back from the files as the first bar's Bid open + floor(spread ÷ 2) and checked against `GEN_START`; spec 2's
   rounded first mid open can differ by 1 point (N 1001: AUD/JPY 80001 against 80000), and any whole-point S keeps h
   and PL exact (C2 refute 7 measured no change).
+- (Step 4, round A, 2026-11-16; spec 24 の1, the owner's answer 「丸めの違いを別に数える」) The signals' condition
+  counts rounding differences apart. A row in one side only is a rounding difference when, at its bar, a pair of
+  values its decisions compare differs by more than 0 and less than 1e−9 on the original's Ind or the mirror's. The
+  pairs are the item's `margins(ind, i)` and, for an E × F trial or an S row, the F's (`ItemDef.margins`,
+  `FilterDef.margins`, lawsearch-types.ts; written for the items and F's whose comparisons are on doubles: E01–E21
+  and F01, F02, F02r; a crossing gives its two pairs at i − 1 and i, a gate its pair at i). The 0.1% is judged on the
+  other rows, and the line prints both counts (`of them rounding … a and b, difference without rounding …`).
+  - Why exactly equal pairs are not an allowance (the lead's reading of the owner's answer, whose purpose was that a
+    direction error is still found): symmetric code decides exactly equal pairs as mirrors on both sides, so a row
+    split there is an asymmetry, not rounding. Measured on round A's run: with E10's buy made strict at an exact
+    %K = %D tie (a mutant), 98 of m15 E10.F00's 114 rows in one side only had exactly equal pairs only; they count,
+    and the four m15 E10 trials fail (0.27–0.43%); counting zeros as rounding would have passed them. Spec 24 の1
+    names this as the lead's reading. Row by row it is not complete: where one side is exactly equal and the other a
+    last digit off (≈ 1e−12), a tie error's row counts as rounding (the review of 2026-11-16, an independent agent:
+    4 such bars in two mutants, against 342 counted rows in one of them).
+  - The review (2026-11-16, one independent agent, read-only): no code defect. Every `margins` reads the arrays,
+    params and bars its build reads, and covers every pair its decisions compare; E26, E29, E30, B07 and the S rows
+    are exact under the exact mirror (B07's AG and AL swap bit for bit); the 94 rounding rows of round A's run are
+    each split by the near pair; the highest share of rows a trial could call rounding is 0.104% (m15.E11.F01), every
+    trial but E10 / E11 at or below 0.016%; `margins` is called only by the flip judgement. Its two low findings (the
+    zero reading named as the owner's in spec 24 の1; "a tie error is found here" said too strongly) are fixed in the
+    spec's text and here.
+  - Measured on round A's run (N 1002, 200 trials): before, m15 E11.F01 0.116% and E11.F02 0.106% failed; every row
+    in one side only of E10 / E11 (40 for F00) had a pair in (0, 3e−11) on one side. After: every trial passes, every
+    E10 / E11 row in one side only is a rounding difference, and no other trial has one. Mutants (a copy): E10's sell
+    gate at 70 and E01's sell line at 100 − L + 1 fail all 16 of their trials (25–64% without rounding; at most 24
+    rounding rows).
+  - An item or F without `margins` (E26, E29, E30 and B07 compare points or values the exact mirror keeps exact; B06 is
+    not judged) gets no allowance: every row in one side only counts. Each later round writes `margins` for its items
+    that compare doubles; a missing one can only make the check stricter.
 
 ---
 
@@ -2894,9 +2924,104 @@ that path end to end (the table above; 7.8 syn step 3). Stage 2's `suspect13` ch
 
 - That is 36 + 32 + 20 + 15 = 103 examples with required keys. The 41 others report "skip" (E05–E25 and E27–E44's
   own examples, F02–F07r, S02–S04), and so do the keys of other items inside the 103.
+- (Step 4's pilot, 2026-11-15: E13, E29, E30, F02 / F02r with S02, and B07 built; TS and Python each 112 pass,
+  0 fail, 32 skip.) Required now besides the rows above:
+
+| examples | required (new) |
+|---|---|
+| A.3.14 | `line_12_26`, `signal_9`, `signal_9_seed_index`, `signals.E13` (E14's and E15's keys stay "skip (not built)") |
+| A.3.15, A.3.16 | `line_12_26`, `signal_9`, `signals.E13`, `warmup_k` and `excluded_by_warmup_1` (E13's) |
+| A.3.19 | the `E` row of E13, the `F` row of F02 / F02r, `F02_used_higher_bar_g_at` |
+| A.3.21, A.3.22 F02 / F02r (the higher bars) | all |
+| A.3.28 | `filters_at_signals.F02_slope` (its two bars from the example's own E02 listing; the Python also checks `trials.E02.F02` and `trials.E02.F02r` the same way) |
+| A.3.30 | `F02_g`, `F02_slope`, `hourly_from_k48`, `first_value_index.F02_slope`, `F02_keep_from_index` |
+| A.4.4 E29 | all |
+| A.4.5, A.4.6, A.4.7 E30 | all |
+| A.4.28, A.4.37 S02 | all |
+
+- B07 has no example in 付録 A: both builders checked it against §8.113 C19's hand example (BUY bar 201, SELL bar
+  213; AG / AL at bars 200, 201, 213), on 15-minute and 1-hour bars, in scratch scripts.
+- The hand-level plants (the yml's list) still fail their named examples on both sides; htfOpen now also fails
+  A.3.19, A.3.21, A.3.22, A.3.28, A.3.30, A.4.28 and A.4.37 (8: F02 gives it the catchers design 8 waited for).
+- (The pilot's review, 2026-11-15: two reviewers, one refuter.) One finding stood, found on both sides: every
+  `variant_*` key (付録 A's 「変えた形」) had been skipped as an "alternative answer" by both runners, so A.4.6's half
+  「57本なら無し」 was never checked (a 15-minute threshold of 57, or the 1-hour 15, passed every E30 example). A variant is
+  a second input with its own answer. Both runners now compare it like any key (`change`, its text of how the input
+  was made, is a note): A.4.5's `variant_thu_15_bars` and A.4.6's `variant_57_bars` (E30), and A.4.41's
+  `variant_150_010` (S01, step 3's own gap: the TS had an adapter for it that was never asked). A.3.30's
+  `variant_flat_150000` is not asked (its keys are E18's and E21's). Checked on copies: a threshold of 57 now fails
+  A.4.6 on both sides.
+- §8.113 19's examples of the B items (spec 17.3 draws them in) are not in the sha-frozen 付録 A. They now live in
+  `research/lawsearch-hand-s8113.json` (copied from docs/OPERATIONS.md's text, the answers as the text gives them; bar
+  213's AG / AL cut to 6 decimals as the text writes "16.880264…"), run by both runners after 付録 A's: `S8113.C19.m15`
+  and `S8113.C19.h1` (B07), all keys required. Checked on copies: B07's 200-bar mean taken without bar i fails both.
+  Each B item of step 4 adds its §8.113 example here the same way. Totals now: TS and Python 114 pass, 0 fail, 32 skip.
+- E30 under the plant `noRisingEdge` (the review's T2, refuted as a spec matter): the TS keeps E30's day-wise edge in
+  its build (kind "cross", lawsearch-items.ts), so the plant does not reach it there; the Python's plant does. Plant
+  runs are not compared between the two, and the plant is still caught by A.4.1, A.4.4, A.4.33 and A.4.34 on both
+  sides. Once per day hides the edge except at the item's first bar that is not 無し, so no plant can catch an E30
+  edge error on either side; A.4.7 (the day's first bar) checks the day-wise reading itself.
 - The indicator-only keys of G3 and G4 (EMA, RMA, ATR, TR, RSI, SMA, donchian 55) are required now even where the
   example's item is not built, because `lawsearch-ind.ts` already computes them. They check the wiring of the app
   functions (spec 17.1) before the items that use them are written.
+- (Step 4's round A, 2026-11-15: E01–E03, E05–E12 and E14–E21 built, each with F00 / F01 / F02 / F02r; 200 trials
+  are built in all. TS and Python each 118 pass, 0 fail, 28 skip.) Required now besides the rows above:
+
+| examples | required (new) |
+|---|---|
+| A.3.7, A.3.9 | `cond`, `signals` (A.3.7 also `warmup_k`, `excluded_by_warmup_1`) |
+| A.3.8 | `signals` whole (was E04's part) |
+| A.3.10 E10, E11 | `E10`, `E11` |
+| A.3.11 | `rawK`, `K`, `D`, `xup_K_D`, `xdn_K_D`, `signals` |
+| A.3.12 | `RCI9`, `ranks`, `xup_RCI_m80`, `xdn_RCI_p80`, `signals` |
+| A.3.13 | `RCI9`, `ranks`, `xup_RCI_m80`, `signals`, `bars_within_1e-9_of_pm80`, `decisions_allowed_to_differ` |
+| A.3.14 | `line_5_35`, `signal_5`, `signal_5_seed_index`, `signals` whole (was E13's part) |
+| A.3.15, A.3.16 | `signals`, `warmup_k`, `excluded_by_warmup_1` whole (were E13's parts) |
+| A.3.17 | `line_12_26`, `xup_line_0`, `xdn_line_0`, `signals`, `warmup_k`, `kept_after_warmup`, `excluded_by_warmup_1` |
+| A.3.18 | `signals` |
+| A.3.19 | the `E` rows of E01–E03, E05–E12, E14–E21 (with E04's and E13's: every `E` row but E22–E25's) |
+| A.3.28 | `RSI7`, `E02_signals_after_rising_edge`, `filters_at_signals` `EMA12` / `ATR14` / `SMA5_ATR14` / `RSI14`, `trials` `E02.F00` / `E02.F01` / `E02.F02` / `E02.F02r`, `warmup_k` |
+| A.3.30 | `signals`, `filters_at_signal_bars` `bars` / `T` / `RSI14`, `trials` `E18` and `E21` × `F00` / `F01` / `F02` / `F02r`, `variant_flat_150000` |
+
+- The TS's key path reader now takes a key that holds a dot (`trials["E02.F00"]`), so the TS checks A.3.28's
+  `trials` as the Python has since the pilot. `ATR14`, `SMA5_ATR14` and `RSI14` at A.3.28's signals are F04's and
+  F05's inputs (not built), required by the rule above for indicator-only keys. Still skip inside these examples:
+  `ADX14` (F03), `day_open` (F07), the `trials` rows of F01r and F03–F07r, and A.3.28's `excluded_by_warmup_1` (its
+  answer is a list over E02 with all 15 F).
+- Both runners require the same keys: compared key by key on 2026-11-15, 145 of the 146 examples hold the same set
+  of passed keys on both sides; A.3.19 names its rows differently on the two sides, and both check every built `E` row.
+- What the examples do not pin (both builders, by changing one constant on a copy): the stochastic's gate
+  (%K < 20 / > 80; any gate in (18.06, 36.98] passes A.3.10, and `<=` for `<` passes every example, since no
+  example's %K is exactly 20 or 80), and E12's line (−79 for −80 passes A.3.12 and A.3.13). For these the TS–Python
+  comparison on synthetic runs is the check.
+- E12's RCI is exactly ±80 on many bars (RCI(9) takes finitely many values; 1,110 of the 9! tie-free windows give
+  ±80), so `lawsearch-dump.md` 9.2b (the TS's rows adopted at bars within 1e-9 of ±80, as 9.2 does for B06's z) acts
+  often: on a 4,000-bar walk 18 of E12's 288 signals were on such bars (the Python builder's count).
+- The hand-level plants still fail their named examples on both sides; `smaNewestFirst` now also fails A.3.10 and
+  A.3.11 (the stochastic's %K and %D are the study's SMA3), and `htfOpen` also fails A.3.28's and A.3.30's new
+  `trials` keys with F02. Totals now: TS and Python 118 pass, 0 fail, 28 skip.
+- (Round A's review, 2026-11-15: two reviewers, one refuter.) No finding stood; all four were refuted with high
+  confidence as "the code does what the frozen spec says". What they measured, and the weak places they named:
+  - TS vs Python on made-up walks built for the hard cases (flat starts with U = D = 0, flat runs with HH = LL and
+    vr = 0, 266 and 93 windows with RCI9 exactly ±80, %K exactly 20 and 80, %K = %D, EMA5 = EMA20): every buy and sell
+    row, every indicator column and every warm-up of E01–E21 bit-identical (two reviewers, separately). RCI9 was never
+    within 1e-9 of ±80 without being exactly ±80. Mirrored walks: E10–E21 no difference; E01–E09 differ only at the
+    first move after a flat start (U = D = 0, RSI 100 on both sides), as `lawsearch-flip.ts`'s comment says.
+  - At exactly the boundary values, on both sides (the refuter's stub inputs): E10 refuses the crossings at %K = 20
+    and %K = 80 (strict gate); E12 counts RCI = −80 as below for X↑ and +80 as above for X↓.
+  - The examples pin even fewer constants than the builders said (the reviewers' constant-change runs): besides the
+    stochastic's gate and E12's line, an RSI line moved by ±1 (E01, E02, E03, E05, E06's buy side), E09's buy side
+    and E07's / E08's sell sides at 49 or 51, and E15's zero at ±1e−6 pass every example. Warm-up changes are all
+    caught. The reviewers and the refuter read these constants in both implementations against spec 4.1 (L and
+    100 − L, 50, < 20 / > 80, −80 / +80, 0): they match today. A wrong constant shared by both sides would pass the
+    examples and the TS–Python comparison; reading is the only check there.
+  - A.3.13 cannot catch a wrong equality rule for E12 (`<` for `≤` at RCI = −80): its bars 9 and 10 are the bars spec
+    17.2 / 17.4 let differ, so both runners blank them. The spec chose this on purpose (hand.md, reading (b)); a change
+    is the owner's.
+  - Defense in depth not taken: in `--compare` mode the comparator learns RCI-border bars from `ind/` rows only, and
+    the run's adoption sees the TS's RCI9 only on `ind/` rows (9.2's B06 code has the same shape). This acts only if
+    the two RCI9 differ in the last digits, which the two implementations cannot do on a series (same rank rule, same
+    order of operations, every term exact; 80,000 tie-heavy bars gave 0 bitwise differences).
 
 - Where an example's keys mix items, the adapter checks the built item's keys and reports the others as "skip (not
   built: E07)".

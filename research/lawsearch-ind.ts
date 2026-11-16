@@ -1,17 +1,23 @@
 // 法則探し (docs §8.136, research/lawsearch-spec.md): the indicator arrays of one series (builder B,
 // research/lawsearch-design.md 5.1).
 //
-// Spec 3.2 and 17.1: EMA, RMA, ATR and RSI go through the app functions (pine.ts pineEma, pineRma, pineAtr;
-// ultra.ts pineRsi); SMA is the research's own, summed oldest first (pine.ts sma sums newest first and is used only
-// by the planted error smaNewestFirst); donchian is §8.113 C1 and bigmove §8.113 C17 with spec 17.3's substitutions.
-// The app functions return Array<number | null>; this module converts with toF64 (null and non-finite → NaN) and
-// never hands an Array to another module. 無し is NaN in a Float64Array and −1 in a Tri.
+// Spec 3.2 and 17.1: EMA, RMA, ATR, RSI, MACD and RCI go through the app functions (pine.ts pineEma, pineRma, pineAtr;
+// ultra.ts pineRsi; macd.ts macd; src/lib/rci.ts rci, step 4 round A); SMA is the research's own, summed oldest first
+// (pine.ts sma sums newest first and is used only by the planted error smaNewestFirst), and so is the slow stochastic
+// (step 4 round A, its SMA3 the same SMA); donchian is §8.113 C1, bigmove §8.113 C17 and rsi2 §8.113 C19
+// with spec 17.3's substitutions; E29's inside bar and E30's previous day are spec 4.1's own formulas (17.1: the
+// research writes E29–E32 itself). The app functions return Array<number | null>; this module converts with toF64
+// (null and non-finite → NaN) and never hands an Array to another module. 無し is NaN in a Float64Array and −1 in a
+// Tri.
 //
-// Every comparison here stays on doubles with no tolerance (spec 3.1, 21.5).
+// Every comparison here stays on doubles with no tolerance (spec 3.1, 21.5), or on the integer points where the spec
+// says points (E29, §8.113 C19).
 
 import { pineAtr, pineEma, pineRma, sma as pineSmaNewestFirst } from "../supabase/functions/_shared/pine.ts";
 import { pineRsi } from "../supabase/functions/_shared/ultra.ts";
-import type { BigmoveOut, BigmoveParams, DonchianOut, Ind, RsiOut, Series, Tri } from "./lawsearch-types.ts";
+import { macd as appMacd } from "../supabase/functions/_shared/macd.ts";
+import { rci as appRci, RCI_DEFAULTS } from "../src/lib/rci.ts";
+import type { BigmoveOut, BigmoveParams, DonchianOut, Ind, MacdOut, RsiOut, Series, StochOut, Tri } from "./lawsearch-types.ts";
 
 // ---- conversions -------------------------------------------------------------------------------------------
 
@@ -291,6 +297,153 @@ export function bigmoveOf(s: Series, o: BigmoveParams): BigmoveOut {
   return { r, usable, sigma, z };
 }
 
+// ---- §8.113 C19 rsi2 (spec 3.3, 4.4 B07; step 4) -------------------------------------------------------------
+
+// §8.113 C19's RSI2 on the point closes c = Pc, from bar 0 (S0 から続けて): u[k] = max(c[k] − c[k−1], 0), v[k] =
+// max(c[k−1] − c[k], 0); at bar 2 AG = (u[1] + u[2]) ÷ 2 and AL = (v[1] + v[2]) ÷ 2; from bar 3 AG = (AG × 1 + u[k])
+// ÷ 2 and AL = (AL × 1 + v[k]) ÷ 2, in doubles and in this order (C19's words). 無し before bar 2. Nothing after bar
+// k is read for bar k. The comparisons RSI2 < 10 ⇔ 9 × AG < AL and RSI2 > 90 ⇔ AG > 9 × AL are the item's
+// (lawsearch-items.ts B07).
+export function rsi2Of(s: Series): { AG: Float64Array; AL: Float64Array } {
+  const n = s.n;
+  const c = s.Pc;
+  const AG = new Float64Array(n).fill(NaN);
+  const AL = new Float64Array(n).fill(NaN);
+  if (n < 3) return { AG, AL };
+  const up = (k: number) => Math.max(c[k] - c[k - 1], 0);
+  const dn = (k: number) => Math.max(c[k - 1] - c[k], 0);
+  let ag = (up(1) + up(2)) / 2;
+  let al = (dn(1) + dn(2)) / 2;
+  AG[2] = ag;
+  AL[2] = al;
+  for (let k = 3; k < n; k++) {
+    ag = (ag * 1 + up(k)) / 2;
+    al = (al * 1 + dn(k)) / 2;
+    AG[k] = ag;
+    AL[k] = al;
+  }
+  return { AG, AL };
+}
+
+// §8.113 C19's 200-bar mean parts on the point closes: up[i] = (w × c[i] > Σ c[i−w+1..i]), dn[i] = (w × c[i] <
+// Σ c[i−w+1..i]), 無し for i < w − 1 (w = 200). The closes are integers and every partial sum is an integer below
+// 2^53 (w × 2^31 at most), so each sum is exact whatever the order: the running sum (the new close added, the leaving
+// one taken away) is the same double as the window summed oldest first (spec 3.1), and it reads nothing after bar i.
+export function mean200Of(s: Series, w = 200): { up: Tri; dn: Tri } {
+  const n = s.n;
+  const c = s.Pc;
+  const up = new Int8Array(n).fill(-1);
+  const dn = new Int8Array(n).fill(-1);
+  let sum = 0;
+  for (let i = 0; i < n; i++) {
+    sum += c[i];
+    if (i >= w) sum -= c[i - w];
+    if (i < w - 1) continue;
+    const x = w * c[i];
+    up[i] = x > sum ? 1 : 0;
+    dn[i] = x < sum ? 1 : 0;
+  }
+  return { up, dn };
+}
+
+// ---- spec 3.2 slow stochastic and RCI (step 4, round A: E10, E11, E12) -------------------------------------------
+
+// The slow stochastic's raw %K (spec 3.2, on the mid doubles): HH = max H[i−k+1..i], LL = min L[i−k+1..i], rawK =
+// (100 × (C − LL)) ÷ (HH − LL), in this order; 無し for i < k − 1, where HH = LL, and where a value of the window is
+// not finite. Each window is scanned afresh (k is 5 or 14), so nothing after bar i is read for bar i. %K and %D are
+// SMA3 of rawK and of %K, the study's oldest-first SMA (Ind.stoch, through smaOf: the plant smaNewestFirst reaches it).
+export function rawKOf(s: Series, k: number): Float64Array {
+  const n = s.n;
+  const out = new Float64Array(n).fill(NaN);
+  for (let i = k - 1; i < n; i++) {
+    let hh = -Infinity, ll = Infinity;
+    let ok = Number.isFinite(s.C[i]);
+    for (let j = i - k + 1; ok && j <= i; j++) {
+      const h = s.H[j], l = s.L[j];
+      if (!Number.isFinite(h) || !Number.isFinite(l)) ok = false;
+      else {
+        if (h > hh) hh = h;
+        if (l < ll) ll = l;
+      }
+    }
+    if (!ok || hh === ll) continue;
+    out[i] = (100 * (s.C[i] - ll)) / (hh - ll);
+  }
+  return out;
+}
+
+// The ranks of RCI(n)'s window C[i−n+1..i] (spec 3.2: 順位 ＝ (窓の中でそれより小さい数) ＋ (等しい数 − 1) ÷ 2), oldest
+// first; null for i < n − 1. This is the rank that src/lib/rci.ts makes inside its window (rciOfWindow), written out
+// for the hand examples (A.3.12, A.3.13 「順位」) only: the RCI itself is always rci.ts's (Ind.rci, spec 17.1).
+export function rciRanksOf(C: Float64Array, i: number, n: number): number[] | null {
+  if (i < n - 1) return null;
+  const w: number[] = [];
+  for (let j = i - n + 1; j <= i; j++) w.push(C[j]);
+  return w.map((v) => {
+    let below = 0, equal = 0;
+    for (const u of w) {
+      if (u < v) below++;
+      else if (u === v) equal++;
+    }
+    return below + (equal - 1) / 2;
+  });
+}
+
+// ---- spec 4.1 E29 and E30 (step 4) -------------------------------------------------------------------------
+
+// E29's inside bar (spec 4.1, in points): inside[i] = (Ph[i−1] ≤ Ph[i−2] && Pl[i−1] ≥ Pl[i−2]); 無し for i < 2
+// (equal highs or lows are inside)
+export function insideOf(s: Series): Tri {
+  const out = new Int8Array(s.n).fill(-1);
+  for (let i = 2; i < s.n; i++) out[i] = s.Ph[i - 1] <= s.Ph[i - 2] && s.Pl[i - 1] >= s.Pl[i - 2] ? 1 : 0;
+  return out;
+}
+
+// E30's previous day (spec 2 日, 4.1 E30's notes), per bar i: first[i] = 1 at the first bar of its day D(s_i)
+// (series.day); prevDay[i] = the previous day (the latest day before D(s_i) that has a bar, i.e. the day of the
+// bars just before bar i's day) as YYYYMMDD, −1 when there is none; prevBars[i] = that day's bar count; PDH[i] and
+// PDL[i] = the max H and min L of that day's bars (the rounded mid doubles), 無し when there is no previous day or it
+// has fewer than minBars bars. Only bars before bar i's day are read for bar i. The days of a series never go back
+// in time (D is (t + 3 h)'s date, a Saturday moved to the Friday), and this function stops when they do.
+export function pdayOf(s: Series, minBars: number): { first: Uint8Array; prevDay: Int32Array; prevBars: Int32Array; PDH: Float64Array; PDL: Float64Array } {
+  const n = s.n;
+  const first = new Uint8Array(n);
+  const prevDay = new Int32Array(n).fill(-1);
+  const prevBars = new Int32Array(n);
+  const PDH = new Float64Array(n).fill(NaN);
+  const PDL = new Float64Array(n).fill(NaN);
+  // the day being read, and the day before it
+  let day = -1, hi = -Infinity, lo = Infinity, count = 0;
+  let pDay = -1, pHi = NaN, pLo = NaN, pCount = 0;
+  for (let i = 0; i < n; i++) {
+    const d = s.day[i];
+    if (i === 0 || d !== day) {
+      if (i > 0 && d < day) throw new Error(`pdayOf: ${s.pair} ${s.key}: the day goes back at bar ${i} (${day} → ${d})`);
+      if (i > 0) {
+        pDay = day;
+        pHi = hi;
+        pLo = lo;
+        pCount = count;
+      }
+      day = d;
+      hi = -Infinity;
+      lo = Infinity;
+      count = 0;
+      first[i] = 1;
+    }
+    prevDay[i] = pDay;
+    prevBars[i] = pCount;
+    if (pDay !== -1 && pCount >= minBars) {
+      PDH[i] = pHi;
+      PDL[i] = pLo;
+    }
+    count++;
+    if (s.H[i] > hi) hi = s.H[i];
+    if (s.L[i] < lo) lo = s.L[i];
+  }
+  return { first, prevDay, prevBars, PDH, PDL };
+}
+
 // ---- the Ind of one series (lazy, cached per name and parameter) -------------------------------------------
 
 // The indicators of one series (spec 3.2, 17.1). higher: the higher timeframe's series and the usable higher bar
@@ -387,6 +540,37 @@ export function indOf(series: Series, higher?: { series: Series; g: Int32Array }
           },
           rsi,
         };
+      }),
+    // step 4 (E13): the app's macd (_shared/macd.ts: line = pineEma(C, f) − pineEma(C, s), 無し when either is;
+    // signal = pineEma(line, m), seeded where m lines are first present), its line and signal only (spec 17.1). C is
+    // handed as a plain array copied by a loop, as for pineRsi above.
+    macd: (f: number, sl: number, m: number) =>
+      memo(`macd:${f}:${sl}:${m}`, (): MacdOut => {
+        const closes: number[] = [];
+        for (let i = 0; i < C.length; i++) closes.push(C[i]);
+        const r = appMacd(closes, { fast: f, slow: sl, signal: m });
+        return { line: toF64(r.macd), signal: toF64(r.signal) };
+      }),
+    // step 4, round A (E10, E11): the slow stochastic (k, 3, 3) of spec 3.2, the research's own (spec 17.1 names no app
+    // function for it): rawK (rawKOf), %K = SMA3(rawK) and %D = SMA3(%K) through smaOf (oldest first; a window that
+    // holds 無し is 無し; plant smaNewestFirst: pine.ts sma)
+    stoch: (k: number) =>
+      memo(`stoch:${k}`, (): StochOut => {
+        const rawK = rawKOf(series, k);
+        const K = smaOf(rawK, 3);
+        return { rawK, K, D: smaOf(K, 3) };
+      }),
+    // step 4, round A (E12): the app's rci (src/lib/rci.ts) called with length n, its rci column only (spec 3.2 and
+    // 17.1; the ma it also returns is not used, so its smoothing is left at rci.ts's default). rci.ts squares with
+    // ** 2 where spec 3.2 writes x*x: the ranks less their mean are multiples of 0.5 and t − 4 is a whole number, so
+    // every square and sum is exact either way (spec 3.2's note), and RCI is compared to 1e−9 (spec 17.2; the E12
+    // decisions near ±80 may differ, lawsearch-dump.md 9.2b). The candles are plain objects made by a loop, as for
+    // pineAtr above.
+    rci: (n: number) =>
+      memo(`rci:${n}`, () => {
+        const candles: Array<{ close: number }> = new Array(series.n);
+        for (let i = 0; i < series.n; i++) candles[i] = { close: C[i] };
+        return toF64(appRci(candles, { length: n, smoothing: RCI_DEFAULTS.smoothing }).rci);
       }),
     donchian: (n: number) => memo(`donchian:${n}`, () => donchianOf(series, n)),
     bigmove: (o: BigmoveParams) =>
