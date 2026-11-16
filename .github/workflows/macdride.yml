@@ -1,18 +1,15 @@
-# The owner (2026-11-16): 「1通目90%触れ・2通目95%」, and, shown the numbers (docs §8.154), 「90%触れ→95%に変える」. The
-# replay of research/macdride10-spec.md section 9 (MACD ride v10; research/macdride-replay.ts): the code the function runs
-# (supabase/functions/_shared/macd-ride.ts) driven minute by minute over the five pairs' bars as the function's section 4
-# does it (at each minute's read the reaches, then the bar's one decision; at each close the catch-up and the tail), with
-# the rides and the decisions in memory, under two readings of the bar's extremes so far: R1, the study's
-# (research/macd90m.ts's moment entry with way C at REACH=0.95, docs §8.154), and R2, GMO's forming 1-hour bar as the
-# function reads it, with the function's week (no read in the weekend gate, none in the week's first hour).
+# The owner (2026-11-12): 「MACD 90%→96%: 足の確定で入ると 96% まで行く メールをこれに変更、なので、一つのペアで2回メールを
+# 送る」 (#397, docs §8.150). The replay of research/macdride-spec.md section 9 (research/macdride-replay.ts): the code
+# the function runs (supabase/functions/_shared/macd-ride.ts) driven bar by bar and minute by minute over the five
+# pairs' bars, with the rides in memory, under two readings of the hour's high and low so far: R1, the study's
+# (research/macd90m.ts way C, docs §8.149), and R2, GMO's forming 1-hour bar as the function reads it.
 #
 #   syn   two seeded walks, each written as GMO's files with the study's rows on it (research/macd90m.ts
-#         MODE=walkfiles with REACH=0.95, as it is: that file exports nothing, so the replay reads its rows from its
-#         files); then the replay on both: R1 must equal the study's moment rows with way C and its summary's numbers,
-#         its tail and catch-up must find nothing, and the walks' checks of R2 and the lone reading must hold
+#         MODE=walkfiles, as it is: that file exports nothing, so the replay reads its rows from its files); then the
+#         replay on both: R1 must equal the study's way C rows and its summary's numbers, the catch-up must find
+#         nothing the minutes did not, and R2 and the catch-up alone are held against each other
 #   real  GMO's real 1-hour and 1-minute bars (research/.cache, fetched when missing), after syn passed: the study's
-#         rows (research/macd90m.ts with REACH=0.95, as it is), then the replay: R1 must equal them or the job fails; then
-#         R2's numbers (research/macdride10-spec.md section 8's list) and R2 against R1
+#         rows (research/macd90m.ts, as it is), then the replay: R1 must equal them or the job fails; then R2's numbers
 #
 # GitHub's runners reach GMO's public price API, which the development container cannot. Read-only: public files
 # fetched, a report printed; it writes nothing to the repository and holds no secret.
@@ -49,15 +46,14 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.9.6
-      - name: Two walks as GMO's files, and the study's rows on each (research/macd90m.ts at REACH=0.95, as it is)
+      - name: Two walks as GMO's files, and the study's rows on each (research/macd90m.ts, as it is)
         env:
           MODE: walkfiles
-          REACH: "0.95"
         run: |
           for s in 1 2; do
             SEEDS=$s OUT=research/out/macdride/walk$s deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/macd90m.ts
           done
-      - name: The replay on both walks (R1 against the study's moment rows, its tail and catch-up, R2, the lone reading, the steps said again from the rows)
+      - name: The replay on both walks (R1 against the study's rows, the catch-up, R2, the steps said again from the rows)
         env:
           MODE: synthetic
           SEEDS: "1,2"
@@ -106,10 +102,9 @@ jobs:
           path: research/.cache
           key: gmo-macdride-none
           restore-keys: gmo-macdride-
-      - name: The study's rows (research/macd90m.ts at REACH=0.95, as it is; its numbers go to files, none printed here)
+      - name: The study's rows (research/macd90m.ts, as it is; its numbers go to files, none printed here)
         env:
           MODE: real
-          REACH: "0.95"
           OUT: research/out/macd90m
         run: |
           mkdir -p $OUT
@@ -123,7 +118,7 @@ jobs:
         with:
           path: research/.cache
           key: gmo-macdride-${{ github.run_id }}
-      - name: The replay (R1 must equal the study's moment rows with way C or this fails; then R2's numbers)
+      - name: The replay (R1 must equal the study's rows or this fails; then R2's numbers)
         env:
           MODE: real
           OUT: research/out/macdride
@@ -143,7 +138,7 @@ jobs:
             research/out/macdride
             research/out/macd90m/rows.csv
             research/out/macd90m/summary.json
-      - name: The numbers (R1 equalled the study's moment rows)
+      - name: The numbers (R1 equalled the study's rows)
         env:
           MODE: print
           OUT: research/out/macdride
