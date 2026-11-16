@@ -96,6 +96,20 @@ const triOf = (n: number, f: (i: number) => number): Tri => {
   return out;
 };
 
+// spec 24 の1 (the owner's answer, 2026-11-16): ItemDef.margins / FilterDef.margins. absDiffs: |x − y| of each pair,
+// a pair holding a 無し (NaN) or a bar outside the series left out. crossPairs: the two pairs a crossing X(a, b) at
+// bar i compares (a, b at i − 1 and at i; b an array or a line). Read only by lawsearch-flip.ts, never by a build.
+const absDiffs = (pairs: ReadonlyArray<readonly [number, number]>): number[] => {
+  const out: number[] = [];
+  for (const [x, y] of pairs) if (x !== undefined && y !== undefined && !Number.isNaN(x) && !Number.isNaN(y)) out.push(Math.abs(x - y));
+  return out;
+};
+const crossPairs = (a: ArrayLike<number>, b: ArrayLike<number> | number, i: number): Array<[number, number]> => {
+  const out: Array<[number, number]> = [];
+  for (const j of [i - 1, i]) if (j >= 0 && j < a.length) out.push([a[j], typeof b === "number" ? b : b[j]]);
+  return out;
+};
+
 // E01–E06 rsi_back_p_L (spec 4.1): buy X↑(RSI_p, L), sell X↓(RSI_p, 100 − L); a cross item (spec 5); warm-up p + 1.
 // E07–E09 rsi_50_p are the same with L = 50 (buy X↑(RSI_p, 50), sell X↓(RSI_p, 50); step 4, round A). The RSI is
 // pineRsi's through the Ind's cache (one array per p, shared by every item of that p: E03, E04 and E08 read RSI14).
@@ -130,6 +144,11 @@ const rsiBack = (id: string, p0: number, L: number): ItemDef => {
           [`${id}_sell`]: sell,
         },
       };
+    },
+    // spec 24 の1: X↑(RSI, L) and X↓(RSI, 100 − L) at i − 1 and i
+    margins(ind: Ind, i: number, params?: ItemParams): number[] {
+      const r = ind.rsi(pOf(params)).rsi;
+      return absDiffs([...crossPairs(r, L, i), ...crossPairs(r, 100 - L, i)]);
     },
   };
 };
@@ -215,6 +234,11 @@ const macdSig = (id: string, f: number, sl: number, m: number): ItemDef => {
         warmup: warmupFor(params),
         columns: { [`MACD${f}_${sl}`]: mc.line, [`MACD${f}_${sl}_SIG`]: mc.signal, [`${id}_buy`]: buy, [`${id}_sell`]: sell },
       };
+    },
+    // spec 24 の1: X(line, signal) at i − 1 and i
+    margins(ind: Ind, i: number): number[] {
+      const mc = ind.macd(f, sl, m);
+      return absDiffs(crossPairs(mc.line, mc.signal, i));
     },
   };
 };
@@ -362,6 +386,11 @@ const stochKd = (id: string, k: number): ItemDef => {
         columns: { [`STOCH${k}_K`]: st.K, [`STOCH${k}_D`]: st.D, [`${id}_buy`]: buy, [`${id}_sell`]: sell },
       };
     },
+    // spec 24 の1: X(%K, %D) at i − 1 and i, and the gates %K[i] vs 20 and vs 80
+    margins(ind: Ind, i: number): number[] {
+      const st = ind.stoch(k);
+      return absDiffs([...crossPairs(st.K, st.D, i), [st.K[i], 20], [st.K[i], 80]]);
+    },
   };
 };
 
@@ -380,6 +409,11 @@ const rciItem = (id: string, n0: number): ItemDef => {
       const buy = xUp(r, -80);
       const sell = xDn(r, 80);
       return { kind: "cross", cond: [buy, sell], keep: null, warmup: warmupFor(params), columns: { [`RCI${n0}`]: r, [`${id}_buy`]: buy, [`${id}_sell`]: sell } };
+    },
+    // spec 24 の1: X↑(RCI, −80) and X↓(RCI, +80) at i − 1 and i
+    margins(ind: Ind, i: number): number[] {
+      const r = ind.rci(n0);
+      return absDiffs([...crossPairs(r, -80, i), ...crossPairs(r, 80, i)]);
     },
   };
 };
@@ -401,6 +435,10 @@ const macdZero = (id: string, f: number, sl: number): ItemDef => {
       const sell = xDn(line, 0);
       return { kind: "cross", cond: [buy, sell], keep: null, warmup: warmupFor(params), columns: { [`MACD${f}_${sl}`]: line, [`${id}_buy`]: buy, [`${id}_sell`]: sell } };
     },
+    // spec 24 の1: X(line, 0) at i − 1 and i
+    margins(ind: Ind, i: number): number[] {
+      return absDiffs(crossPairs(ind.macd(f, sl, 9).line, 0, i));
+    },
   };
 };
 
@@ -420,6 +458,10 @@ const ema2 = (id: string, f: number, sl: number): ItemDef => {
       const sell = xDn(fast, slow);
       return { kind: "cross", cond: [buy, sell], keep: null, warmup: warmupFor(params), columns: { [`EMA${f}`]: fast, [`EMA${sl}`]: slow, [`${id}_buy`]: buy, [`${id}_sell`]: sell } };
     },
+    // spec 24 の1: X(EMA_f, EMA_s) at i − 1 and i
+    margins(ind: Ind, i: number): number[] {
+      return absDiffs(crossPairs(ind.ema(f), ind.ema(sl), i));
+    },
   };
 };
 
@@ -437,6 +479,10 @@ const cEma = (id: string, n0: number): ItemDef => {
       const buy = xUp(ind.series.C, ema);
       const sell = xDn(ind.series.C, ema);
       return { kind: "cross", cond: [buy, sell], keep: null, warmup: warmupFor(params), columns: { [`EMA${n0}`]: ema, [`${id}_buy`]: buy, [`${id}_sell`]: sell } };
+    },
+    // spec 24 の1: X(C, EMA_n) at i − 1 and i
+    margins(ind: Ind, i: number): number[] {
+      return absDiffs(crossPairs(ind.series.C, ind.ema(n0), i));
     },
   };
 };
@@ -476,6 +522,10 @@ const f01: FilterDef = (() => {
         return Number.isNaN(x) ? -1 : -1 * x > 0 ? 1 : 0;
       });
       return { f: [buy, sell], warmup: warmupFor(params), warmOk: null, columns: { EMA200: ema, F01_buy: buy, F01_sell: sell } };
+    },
+    // spec 24 の1: C[i] vs EMA200[i]
+    margins(ind: Ind, i: number, params?: ItemParams): number[] {
+      return absDiffs([[ind.series.C[i], ind.ema(eOf(params))[i]]]);
     },
   };
 })();
@@ -526,6 +576,14 @@ const htfFilter = (id: "F02" | "F02r"): FilterDef => ({
   build(ind: Ind, params?: ItemParams): FilterBuild {
     const x = htfSlopeOf(ind, params);
     return { f: id === "F02" ? [x.buy, x.sell] : [x.sell, x.buy], warmup: params?.fWarmup ?? 0, warmOk: x.warmOk, columns: x.columns };
+  },
+  // spec 24 の1: EMA50[g] vs EMA50[g − 1] on the higher bars, g the base bar i's (htfSlopeOf's pair, read directly)
+  margins(ind: Ind, i: number, params?: ItemParams): number[] {
+    if (ind.higher === null || ind.g === null || i < 0 || i >= ind.g.length) return [];
+    const k = ind.g[i];
+    if (k < 1) return [];
+    const ema = ind.higher.ema(params?.htfEma ?? HTF_EMA);
+    return absDiffs([[ema[k], ema[k - 1]]]);
   },
 });
 

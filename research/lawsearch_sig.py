@@ -2671,7 +2671,7 @@ def run_hand(examples, plant=""):
 
 # ---- the rules files' sha256 (py-design 2)
 RULES_SHA256 = {
-    "lawsearch-spec.md": "9c9b5dc08c7fc224c4cf41cea49cef509e0409116a0263cea373451db3f00ff9",
+    "lawsearch-spec.md": "a434362aa418c0be49bb967ea236e4d7663715ae26029656c57f6f4dcc258ffd",
     "lawsearch-hand.json": "41d4788084630bb4dbc7f6c0a3a46cce40dd604a76b29358f84bf461f53a1d9a",
     "lawsearch-hand.md": "f51112b57eb3d62df4afadcf3e838bbf51cb54b62942ca095c881d701840bae7",
 }

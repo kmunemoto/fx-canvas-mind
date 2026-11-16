@@ -299,6 +299,12 @@ export interface ItemDef {
   // trialWarmup needs it, so every item written later provides it too.
   warmupFor(params?: ItemParams): number;
   build(ind: Ind, params?: ItemParams): ItemBuild;
+  // spec 24 の1 (the owner's answer, 2026-11-16; lawsearch-flip.ts): |x − y| of every pair of values the item's buy
+  // and sell decisions compare at bar i on this Ind (a crossing also at bar i − 1); a pair holding a 無し is left out.
+  // Read only by the flip judgement, on a row that has no mirrored twin: a value above 0 and below 1e−9 on either side
+  // makes the row a rounding difference. Optional: an item without it (its comparisons are exact under the exact
+  // mirror, as point comparisons are, or it is not judged) gets no rounding allowance (every such row counts).
+  margins?(ind: Ind, i: number, params?: ItemParams): number[];
 }
 
 // A filter F (spec 4.2) on one series
@@ -318,6 +324,8 @@ export interface FilterDef {
   // as ItemDef.warmupFor
   warmupFor(params?: ItemParams): number;
   build(ind: Ind, params?: ItemParams): FilterBuild;
+  // as ItemDef.margins: the pairs the filter's buy and sell decisions compare at bar i (spec 24 の1)
+  margins?(ind: Ind, i: number, params?: ItemParams): number[];
 }
 
 // One row of research/ledger/lawsearch-candidates.json

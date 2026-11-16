@@ -2694,6 +2694,26 @@ before that check. Its judgement on N 1001 and FLIP 1001 with the C4g code: exit
   back from the files as the first bar's Bid open + floor(spread ÷ 2) and checked against `GEN_START`; spec 2's
   rounded first mid open can differ by 1 point (N 1001: AUD/JPY 80001 against 80000), and any whole-point S keeps h
   and PL exact (C2 refute 7 measured no change).
+- (Step 4, round A, 2026-11-16; spec 24 の1, the owner's answer 「丸めの違いを別に数える」) The signals' condition
+  counts rounding differences apart. A row in one side only is a rounding difference when, at its bar, a pair of
+  values its decisions compare differs by more than 0 and less than 1e−9 on the original's Ind or the mirror's. The
+  pairs are the item's `margins(ind, i)` and, for an E × F trial or an S row, the F's (`ItemDef.margins`,
+  `FilterDef.margins`, lawsearch-types.ts; written for the items and F's whose comparisons are on doubles: E01–E21
+  and F01, F02, F02r; a crossing gives its two pairs at i − 1 and i, a gate its pair at i). The 0.1% is judged on the
+  other rows, and the line prints both counts (`of them rounding … a and b, difference without rounding …`).
+  - Why exactly equal pairs are not an allowance (the lead's reading of the owner's answer, whose purpose was that a
+    direction error is still found): symmetric code decides exactly equal pairs as mirrors on both sides, so a row
+    split there is an asymmetry, not rounding. Measured on round A's run: with E10's buy made strict at an exact
+    %K = %D tie (a mutant), 98 of m15 E10.F00's 114 rows in one side only had exactly equal pairs only; they count,
+    and the four m15 E10 trials fail (0.27–0.43%); counting zeros as rounding would have passed them.
+  - Measured on round A's run (N 1002, 200 trials): before, m15 E11.F01 0.116% and E11.F02 0.106% failed; every row
+    in one side only of E10 / E11 (40 for F00) had a pair in (0, 3e−11) on one side. After: every trial passes, every
+    E10 / E11 row in one side only is a rounding difference, and no other trial has one. Mutants (a copy): E10's sell
+    gate at 70 and E01's sell line at 100 − L + 1 fail all 16 of their trials (25–64% without rounding; at most 24
+    rounding rows).
+  - An item or F without `margins` (E26, E29, E30 and B07 compare points or values the exact mirror keeps exact; B06 is
+    not judged) gets no allowance: every row in one side only counts. Each later round writes `margins` for its items
+    that compare doubles; a missing one can only make the check stricter.
 
 ---
 

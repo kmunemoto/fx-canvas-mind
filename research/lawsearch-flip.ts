@@ -22,7 +22,13 @@
 //     1e−9); the two tables must hold the same bars;
 //   * the symmetric items (every trial whose item is not in NOT_SYMMETRIC below): the signals (pair, bar,
 //     direction, reason, half, warm) match 1-to-1 with the direction reversed; the difference (rows in one only, both
-//     ways, ÷ the original's rows) must be ≤ 0.1% per trial;
+//     ways, ÷ the original's rows) must be ≤ 0.1% per trial. (Spec 24 の1, the owner's answer of 2026-11-16, step 4's
+//     round A) A row in one only is a ROUNDING difference, counted and printed apart and left out of the 0.1%, when at
+//     its bar a pair of values its decisions compare differs by more than 0 and less than 1e−9 on either side (the
+//     original's Ind or the mirror's): the item's margins and, for an E × F trial or an S row, the F's (ItemDef /
+//     FilterDef margins, lawsearch-items.ts). A row whose pairs are all exactly equal or 1e−9 or more apart counts as
+//     before: symmetric code makes exactly equal pairs on both sides decide as mirrors, so only an asymmetry can split
+//     them. An item or F without margins (exact under the exact mirror: point comparisons) gets no allowance;
 //   * an item of NOT_SYMMETRIC (B06: log returns of mirrored prices) is not symmetric: its name, reason and difference
 //     are printed, not judged (spec 14.2: 対称でない項目は、名前と理由を出す).
 // Also judged, so that the judgement is of the original run: the original's signals and blind tables built here equal
@@ -51,12 +57,12 @@ import { END, PAIRS, POINTS_PER_PRICE, S0, SPLIT, SPREAD_H1_SHA256 } from "./law
 import { REASONS } from "./lawsearch-rules.ts";
 import { loadUniverse, mirrorSeries, mirrorUniverse } from "./lawsearch-bars.ts";
 import { GEN_START, GEN_VERSION, treeSha256 } from "./lawsearch-gen.ts";
-import { parseCandidates, trialBuilt } from "./lawsearch-items.ts";
+import { filterOf, itemOf, parseCandidates, sFilterOf, trialBuilt } from "./lawsearch-items.ts";
 import { avoidOf, blindBarsOf, trialSignals } from "./lawsearch-events.ts";
 import { ctxOfUniverse } from "./lawsearch-checks.ts";
 import { indsOf } from "./lawsearch-stage0.ts";
 import { blindTable, lateTable, rowKey, trialRows } from "./lawsearch-trade.ts";
-import type { BlindTable, Dir, Pair, TfKey, TfSet, TrialDef, TrialSignals, Universe } from "./lawsearch-types.ts";
+import type { BlindTable, Dir, Ind, Pair, TfKey, TfSet, TrialDef, TrialSignals, Universe } from "./lawsearch-types.ts";
 
 type Row = Record<string, string>;
 
@@ -286,6 +292,8 @@ const higherCheck = (o: Universe, m: Universe, S: readonly number[]): string[] =
 
 interface Built {
   u: Universe;
+  // the Inds the signals were built on, per timeframe and pair (spec 24 の1: the margins of a row without a twin)
+  inds: { m15: Ind[]; h1: Ind[] };
   sig: Map<string, TrialSignals>;
   table: Record<string, BlindTable>;
   late: Record<string, BlindTable>;
@@ -305,7 +313,7 @@ function build(u: Universe, trials: TrialDef[], avoid: ReadonlySet<string>, answ
     table[tf] = t;
     late[tf] = lateTable(t, u.m15, half === "first" ? SPLIT : END, "");
   }
-  return { u, sig, table, late };
+  return { u, inds, sig, table, late };
 }
 
 // the rows of one trial's signals as keys (pair, bar, direction (reversed for the mirror), reason, half, warm)
@@ -314,21 +322,62 @@ const sigKeys = (sig: TrialSignals, reverse: boolean): string[] => {
   for (const c of sig.pairs) for (let r = 0; r < c.n; r++) out.push(`${PAIRS[c.pi]}|${c.i[r]}|${reverse ? -c.d[r] : c.d[r]}|${REASONS[c.reason[r]]}|${c.half[r]}|${c.warmOk[r]}`);
   return out;
 };
-const setDiff = (a: readonly string[], b: readonly string[]): { onlyA: number; onlyB: number; examples: string[] } => {
+// the rows in one only, both ways; rounding(key) says whether a row is spec 24 の1's rounding difference
+const setDiff = (a: readonly string[], b: readonly string[], rounding: (key: string) => boolean): { onlyA: number; onlyB: number; roundA: number; roundB: number; examples: string[] } => {
   const A = new Set(a);
   const B = new Set(b);
   const examples: string[] = [];
   let onlyA = 0;
   let onlyB = 0;
+  let roundA = 0;
+  let roundB = 0;
   for (const k of A) if (!B.has(k)) {
     onlyA++;
-    if (examples.length < 4) examples.push(`original ${k}, no mirrored twin`);
+    const r = rounding(k);
+    if (r) roundA++;
+    if (examples.length < 4) examples.push(`original ${k}, no mirrored twin${r ? " (rounding)" : ""}`);
   }
   for (const k of B) if (!A.has(k)) {
     onlyB++;
-    if (examples.length < 8) examples.push(`mirror (direction reversed) ${k}, no original twin`);
+    const r = rounding(k);
+    if (r) roundB++;
+    if (examples.length < 8) examples.push(`mirror (direction reversed) ${k}, no original twin${r ? " (rounding)" : ""}`);
   }
-  return { onlyA, onlyB, examples };
+  return { onlyA, onlyB, roundA, roundB, examples };
+};
+
+// spec 24 の1 (the owner's answer, 2026-11-16): the pairs a trial's decisions compare at bar i of pair pi, on one side
+// (the item's margins, and the F's for an E × F trial or the S row's F); an item or F without margins gives none
+const marginsOf = (t: TrialDef, ind: Ind, i: number): number[] => {
+  const out: number[] = [];
+  const add = (m?: (ind: Ind, i: number) => number[]) => {
+    if (m) out.push(...m(ind, i));
+  };
+  if (t.kind === "EF") {
+    const item = itemOf(t.e!);
+    const f = filterOf(t.f!);
+    add(item.margins?.bind(item));
+    add(f.margins?.bind(f));
+  } else if (t.kind === "S") {
+    const f = sFilterOf(t.s!);
+    add(f.margins?.bind(f));
+  } else if (t.kind === "B") {
+    const item = itemOf(t.b!);
+    add(item.margins?.bind(item));
+  }
+  return out;
+};
+// the row (a sigKeys key: pair|bar|…) is a rounding difference when, on the original's Ind or the mirror's, a pair
+// differs by more than 0 and less than 1e−9; exactly equal pairs alone do not make one (symmetric code decides them as
+// mirrors on both sides)
+const ROUNDING = 1e-9;
+const roundingOf = (t: TrialDef, o: Ind[], m: Ind[]) => (key: string): boolean => {
+  const [pair, bar] = key.split("|");
+  const pi = PAIRS.indexOf(pair as Pair);
+  const i = Number(bar);
+  if (pi < 0 || !Number.isInteger(i)) throw new Error(`roundingOf: the key ${key} names no pair and bar`);
+  for (const ind of [o[pi], m[pi]]) for (const d of marginsOf(t, ind, i)) if (d > 0 && d < ROUNDING) return true;
+  return false;
 };
 
 // one blind table of the mirror against the original's: the same bars; mirror buy h = original sell h; PL buy ↔ sell
@@ -499,16 +548,18 @@ export async function flipJudge(run: string, tsDir: string, flipped?: string): P
       for (const x of c.examples) lines.push(`  ${x}`);
     }
   }
-  // condition 3: the symmetric items' signals 1-to-1 reversed (≤ 0.1% per trial); the items of NOT_SYMMETRIC printed
+  // condition 3: the symmetric items' signals 1-to-1 reversed (≤ 0.1% per trial, spec 24 の1's rounding differences
+  // counted apart and left out); the items of NOT_SYMMETRIC printed
   for (const t of trials) {
     const a = sigKeys(o2.sig.get(t.id)!, false);
     const b = sigKeys(n2.sig.get(t.id)!, true);
-    const d = setDiff(a, b);
-    const share = a.length > 0 ? (d.onlyA + d.onlyB) / a.length : d.onlyB > 0 ? 1 : 0;
+    const d = setDiff(a, b, roundingOf(t, o2.inds[t.tf], n2.inds[t.tf]));
+    const rest = d.onlyA + d.onlyB - d.roundA - d.roundB;
+    const share = a.length > 0 ? rest / a.length : rest > 0 ? 1 : 0;
     const why = notSymmetricWhy(t.id);
     const judged = why === null;
     const ok = !judged || share <= 0.001;
-    const line = `SIGNALS ${t.id}: original ${a.length}, mirror ${b.length}, only original ${d.onlyA}, only mirror ${d.onlyB}, difference ${pct(share)} ${judged ? (ok ? "PASS (≤ 0.1%)" : "FAIL (> 0.1%)") : `(not symmetric: ${why}; printed, not judged)`}`;
+    const line = `SIGNALS ${t.id}: original ${a.length}, mirror ${b.length}, only original ${d.onlyA}, only mirror ${d.onlyB}, of them rounding (spec 24 の1: a pair within (0, 1e−9) on either side) ${d.roundA} and ${d.roundB}, difference without rounding ${pct(share)} ${judged ? (ok ? "PASS (≤ 0.1%)" : "FAIL (> 0.1%)") : `(not symmetric: ${why}; printed, not judged)`}`;
     if (ok) lines.push(line);
     else fail(line);
     for (const x of d.examples.slice(0, 4)) lines.push(`  ${t.id}: ${x}`);
