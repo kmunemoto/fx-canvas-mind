@@ -113,8 +113,11 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
     // #395: a sharp rise or fall is kept as BUY or SELL only for the table's
     // check; it is said as what it is, not as a side to trade
     // #397: the MACD ride's second email and its notice are not entries: said as what they are
-    if (r.ride === "out" && r.side) return `${r.pair ?? ""} ${tf} ${a.rideOut[r.side]}`.trim() + (a.ruleTag[r.rule] ?? "");
-    if (r.ride === "at") return `${r.pair ?? ""} ${tf} ${a.rideAt}`.trim() + (a.ruleTag[r.rule] ?? "");
+    // v10: at the row's own exit level (v9 96%, v10 95%), read from its id
+    if (r.ride === "out" && r.side && r.rideOutPct !== null)
+      return `${r.pair ?? ""} ${tf} ${a.rideOut[r.side](r.rideOutPct)}`.trim() + (a.ruleTag[r.rule] ?? "");
+    if (r.ride === "at" && r.rideOutPct !== null)
+      return `${r.pair ?? ""} ${tf} ${a.rideAt(r.rideOutPct)}`.trim() + (a.ruleTag[r.rule] ?? "");
     if (r.rule === "spike") return `${r.pair ?? ""} ${tf} ${r.side === "BUY" ? a.spikeUp : r.side === "SELL" ? a.spikeDown : ""}`.trim();
     // #397: a row of the MACD rules that is not a ride's (the 95% email's, stopped when the ride took its place, and
     // older ones) keeps its side, its colour and its plan line, under a tag that does not call it the ride: that
