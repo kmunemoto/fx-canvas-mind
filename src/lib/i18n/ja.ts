@@ -2234,8 +2234,12 @@ export const ja = {
     spikeDown: "急落",
     plan: (entry: string, stop: string, target: string) => `目安 ${entry} / 損切り ${stop} / 利確 ${target}`,
     // #397: the MACD ride's second email and its notice, in the recent list (docs §8.150)
-    rideOut: { BUY: "96%に届いた（買いの分）", SELL: "96%に届いた（売りの分）" } as Record<string, string>,
-    rideAt: "知らせ（もう96%）",
+    // v10: the level is the row's own (v9 96%, v10 95%), read from its id
+    rideOut: {
+      BUY: (pct: number) => `${pct}%に届いた（買いの分）`,
+      SELL: (pct: number) => `${pct}%に届いた（売りの分）`,
+    } as Record<string, (pct: number) => string>,
+    rideAt: (pct: number) => `知らせ（もう${pct}%）`,
     ridePrices: (first: string, seen: string) => `1通目の値段 ${first} / 見えた時の値段 ${seen}`,
     // #108: the live record of what each signal did afterwards
     record: {

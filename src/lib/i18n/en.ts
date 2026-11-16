@@ -2128,8 +2128,12 @@ export const en: Dict = {
     spikeUp: "Sharp rise",
     spikeDown: "Sharp fall",
     // #397: the MACD ride's second email and its notice, in the recent list (docs §8.150)
-    rideOut: { BUY: "Reached 96% (the BUY side)", SELL: "Reached 96% (the SELL side)" } as Record<string, string>,
-    rideAt: "Notice (already at 96%)",
+    // v10: the level is the row's own (v9 96%, v10 95%), read from its id
+    rideOut: {
+      BUY: (pct: number) => `Reached ${pct}% (the BUY side)`,
+      SELL: (pct: number) => `Reached ${pct}% (the SELL side)`,
+    } as Record<string, (pct: number) => string>,
+    rideAt: (pct: number) => `Notice (already at ${pct}%)`,
     ridePrices: (first: string, seen: string) => `first email's price ${first} / price when seen ${seen}`,
     plan: (entry: string, stop: string, target: string) => `Entry ${entry} / Stop ${stop} / Target ${target}`,
     // #108: the live record of what each signal did afterwards

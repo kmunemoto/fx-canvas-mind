@@ -38,12 +38,25 @@ const ruleOfId = (v: unknown): AlertRule => {
 
 // #397: which of the MACD ride's three mails a row is, from the full rule id
 // ("macdx_12_26_9_w600_1h_ride90to96of120_in_v9", "..._at_v9", "..._out_v9"; the
-// shares' start with "stockmacd"); null for any other row, an old v8 one included
+// shares' start with "stockmacd"); null for any other row, an old v8 one included.
+// v10 (research/macdride10-spec.md sections 2 and 8): the pairs' and gold's ids say
+// "touch90to95of120" (email 1 the moment the line touches 90%, email 2 at 95%:
+// "macdx_12_26_9_w600_1h_touch90to95of120_in_v10"), the shares' "ride90to95of120"
+// (from their v3); the level of email 2 and the notice is read from the id, so a v9
+// row still says 96% and a v10 row 95%
 export type RideMail = "in" | "at" | "out";
+const RIDE_ID = /^(?:macdx|stockmacd)_.*_(?:touch|ride)(\d+)to(\d+)of120_(in|at|out)_/;
 const rideOfId = (v: unknown): RideMail | null => {
   if (typeof v !== "string") return null;
-  const m = /^(?:macdx|stockmacd)_.*_ride90to96of120_(in|at|out)_/.exec(v);
-  return m ? (m[1] as RideMail) : null;
+  const m = RIDE_ID.exec(v);
+  return m ? (m[3] as RideMail) : null;
+};
+// the level (in percent) of email 2 and the notice of the ride a row is of; null for
+// any other row
+const rideOutPctOfId = (v: unknown): number | null => {
+  if (typeof v !== "string") return null;
+  const m = RIDE_ID.exec(v);
+  return m ? Number(m[2]) : null;
 };
 
 // #108: what a recorded signal did after it fired
@@ -86,9 +99,13 @@ export interface AlertRow {
   kind: "signal" | "test";
   rule: AlertRule;
   // #397: the MACD ride's mail this row is: "in" = email 1 (an entry), "at" = the
-  // notice (already at 96%), "out" = email 2 (the line reached 96%; entry = the
-  // first email's price, target = the price when seen); null for every other row
+  // notice (already at the exit level), "out" = email 2 (the line reached the exit
+  // level; entry = the first email's price, target = the price when seen); null for
+  // every other row
   ride: RideMail | null;
+  // v10: the exit level of that ride in percent, from the row's id (v9 96, v10 95);
+  // null for every other row
+  rideOutPct: number | null;
   pair: string | null;
   interval: string | null;
   side: "BUY" | "SELL" | null;
@@ -215,6 +232,7 @@ const alertRow = (v: unknown): AlertRow | null => {
     kind: r.kind,
     rule: ruleOfId(r.rule),
     ride: rideOfId(r.rule),
+    rideOutPct: rideOutPctOfId(r.rule),
     pair: str(r.pair),
     interval: str(r.interval),
     side: r.side === "BUY" || r.side === "SELL" ? r.side : null,

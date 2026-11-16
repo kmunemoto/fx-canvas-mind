@@ -733,6 +733,43 @@ describe("#275 the MACD ride (once the peak-and-valley rule) in the email-alert 
     expect(withMacdx({ alerts: stockRows }).alerts.map((r) => [r.rule, r.ride])).toEqual([["stockmacd", "in"], ["stockmacd", "at"], ["stockmacd", "out"]]);
   });
 
+  // v10 (research/macdride10-spec.md sections 2 and 8): the pairs' and gold's ids say "touch90to95of120", the shares'
+  // "ride90to95of120" from their v3; the level of email 2 and the notice is each row's own, read from its id, so a v9
+  // row still says 96% beside a v10 row's 95%, and no v10 row is shown as an earlier rule's
+  it("v10 reads the touch ids and the shares' v3 ids, each row at its own level (v9 96%, v10 95%), in Japanese and English", async () => {
+    const v10Rows = [
+      { id: "t-in", kind: "signal", rule: "macdx_12_26_9_w600_1h_touch90to95of120_in_v10", pair: "USD/JPY", interval: "1h", side: "BUY", closed_at: "2026-11-17T01:23:00.000Z", entry: 158.4, stop: null, target: null, status: "sent", created_at: "2026-11-17T01:23:10.000Z" },
+      { id: "t-at", kind: "signal", rule: "macdx_12_26_9_w600_1h_touch90to95of120_at_v10", pair: "USD/JPY", interval: "1h", side: "SELL", closed_at: "2026-11-17T02:07:00.000Z", entry: 158.2, stop: null, target: null, status: "sent", created_at: "2026-11-17T02:07:10.000Z" },
+      { id: "t-out", kind: "signal", rule: "macdx_12_26_9_w600_1h_touch90to95of120_out_v10", pair: "USD/JPY", interval: "1h", side: "BUY", closed_at: "2026-11-17T03:10:00.000Z", entry: 158.4, stop: null, target: 158.9, status: "sent", created_at: "2026-11-17T03:10:05.000Z" },
+      { id: "v9-out", kind: "signal", rule: "macdx_12_26_9_w600_1h_ride90to96of120_out_v9", pair: "EUR/JPY", interval: "1h", side: "SELL", closed_at: "2026-11-12T03:11:00.000Z", entry: 171.2, stop: null, target: 171.5, status: "sent", created_at: "2026-11-12T03:11:05.000Z" },
+      { id: "s3-at", kind: "signal", rule: "stockmacd_12_26_9_w600_1h_ride90to95of120_at_v3", pair: "NVDA", interval: "1h", side: "BUY", closed_at: "2026-11-17T16:30:00.000Z", entry: 181, stop: null, target: null, status: "sent", created_at: "2026-11-17T16:30:40.000Z" },
+      { id: "s3-out", kind: "signal", rule: "stockmacd_12_26_9_w600_1h_ride90to95of120_out_v3", pair: "NVDA", interval: "1h", side: "SELL", closed_at: "2026-11-17T17:30:00.000Z", entry: 180.12, stop: null, target: 178.5, status: "sent", created_at: "2026-11-17T17:30:40.000Z" },
+    ];
+    const read = withMacdx({ alerts: v10Rows }).alerts;
+    expect(read.map((r) => [r.rule, r.ride, r.rideOutPct])).toEqual([
+      ["macdx", "in", 95], ["macdx", "at", 95], ["macdx", "out", 95], ["macdx", "out", 96], ["stockmacd", "at", 95], ["stockmacd", "out", 95],
+    ]);
+    // a row that is not a ride's has no level
+    expect(withMacdx({ alerts: rideRows }).alerts.map((r) => r.rideOutPct)).toEqual([96, 96, 96, 96, null]);
+    const { unmount } = render(<SignalAlertSettings call={async () => withMacdx({ alerts: v10Rows })} />);
+    let rows = await screen.findAllByTestId("signal-alert-row");
+    expect(rows).toHaveLength(6);
+    expect(rows[0].textContent).toContain("USD/JPY 1時間 買い（MACD の流れ）");
+    expect(rows[0].textContent).not.toContain("前の決まり");
+    expect(rows[1].textContent).toContain("USD/JPY 1時間 知らせ（もう95%）（MACD の流れ）");
+    expect(rows[2].textContent).toContain("USD/JPY 1時間 95%に届いた（買いの分）（MACD の流れ）");
+    expect(rows[3].textContent).toContain("EUR/JPY 1時間 96%に届いた（売りの分）（MACD の流れ）");
+    expect(rows[4].textContent).toContain("NVDA 1時間 知らせ（もう95%）（株の MACD）");
+    expect(rows[5].textContent).toContain("NVDA 1時間 95%に届いた（売りの分）（株の MACD）");
+    unmount();
+    render(<SignalAlertSettings call={async () => withMacdx({ alerts: v10Rows })} />, "en");
+    rows = await screen.findAllByTestId("signal-alert-row");
+    expect(rows[1].textContent).toContain("Notice (already at 95%)");
+    expect(rows[2].textContent).toContain("Reached 95% (the BUY side)");
+    expect(rows[3].textContent).toContain("Reached 96% (the SELL side)");
+    expect(rows[5].textContent).toContain("Reached 95% (the SELL side)");
+  });
+
   it("is in English too", async () => {
     render(<SignalAlertSettings call={async () => withMacdx()} />, "en");
     fireEvent.click(await screen.findByTestId("signal-alerts-rule-macdx"));
