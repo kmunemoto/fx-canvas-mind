@@ -151,3 +151,90 @@ way C is today's email 1 with email 2 at 95%.)
   price after each way's `T` moved: that way's result, `T`, pips and mae stay.
 - The counts add up; on each way in, way A reached implies way B reached at the same moment.
 - The Python (research/macd90m-check.py, written apart from the TypeScript) gives every row and number.
+
+## The 96% touch, one email, take profit 10 (the owner, 2026-11-17)
+
+The owner, after the forms above had been measured (docs §8.154) and a two-email form (email 1 at the 90% touch,
+email 2 at the 95% touch) had been built but not released: 「やっぱりメールを93%に到達したらすぐ送るに変えて」; asked
+which email, 「1通だけ、93%で」, the shares too; then 「やっぱり96%をメールの合図にして」, measured with a take profit
+of 10 pips and no stop (「利確10・損切りなし」, the owner's way of holding, CLAUDE.md and docs §8.102), and, asked which
+side the one email is, 「両方を測って決める」: both sides are measured and the owner chooses from the numbers. So a third
+way in, **touch**, measured apart from the two above. Nothing above changes: rows.csv and summary.json stay byte for
+byte what they are for the same environment (research/macdride-replay.ts checks them); the touch writes its own two
+files. Nothing here changes an email.
+
+### The entries
+
+- `TOUCH` (an environment variable of both implementations): a number `t` with `0 < t <= 1`; not given or empty: 0.96.
+- Bar `i` (close in [START, END), at least 600 bars up to it), its minutes in time. A side is **open** in bar `i` when
+  `Zp(i)` is not at `t` on that side (the bar before closed outside the `t` band). The entry is the first minute of bar
+  `i` that touches `t` on an open side (the touch of the moment way above, with `t` in place of 90%: the top side with
+  that minute's `hi`, the bottom side with its `lo`); if that minute touches `t` on both sides and both are open, the
+  top side. At most one entry a bar, so at most one email a bar.
+- `T0` the entry minute's end (`u + 1 minute`); `share0` the line's share with that minute's `hi` (top) or `lo`
+  (bottom) on the entry's side.
+- Each entry is **two trades**, one for each direction:
+  - **flow**: the top side a BUY, the bottom side a SELL (the side of the moment way above);
+  - **fade**: the top side a SELL, the bottom side a BUY.
+- The price in: the entry minute's 1-minute bar close, the ask close for a BUY, the bid close for a SELL.
+- Every entry is taken (the owner: funds are unlimited, CLAUDE.md): no skipping, any number of trades of a pair and
+  side open at once. There is no limit order to fill on the way in (the entry is at the minute's close), so no entry
+  is left unfilled.
+
+### Following a trade
+
+From the minute after the entry minute, the 1-minute bars in time, through the last one loaded (those in no 1-hour bar
+included, as the moment way's `mae`):
+
+- The target: a BUY `P(entry) + 10 * TP`, a SELL `P(entry) − 10 * TP`, in whole points (`P(x) = round(x * 10^d)`,
+  d = 3 on a yen pair, 5 on the others: 10 points = 1 pip), `TP` the take profit in pips (an environment variable
+  `TP` of both implementations, a whole number >= 1; not given or empty: 10).
+- **tp**: the first minute whose bid high (BUY, `P(bid high) >= target`) or ask low (SELL, `P(ask low) <= target`)
+  reaches the target. Out at the target exactly (a limit order; a minute that opens beyond it is also taken at the
+  target, so the pips are `TP` exactly, never more). `T` that minute's end.
+- **open**: no such minute through the last one loaded. Valued at the last minute's close (the bid close for a BUY, the
+  ask close for a SELL; unrealized); `T` the last minute's end.
+- There is no stop and no other way out.
+
+Each trade's numbers: `exit` (the target, or the last close), `pips` (`TP` for tp; for open a BUY `(P(bid close) −
+P(entry)) / 10`, a SELL `(P(entry) − P(ask close)) / 10`), `mae` the worst against the trade over the 1-minute bars
+after the entry minute up to and including the minute out (a BUY `(P(entry) − min P(bid low)) / 10`, a SELL
+`(max P(ask high) − P(entry)) / 10`, 0 if never against), `minutes` = `(T − T0) / 1 minute`.
+
+### Files
+
+rows-tp.csv, one row per trade, ordered by `T0`, then the pairs' order, then flow before fade:
+`dir, pair, open, T0, zside, side, entry, share0, target, result, T, exit, pips, mae, minutes` (`dir` flow / fade;
+`open` bar `i`'s open; `zside` top / bottom; `target` as a price, `target / 10^d`; formats as rows.csv).
+
+summary-tp.json: `{ meta, pairs: [{ pair, entries }], dirs: { flow: GROUPS, fade: GROUPS } }`, `meta` as summary.json's
+with `touch` = `t` and `tp` = `TP` in place of `reach`; GROUPS = `{ all, <each pair>, BUY, SELL, top, bottom }` (BUY
+and SELL by the trade's side, top and bottom by the entry's side), each
+
+```
+G = { "trades", "tp", "open",
+      "pipsSum", "pipsMean", "pipsMedian",               // over all trades, open ones at their unrealized pips
+      "tpMinutesMedian", "tpMinutesP90", "tpMinutesMax", // over tp
+      "within60", "within1440", "within10080",          // tp with minutes <= 60, <= 1440, <= 10080
+      "maeMedian", "maeP90", "maeMax",                  // over all trades
+      "tpMaeMax",                                       // over tp
+      "openPipsSum", "openPipsWorst", "openMaeMax", "openMinutesMax" }   // over open
+```
+
+Sums, means, medians and P90 as above (P90 the value at rank `(9 * n + 9) // 10`); null where there is no value (a
+sum over no trade included).
+
+### Checks (on the seeded walks, and the Python on the real run)
+
+- The touch's line at a minute equals `zoneAt` on the window rebuilt with that price (as above, at `t`).
+- Each entry's two trades have the same `pair, open, T0, zside, share0`, opposite sides, and their entries are the
+  minute's ask and bid closes.
+- Look-ahead: for a sample of trades, every price after `T0` moved by ±300 pips: the entry stays (bar, minute, side,
+  price); every price after `T` moved: the result, `T`, pips and mae stay (a tp trade's).
+- The counts add up (tp + open = trades = 2 × entries); every tp trade's pips are `TP`; an open trade's pips are below
+  `TP`.
+- rows.csv and summary.json are unchanged by the touch (the same bytes with and without it).
+- The Python (research/macd90m-check.py, its touch part written apart from the TypeScript's) gives every row and number
+  of rows-tp.csv and summary-tp.json.
+- Not measured: gold, the shares (no bid and ask minutes in the study's data), the function's own reading (GMO's
+  forming bar, its week; a replay like research/macdride-replay.ts after the owner chooses).
