@@ -565,6 +565,9 @@ numbers above."
 - en "times this email's reads failed" → "times the email's reads failed"; "Entered by this email's rule" → "Entered by
   the email's rule"; "this email states no take-profit price" → "the email states no take-profit price"; "this email
   does not judge those bars" → "the email does not judge those bars".
+- 〔baseWhat〕: ja 「このメールが判定する」 → 「メールが判定する」; en "this email judges" → "the email judges" (added
+  2026-11-17 when the build's review found the list had left it out while the head of this item says no 「このメール」;
+  the mails' version is unchanged).
 - The 〔pair〕 sentence (ja 「〔pair〕だけでは平均〔pairMean〕 pips（合図なしでは〔pairBaseMean〕 pips）です。」, en "On 〔pair〕
   alone the mean was 〔pairMean〕 pips (with no signal, 〔pairBaseMean〕 pips).") becomes all five, in the pairs' order:
   ja 「ペアごとの1回あたりの平均は、ドル/円〔USD/JPY's pairMean〕 pips（合図なしでは〔its pairBaseMean〕 pips）・ユーロ/円
@@ -675,7 +678,9 @@ form is used; the sales page's 〔adverse〕 is chosen in section 5.
     - 〔open〕 > 0 and 〔openPipsWorst〕 < 0: 「測った期間の終わりに、含み損のまま残っていた取引
       がありました。」 / "At the end of the period measured, some trades were still open at an unrealised loss."
     The choice and its reason (the values compared) are written in this file when the numbers are filled (4.5), and the
-    clauses are run through 4.1's guards like every other text.
+    clauses are run through 4.1's guards like every other text. In en, a non-empty 〔adverse〕 is followed by one space
+    before the next sentence (ja: nothing between); an empty one leaves no extra space (added 2026-11-17 from the build's
+    review).
     **Chosen (2026-11-17, from research/macdfade1h-summary.json):** fade pipsMean +3.26 is not below 0, not below base
     +3.20 and not below flow −2.08, so the first three are not met; USD/JPY's fade pipsMean −0.26 is below 0, and 22
     trades were open with the worst at −1,733.2 pips, so the last two are met. 〔adverse〕 = ja
