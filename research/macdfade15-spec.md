@@ -370,7 +370,9 @@ rows.csv sha256 `9bd958cc40bab89ddbf6bef15d4c40bba578c86e0c5fcd52f1a0d21ed38605e
 `287d358657ba83c60595fbb306b92d306fbc0cfb9e5aa6bca44877235808a695`, summary.json
 `ada0b69bcb772c4bc76f7e9e32afcd335291e9201d71e3d57d88e7ff0b075ed1` (artifact `macdfade15-1h-share0.96-tp10-44099401423`,
 not downloaded: the development container's proxy refused the artifact host on the 15-minute run, so the numbers below
-are copied from the job's printed lines).
+are copied from the job's printed lines). summary.json itself is in the repository since: the same study run again
+(Actions run 44108923903 on d120a30, which printed the same sha256 for rows.csv, summary.json, null.json and the run a
+week earlier) printed it as one base64 line, decoded into research/ledger/macdfade1h-summary.json, sha256 the same.
 
 - The chart's 1-hour bars start 2023-10-26T21:00Z on every pair (18,726 bars), not at `LOAD_FROM`; why was not looked
   into. It changes no number here: every bar in range had 600 bars up to it (`short` 0, `zoneless` 0, 17,654 judged a

@@ -6,12 +6,13 @@ the sources; section 8 says what that revision read). Nothing in it is built. Pr
 v39, 1-hour bars). For production it replaces research/macdfade15-prod-spec.md (the same rule on 15-minute closes,
 dropped by the owner's 「やっぱりメールの判断1時間足で」, never built), which stays as the record of that form, as
 research/macdride-spec.md (v9) and research/macdfade96-spec.md (the minute touch, never built) stay for theirs (6.3
-step 1 marks the 15-minute spec as superseded and points macdfade96-spec.md's head to this file). **The measured numbers are not in this file yet.** The study's real `TF=1h` run has
-finished since the draft was written: research/macdfade15-spec.md's section "Result of the real 1-hour run" (commit
-d96bf56) records Actions run 44099401423 on 53f7003 (the Python agreed with every row and number; summary.json sha256
-`60edab22302e5fe755c70b38f87b8b28fa27389ccc1bb10c1a0c0c88c448a9e2`), its numbers copied from the job's printed lines,
-the artifact not downloaded. Every place here that needs a number still holds a placeholder ⟨1h run: …⟩ naming it; they
-are filled from that run by 4.5's route, and sections 4-5 read against them, before anything is built (6.3 step 1a). An
+step 1 marks the 15-minute spec as superseded and points macdfade96-spec.md's head to this file). **The measured numbers are filled (2026-11-17, 6.3 step 1a).** The study's real `TF=1h` run is
+research/macdfade15-spec.md's section "Result of the real 1-hour run" (commit d96bf56): Actions run 44099401423 on
+53f7003, the Python agreeing with every row and number. Its summary.json (sha256
+`60edab22302e5fe755c70b38f87b8b28fa27389ccc1bb10c1a0c0c88c448a9e2`) is in the repository as
+research/ledger/macdfade1h-summary.json, by 4.5's route 1 (the same study run again, run 44108923903 on d120a30, printing
+the file as one base64 line; the copy's sha256 is the same). Every ⟨1h run: …⟩ of the first draft is filled from that
+file (4.5's table), and sections 4-5 were read against the numbers. An
 earlier, unreviewed 1-hour draft of this rule (scratchpad, never committed) was used only as a source of 1-hour facts,
 each checked again in the code.
 
@@ -458,45 +459,51 @@ In this order, ja / en (〔market〕 as today's share mail names it: 東証 / �
 The numbers are the study's real `TF=1h` run: Actions run 44099401423 on 53f7003, recorded in research/macdfade15-spec.md
 "Result of the real 1-hour run" (d96bf56): the Python agreed with every row and number, `closeVsMinute` differs in no
 bar on any pair (the study's own stop passed), summary.json sha256 `60edab22302e5fe755c70b38f87b8b28fa27389ccc1bb10c1a0c0c88c448a9e2`
-(research/macdfade15-spec.md "Files" and "On 1-hour bars" give its form). **They are not in this file yet** (every
-⟨1h run: …⟩ below); the build waits for them. Do not take the 15-minute run's numbers (research/macdfade15-spec.md, run
-44077464383) for these.
+(research/macdfade15-spec.md "Files" and "On 1-hour bars" give its form). They are filled below
+from research/ledger/macdfade1h-summary.json (route 1). The 15-minute run's numbers (research/macdfade15-spec.md, run
+44077464383) are not these.
 
-**How the numbers get into the code (one route, chosen at 6.3 step 1a and written in this file then).** The artifact of
+**How the numbers get into the code (route 1 was taken, 2026-11-17).** The artifact of
 that run was not downloaded (the development container's proxy refused the artifact host on the 15-minute run, and the
 1-hour run's numbers were copied from the job's printed lines), and the workflow prints summary.json only as a sha256
 (.github/workflows/macdfade15.yml:254-260). So:
-1. **The file.** A step is added to the real job of .github/workflows/macdfade15.yml after "The numbers (the Python
-   agreed)": `cat $OUT/summary.json; echo` (the file has no newline at its end; the `echo` only ends the log line).
-   Pushed to the research branch without `[skip ci]`, it runs the study again (TF `1h`, the defaults: the same END,
-   GMO's day files from the caches); its printed summary.json sha256 must be `60edab22…a9e2` above, else nothing is
-   filled and the difference is looked into. The printed file is copied from that job's log into
-   research/ledger/macdfade1h-summary.json (the log's timestamps taken off, no newline at its end), and its sha256,
-   computed again in the development container, must be the same `60edab22…a9e2`, else the copy is not used.
-   `FADE_MEASURED` is written from that copy, and a test reads the copy and pins every value of `FADE_MEASURED` to it,
-   `meta.tf` `"1h"`, `meta.share` 0.96 and `meta.tp` 10 included.
-2. **Only if the file cannot be obtained that way:** `FADE_MEASURED` is pinned to the printed lines of run 44099401423,
+1. **The file (taken).** The real job of .github/workflows/macdfade15.yml gained a last step, "summary.json whole
+   (base64, one line)", that prints the file's sha256 and size and the whole file as one base64 line (d120a30; base64
+   so that no whitespace of the log can change a byte). Pushed without `[skip ci]`, it ran the study again: Actions run
+   44108923903, TF `1h`, the defaults, GMO's files from the caches; it printed the same sha256 as run 44099401423 for rows.csv
+   (`9bd958cc40bab89ddbf6bef15d4c40bba578c86e0c5fcd52f1a0d21ed38605e9`), summary.json (`60edab22…a9e2`, 16,630 bytes),
+   null.json and the run a week earlier. The base64 line was taken
+   from that job's log and decoded in the development container into research/ledger/macdfade1h-summary.json: 16,630
+   bytes, sha256 `60edab22302e5fe755c70b38f87b8b28fa27389ccc1bb10c1a0c0c88c448a9e2`, the same. `FADE_MEASURED` is
+   written from that copy, and a test reads the copy and pins every value of `FADE_MEASURED` to it, `meta.tf` `"1h"`,
+   `meta.share` 0.96 and `meta.tp` 10 included.
+2. **Not used** (route 1 worked): `FADE_MEASURED` would have been pinned to the printed lines of run 44099401423,
    copied whole from its job log into research/ledger/macdfade1h-print.txt and checked against
    research/macdfade15-spec.md's 1-hour result section; the values are then as printed (a mean to 2 decimals, a sum,
    the worst and the largest loss on the way to 1, minutes whole: `fmt`, research/macdfade15.ts:550-561), and the test
    pins `FADE_MEASURED` to that file. The printed lines carry every slot below (`meta`, each `pair` line, each group's
    lines and the side-by-side lines, :566-591).
-Either way docs §8 records the run id(s), the summary.json sha256, and which route was taken.
+docs §8 records the run ids, the summary.json sha256, and that route 1 was taken.
 
-| slot | summary.json | value |
+| slot | summary.json | value (from research/ledger/macdfade1h-summary.json, written as below) |
 |---|---|---|
-| 〔from〕, 〔to〕 | `meta.start`, `meta.end` (the entries' closes in [start, end): `from` included, `to` not; open trades valued at the last minute loaded), each written in UTC: ja 「2024年1月1日 0:00（UTC）」, en "1 January 2024, 00:00 UTC" (the minutes always written) | ⟨1h run: meta.start⟩, ⟨1h run: meta.end⟩ (the workflow's defaults are 2024-01-01T00:00:00Z and 2026-11-10T21:00:00Z, research/macdfade15.ts:56-57; read from the run, not assumed) |
-| 〔trades〕, 〔tp〕, 〔open〕 | `dirs.fade.all.trades`, `.tp`, `.open` | ⟨1h run: fade trades⟩, ⟨1h run: fade tp⟩, ⟨1h run: fade open⟩ |
-| 〔mean〕 | `dirs.fade.all.pipsMean` (open trades at their unrealised pips) | ⟨1h run: fade pipsMean⟩ |
-| 〔maeMedian〕, 〔maeMax〕 | `dirs.fade.all.maeMedian`, `.maeMax` | ⟨1h run: fade maeMedian⟩, ⟨1h run: fade maeMax⟩ |
-| 〔tpMedian〕, 〔tpP90〕, 〔tpMax〕 | `dirs.fade.all.tpMinutesMedian`, `.tpMinutesP90`, `.tpMinutesMax` | ⟨1h run: fade tpMinutesMedian⟩, ⟨1h run: fade tpMinutesP90⟩, ⟨1h run: fade tpMinutesMax⟩ |
-| 〔openPipsSum〕, 〔openPipsWorst〕, 〔openLongest〕 | `dirs.fade.all.openPipsSum`, `.openPipsWorst`, `.openMinutesMax` | ⟨1h run: fade openPipsSum⟩, ⟨1h run: fade openPipsWorst⟩, ⟨1h run: fade openMinutesMax⟩ |
-| 〔flowMean〕 | `dirs.flow.all.pipsMean` | ⟨1h run: flow pipsMean⟩ |
-| 〔baseMean〕 | `base.all.pipsMean` | ⟨1h run: base pipsMean⟩ |
-| 〔pairMean〕, 〔pairBaseMean〕 | `dirs.fade.<pair>.pipsMean`, `base.<pair>.pipsMean`, each of the five | ⟨1h run: fade pipsMean, each pair⟩, ⟨1h run: base pipsMean, each pair⟩ |
-| 〔negPairs〕 | every pair whose fade mean is below zero, in the pairs' order, each with its mean: ja 「ドル/円（〔its mean〕 pips）」 joined by 「・」, en "USD/JPY (〔its mean〕 pips)" joined by ", "; with none, ja 「ありません」, en "none" | ⟨1h run: the pairs with fade pipsMean < 0⟩ |
-| 〔notMailed〕 | the sum of `pairs[].notMailed` | ⟨1h run: notMailed, summed⟩ |
-| 〔sec〕 | the docs §8 section that records the run | ⟨docs §: the section of the 1h run⟩ |
+| 〔from〕, 〔to〕 | `meta.start`, `meta.end` (the entries' closes in [start, end): `from` included, `to` not; open trades valued at the last minute loaded), each written in UTC: ja 「2024年1月1日 0:00（UTC）」, en "1 January 2024, 00:00 UTC" (the minutes always written) | `2024-01-01T00:00:00Z`, `2026-11-10T21:00:00Z`: ja 「2024年1月1日 0:00（UTC）」, 「2026年11月10日 21:00（UTC）」; en "1 January 2024, 00:00 UTC", "10 November 2026, 21:00 UTC" |
+| 〔trades〕, 〔tp〕, 〔open〕 | `dirs.fade.all.trades`, `.tp`, `.open` | 1490, 1468, 22 (written 1,490 / 1,468 / 22) |
+| 〔mean〕 | `dirs.fade.all.pipsMean` (open trades at their unrealised pips) | 3.261140939597316: +3.26 |
+| 〔maeMedian〕, 〔maeMax〕 | `dirs.fade.all.maeMedian`, `.maeMax` | 10.7, 2243.6 (written 2,243.6) |
+| 〔tpMedian〕, 〔tpP90〕, 〔tpMax〕 | `dirs.fade.all.tpMinutesMedian`, `.tpMinutesP90`, `.tpMinutesMax` | 140, 4489, 687037 minutes: ja 「約2時間」「約3日」「約477日」, en "about 2 hours", "about 3 days", "about 477 days" |
+| 〔openPipsSum〕, 〔openPipsWorst〕, 〔openLongest〕 | `dirs.fade.all.openPipsSum`, `.openPipsWorst`, `.openMinutesMax` | −9820.9 (−9,820.900000000003 as stored), −1733.2, 888900 minutes: −9,820.9, −1,733.2, ja 「約617日」, en "about 617 days" |
+| 〔flowMean〕 | `dirs.flow.all.pipsMean` | −2.080939597315436: −2.08 |
+| 〔baseMean〕 | `base.all.pipsMean` | 3.201605378704711: +3.20 |
+| 〔pairMean〕, 〔pairBaseMean〕 | `dirs.fade.<pair>.pipsMean`, `base.<pair>.pipsMean`, each of the five | USD/JPY −0.26 (+5.74), EUR/JPY +4.30 (+3.28), AUD/JPY +4.44 (−0.77), EUR/USD +3.11 (+2.60), AUD/USD +4.42 (+5.16) |
+| 〔negPairs〕 | every pair whose fade mean is below zero, in the pairs' order, each with its mean: ja 「ドル/円（〔its mean〕 pips）」 joined by 「・」, en "USD/JPY (〔its mean〕 pips)" joined by ", "; with none, ja 「ありません」, en "none" | ja 「ドル/円（-0.26 pips）」, en "USD/JPY (-0.26 pips)" |
+| 〔notMailed〕 | the sum of `pairs[].notMailed` | 11 (USD/JPY 2, EUR/JPY 0, AUD/JPY 2, EUR/USD 3, AUD/USD 4) |
+| 〔sec〕 | the docs §8 section that records the run | 8.155 (the next section of docs/OPERATIONS.md, whose last is §8.154; written at the release, 6.3) |
+
+The values were written out by a script reading the ledger copy (not copied by hand), and they equal the numbers the
+job printed (research/macdfade15-spec.md's 1-hour result). A minus is written as the code writes it (`toFixed`:
+"-0.26"); the "−" in this table is only this file's typography. Thousands separators: the code writes none unless 4.3's
+builder adds them with one rule for ja and en; either way a test pins the mail as built.
 
 - Durations written in minutes under 2 hours, hours under 2 days, days beyond, to the nearest whole unit, with 「約」 /
   "about" before one that was rounded. Pips as the study prints them (a mean to 2 decimals; a sum, the worst and the
@@ -530,7 +537,7 @@ ja: 「測った数字（5ペア、〔from〕以後、〔to〕より前に確定
 （メールした合図はすべて入ったとして数えました）。損切りをしないので、+10 pips に届く割合は作りの上で高く出ます。同じ
 合図で逆向き（上で買い・下で売り）に入ると1回あたり〔flowMean〕 pips、合図なしで〔baseWhat〕入ると〔baseMean〕 pips でした
 （合図なしは、同じ持ち方〈+10 pips で利確・損切りなし〉ですが、足の終値ではなく1時間足の最初の1分に入ったもので、同じ
-入りではありません）。この差が偶然を超えるかは測っていません。〔pair〕だけでは平均〔pairMean〕 pips（合図なしでは
+入りではありません）。〔chance〕〔pair〕だけでは平均〔pairMean〕 pips（合図なしでは
 〔pairBaseMean〕 pips）です。平均がマイナスだったペア: 〔negPairs〕。ほかに〔notMailed〕回、週末の止まっている時間に確定
 した足に合図がありましたが、このメールでは判定しないので、上の数字に入れていません。」
 
@@ -546,7 +553,7 @@ not a limit order, so no order went unfilled (every signal emailed is counted as
 reaching +10 pips comes out high by construction. Entering the other way on the same signals (a BUY at the top, a SELL
 at the bottom) gave 〔flowMean〕 pips a trade, and entering with no signal 〔baseWhat〕 gave 〔baseMean〕 pips (held the
 same way, +10 pips and no stop, but entered at the 1-hour bar's first minute, not at its close, so not the same entry).
-Whether these differences are beyond chance has not been measured. On 〔pair〕 alone the mean was 〔pairMean〕 pips (with
+〔chance〕 On 〔pair〕 alone the mean was 〔pairMean〕 pips (with
 no signal, 〔pairBaseMean〕 pips). Pairs whose mean was below zero: 〔negPairs〕. Besides these, 〔notMailed〕
 signals fell on bars that closed in the weekend pause; this email does not judge those bars, so they are not in the
 numbers above."
@@ -564,11 +571,25 @@ numbers above."
   〔…〕 pips（〔…〕 pips）・豪ドル/円〔…〕 pips（〔…〕 pips）・ユーロ/ドル〔…〕 pips（〔…〕 pips）・豪ドル/ドル〔…〕 pips
   （〔…〕 pips）でした。」; en "The mean a trade by pair: USD/JPY 〔USD/JPY's pairMean〕 pips (with no signal, 〔its
   pairBaseMean〕 pips), EUR/JPY 〔…〕 pips (〔…〕 pips), AUD/JPY 〔…〕 pips (〔…〕 pips), EUR/USD 〔…〕 pips (〔…〕 pips),
-  AUD/USD 〔…〕 pips (〔…〕 pips)." (⟨1h run: fade pipsMean, each pair⟩, ⟨1h run: base pipsMean, each pair⟩.)
+  AUD/USD 〔…〕 pips (〔…〕 pips)." (the values of 4.5's table, 〔pairMean〕 and 〔pairBaseMean〕.)
 A test pins the notes' version word for word, apart from the mails' version.
 
-Once the numbers are in, every sentence of sections 4 and 5 is read against them before anything is built; one that no
-longer holds is corrected here first, and the sales page's clauses chosen by the numbers (section 5) are chosen then.
+- 〔chance〕 (in the mails' and the notes' paragraph): the study prints fade − base and fade − flow beside the same gaps
+  on ten driftless walks (research/macdfade15-spec.md "How it is measured"; run 44099401423, and 44108923903 printed the
+  same null.json sha256 `3d285440123d50ac776228092b1a2560db12ff1d114b97bbec676350175b9b96`): fade − base +0.06 pips a trade
+  inside the walks' −4.10..+0.83, fade − flow +5.34 inside −5.42..+5.81 (`all`). Both inside, so the sentence is: ja
+  「合図なしとの差も、逆向きとの差も、値動きに傾きのない作り物の値段10本で同じように測った差の幅の中でした（偶然で出る幅
+  の中なので、どちらより良いとも言えません。作り物の値段は GMO のものではなく、10本で分かるのは幅だけで、確かめ〈検定〉
+  ではありません）。」 en "The differences from no signal and from the other way were both within the range of the same
+  differences measured on ten made-up price walks with no trend (a range chance alone gives, so it is not shown to do
+  better than either; the walks' prices are not GMO's, and ten walks give a range, not a test)." (Had either been
+  outside, the sentence would have said which, and that ten walks still put about 2 gaps in 11 outside by chance; it is
+  not needed for these numbers.) The walks' ranges are not in summary.json: the test pins this sentence word for word,
+  and docs §8 records the ranges with null.json's sha256.
+
+The numbers being in, every sentence of sections 4 and 5 was read against them (2026-11-17): none says the fade did
+better than no signal or than the other way; the measured paragraph's 〔open〕 and 〔tp〕 are both above 0, so its full
+form is used; the sales page's 〔adverse〕 is chosen in section 5.
 
 ## 5. The screen and the sales page
 
@@ -643,18 +664,24 @@ longer holds is corrected here first, and the sales page's clauses chosen by the
   - **〔adverse〕**: every clause below whose condition the filled numbers meet, in this order, each ending its sentence;
     none met, 〔adverse〕 is empty. No measured number and no percent in any (the page quotes none). The conditions read
     the same values as 4.5's slots:
-    - ⟨1h run: fade pipsMean⟩ < 0: 「測った期間では、1回あたりの平均はマイナスでした。」 / "Over the period measured, its
+    - 〔mean〕 < 0: 「測った期間では、1回あたりの平均はマイナスでした。」 / "Over the period measured, its
       mean a trade was below zero."
-    - ⟨1h run: fade pipsMean⟩ < ⟨1h run: base pipsMean⟩: 「合図なしで入った時より、1回あたりの平均が低くありました。」 /
+    - 〔mean〕 < 〔baseMean〕: 「合図なしで入った時より、1回あたりの平均が低くありました。」 /
       "Its mean a trade was below entering with no signal."
-    - ⟨1h run: fade pipsMean⟩ < ⟨1h run: flow pipsMean⟩: 「同じ合図で逆向きに入った時より、1回あたりの平均が低くありま
+    - 〔mean〕 < 〔flowMean〕: 「同じ合図で逆向きに入った時より、1回あたりの平均が低くありま
       した。」 / "Its mean a trade was below entering the other way on the same signals."
-    - some pair's fade pipsMean < 0 (⟨1h run: the pairs with fade pipsMean < 0⟩ not empty): 「5ペアのうち、1回あたりの
+    - some pair's fade pipsMean < 0 (〔negPairs〕 not none): 「5ペアのうち、1回あたりの
       平均がマイナスのペアがありました。」 / "On some of the five pairs its mean a trade was below zero."
-    - ⟨1h run: fade open⟩ > 0 and ⟨1h run: fade openPipsWorst⟩ < 0: 「測った期間の終わりに、含み損のまま残っていた取引
+    - 〔open〕 > 0 and 〔openPipsWorst〕 < 0: 「測った期間の終わりに、含み損のまま残っていた取引
       がありました。」 / "At the end of the period measured, some trades were still open at an unrealised loss."
     The choice and its reason (the values compared) are written in this file when the numbers are filled (4.5), and the
     clauses are run through 4.1's guards like every other text.
+    **Chosen (2026-11-17, from research/macdfade1h-summary.json):** fade pipsMean +3.26 is not below 0, not below base
+    +3.20 and not below flow −2.08, so the first three are not met; USD/JPY's fade pipsMean −0.26 is below 0, and 22
+    trades were open with the worst at −1,733.2 pips, so the last two are met. 〔adverse〕 = ja
+    「5ペアのうち、1回あたりの平均がマイナスのペアがありました。測った期間の終わりに、含み損のまま残っていた取引があり
+    ました。」, en "On some of the five pairs its mean a trade was below zero. At the end of the period measured, some trades
+    were still open at an unrealised loss."
   - 「他のツールと何が違いますか？」 (ja:2032): 「サインの成績を隠さない点です。過去のチャートでの検証結果と、成績を記録して
     いる決まりについては、通知したサインが実際に損切りと利確のどちらに先に届いたかを、勝てていない場合もそのまま表示し
     ます。MACD の逆張りは、利確と損切りの値段を書かない決まりで、その成績は記録も表示もしていません。売買のサインは確定
@@ -746,10 +773,10 @@ bar_time >= <that hour's bars' open> group by 1, 2, 3`: no user ids), and the ow
    「やっぱりメールの判断1時間足で」; its line numbers were read on the shelved v10 files, which 9bcfd70 put back to
    main's."; research/macdfade96-spec.md:3-4, which send the reader to the 15-minute spec as "the production spec", name
    this file instead.
-1a. The numbers, before any of the function's code is written: 4.5's route (the summary.json re-run and its copy, or
-   the printed lines), every ⟨1h run: …⟩ filled, sections 4-5 read against them and this file corrected, the sales
-   page's 〔adverse〕 chosen (section 5): one commit of this file and the research/ledger copy, merged as step 1 is
-   (nothing under `supabase/functions/**`).
+1a. The numbers, before any of the function's code is written (done 2026-11-17): 4.5's route 1 (run 44108923903 and
+   the research/ledger copy), every ⟨1h run: …⟩ filled, sections 4-5 read against them, 〔chance〕 written (4.5) and the
+   sales page's 〔adverse〕 chosen (section 5); this file and the research/ledger copy are merged as step 1 is (nothing
+   under `supabase/functions/**`).
 2. The app's id parse, tag and plan line (section 5's first three items only), cut from origin/main; merged and
    published. Lovable's state is reported as given (e.g. `pending`).
 2a. The study check (7.2) on the function's branch, before the function's PR is merged (merging deploys at once,
@@ -871,9 +898,10 @@ own Python; this check ties the shipped function to it.
 
 ## 8. Not measured, not checked
 
-- **Measured, not yet in this file:** the five pairs' numbers of this form (the study's `TF=1h` real run, run
-  44099401423, recorded in research/macdfade15-spec.md by d96bf56); every ⟨1h run: …⟩ of 4.5 and section 5 waits for
-  4.5's route (6.3 step 1a). The run's summary.json itself is not in the repository (its artifact was not downloaded).
+- **Measured, now in this file:** the five pairs' numbers of this form (the study's `TF=1h` real run, run
+  44099401423, recorded in research/macdfade15-spec.md by d96bf56), filled in 4.5 from research/ledger/
+  macdfade1h-summary.json (route 1: run 44108923903 printed the file; the copy's sha256 equals the run's). The artifact
+  itself was still not downloaded; null.json and rows.csv are not in the repository (their sha256 are recorded).
 - **Not measured:** gold and the shares with this form; the minutes between a close and the mail (pairs, gold, US
   shares; Tokyo's delay was measured 2026-11-06) and the price's move in them; how often a close is not judged; the
   Twelve Data reads a day (up to two a gold close, 24 closes a day); whether the fade's mean differs from the
