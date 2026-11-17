@@ -17,6 +17,17 @@
 //                   「90に到達した瞬間に注文入れたら、95か96に到達する確率？」): a number above 0.9, at most 1, e.g. 0.95.
 //                   Every "96%" of the rule is then that share (already, reached, way C); nothing else changes.
 //
+// The touch (research/macd90m-spec.md, its last section; the owner 2026-11-17: 「やっぱり96%をメールの合図にして」,
+// 「利確10・損切りなし」, 「両方を測って決める」): one entry a bar, the first minute the line touches TOUCH on a side the bar
+// before was not at; two trades each, flow (top BUY, bottom SELL) and fade (top SELL, bottom BUY), in at the minute's
+// close, out at the take profit of TP pips or still open at the last minute loaded. Written apart, to
+// OUT/{rows-tp.csv, summary-tp.json}: rows.csv and summary.json stay as they are. MODE=synthetic checks it as well (the
+// line at a minute against zoneAt at TOUCH, an entry's two trades, the look-ahead after T0 and after T, the counts);
+// MODE=print prints its numbers after the others.
+//
+//   TOUCH           the share touched: a number above 0, at most 1 (not given or empty: 0.96).
+//   TP              the take profit in pips: a whole number, at least 1 (not given or empty: 10).
+//
 // Nothing here changes an email; the numbers are the study's only.
 
 import { LEVEL_WINDOW, ZONE_BARS, zoneAt } from "../supabase/functions/_shared/macd-level.ts";
@@ -57,6 +68,13 @@ const OUT = env("OUT", "research/out/macd90m");
 // the share that counts as reached: the spec's, or REACH (an empty REACH is the spec's)
 const REACH = env("REACH", "") === "" ? REACH_SPEC : Number(env("REACH", ""));
 if (!(REACH > ENTER && REACH <= 1)) throw new Error(`REACH "${env("REACH", "")}": a share above ${ENTER} and at most 1`);
+// the touch's share and take profit (the spec's last section): TOUCH and TP, an empty one the spec's
+const TOUCH_SPEC = 0.96;
+const TP_SPEC = 10;
+const TOUCH = env("TOUCH", "") === "" ? TOUCH_SPEC : Number(env("TOUCH", ""));
+if (!(TOUCH > 0 && TOUCH <= 1)) throw new Error(`TOUCH "${env("TOUCH", "")}": a share above 0 and at most 1`);
+const TP = env("TP", "") === "" ? TP_SPEC : /^[0-9]+$/.test(env("TP", "").trim()) ? Number(env("TP", "").trim()) : NaN;
+if (!(Number.isSafeInteger(TP) && TP >= 1)) throw new Error(`TP "${env("TP", "")}": a whole number of pips, at least 1`);
 const W = LEVEL_WINDOW;
 const A12 = 2 / (MACD_DEFAULTS.fast + 1);
 const A26 = 2 / (MACD_DEFAULTS.slow + 1);
@@ -308,6 +326,127 @@ const tradesOfPair = (a: PairAll, seen?: Array<{ j: number; k: number; x: number
   return out;
 };
 
+// ---- the touch: one email the minute the line touches TOUCH, take profit TP, no stop (the spec's last section) ------
+
+type Dir = "flow" | "fade";
+const DIRS: Dir[] = ["flow", "fade"];
+type Seen = Array<{ j: number; k: number; x: number; z: Zone }>;
+
+// an entry: bar i and its first minute k that touches TOUCH on an open side
+interface TEntry {
+  pair: string;
+  i: number;
+  k: number;
+  open: number;
+  T0: number;
+  zside: Side;
+  share0: number;
+}
+interface TTrade {
+  dir: Dir;
+  pair: string;
+  i: number;
+  k: number;
+  open: number;
+  T0: number;
+  zside: Side;
+  side: "BUY" | "SELL";
+  entry: number;
+  share0: number;
+  // the target in whole points, and as a price (targetP / 10^d)
+  targetP: number;
+  target: number;
+  result: "tp" | "open";
+  T: number;
+  exit: number;
+  pips: number;
+  mae: number;
+  minutes: number;
+}
+
+// the entries: bar i (close in [START, END), at least 600 bars up to it); a side is open when Zp(i) is not at TOUCH on
+// it; the first minute of the bar touching TOUCH on an open side (the top side first when it touches both); one a bar
+const touchEntriesOf = (a: PairAll, seen?: Seen): TEntry[] => {
+  const { d, m1 } = a;
+  const out: TEntry[] = [];
+  for (let i = W - 1; i < d.n; i++) {
+    const T = d.t[i] + HOUR;
+    if (T < START || T >= END) continue;
+    const zp = a.zp[i];
+    if (zp === null) continue;
+    const open = (["top", "bottom"] as Side[]).filter((zs) => !atShare(zp, zs, TOUCH));
+    if (open.length === 0) continue;
+    const [from, end] = minutesOf(a, i);
+    for (let k = from; k < end; k++) {
+      let hit: { zs: Side; z: Zone } | null = null;
+      for (const zs of open) {
+        const t = touchAt(a, i, k, zs);
+        if (seen) seen.push({ j: i, k, x: t.x, z: t.z });
+        if (atShare(t.z, zs, TOUCH)) {
+          hit = { zs, z: t.z };
+          break;
+        }
+      }
+      if (!hit) continue;
+      out.push({ pair: d.pair, i, k, open: d.t[i], T0: m1.t[k] + MINUTE, zside: hit.zs, share0: shareOf(hit.z, hit.zs) });
+      break;
+    }
+  }
+  return out;
+};
+
+// flow: the top side a BUY, the bottom a SELL; fade: the other way
+const tpSideOf = (dir: Dir, zs: Side): "BUY" | "SELL" => ((dir === "flow") === (zs === "top") ? "BUY" : "SELL");
+
+// one trade: in at the entry minute's close (ask for a BUY, bid for a SELL); followed from the next minute through the
+// last one loaded (minutes in no 1-hour bar too); tp at the first minute whose bid high (BUY) or ask low (SELL) reaches
+// the target, out at the target exactly; else open, valued at the last minute's close
+const tpTradeOf = (a: PairAll, e: TEntry, dir: Dir): TTrade => {
+  const { m1, dec } = a;
+  const side = tpSideOf(dir, e.zside);
+  const entry = side === "BUY" ? m1.ac[e.k] : m1.bc[e.k];
+  const pe = P(entry, dec);
+  const targetP = side === "BUY" ? pe + 10 * TP : pe - 10 * TP;
+  const target = targetP / 10 ** dec;
+  let worst = 0;
+  const done = (result: "tp" | "open", T: number, exit: number, pts: number): TTrade => ({
+    dir,
+    pair: e.pair,
+    i: e.i,
+    k: e.k,
+    open: e.open,
+    T0: e.T0,
+    zside: e.zside,
+    side,
+    entry,
+    share0: e.share0,
+    targetP,
+    target,
+    result,
+    T,
+    exit,
+    pips: pts / 10,
+    mae: worst / 10,
+    minutes: (T - e.T0) / MINUTE,
+  });
+  for (let k = e.k + 1; k < m1.n; k++) {
+    // the worst against the trade, this minute included (the minute out too)
+    const adv = side === "BUY" ? pe - P(m1.bl[k], dec) : P(m1.ah[k], dec) - pe;
+    if (adv > worst) worst = adv;
+    if (side === "BUY" ? P(m1.bh[k], dec) >= targetP : P(m1.al[k], dec) <= targetP) return done("tp", m1.t[k] + MINUTE, target, 10 * TP);
+  }
+  // no minute after the entry reached it: open at the last minute loaded (the entry minute itself when it is the last)
+  const last = m1.n - 1;
+  const exit = side === "BUY" ? m1.bc[last] : m1.ac[last];
+  return done("open", m1.t[last] + MINUTE, exit, side === "BUY" ? P(exit, dec) - pe : pe - P(exit, dec));
+};
+
+// a pair's entries and their trades, each entry's flow then fade (trades[2q], trades[2q + 1] are entries[q]'s)
+const touchOf = (a: PairAll, seen?: Seen): { entries: TEntry[]; trades: TTrade[] } => {
+  const entries = touchEntriesOf(a, seen);
+  return { entries, trades: entries.flatMap((e) => DIRS.map((dir) => tpTradeOf(a, e, dir))) };
+};
+
 // ---- the numbers --------------------------------------------------------------------------------------
 
 const wayStats = (ws: WayOut[]) => {
@@ -437,6 +576,96 @@ const printSummary = (s: ReturnType<typeof summaryOf>) => {
   }
 };
 
+// ---- the touch's numbers and files ----------------------------------------------------------------------
+
+// the highest and lowest without spreading the values into arguments (many trades)
+const maxOf = (xs: number[]): number | null => {
+  if (xs.length === 0) return null;
+  let v = xs[0];
+  for (const x of xs) if (x > v) v = x;
+  return v;
+};
+const minOf = (xs: number[]): number | null => {
+  if (xs.length === 0) return null;
+  let v = xs[0];
+  for (const x of xs) if (x < v) v = x;
+  return v;
+};
+
+// G of summary-tp.json, over trades in the rows' order (sums and means add in it)
+const tpGroupOf = (ts: TTrade[]) => {
+  const tp = ts.filter((t) => t.result === "tp");
+  const open = ts.filter((t) => t.result === "open");
+  let pipsSum = 0;
+  for (const t of ts) pipsSum += t.pips;
+  let openPipsSum = 0;
+  for (const t of open) openPipsSum += t.pips;
+  return {
+    trades: ts.length,
+    tp: tp.length,
+    open: open.length,
+    pipsSum: ts.length ? pipsSum : null,
+    pipsMean: mean(ts.map((t) => t.pips)),
+    pipsMedian: median(ts.map((t) => t.pips)),
+    tpMinutesMedian: median(tp.map((t) => t.minutes)),
+    tpMinutesP90: p90(tp.map((t) => t.minutes)),
+    tpMinutesMax: maxOf(tp.map((t) => t.minutes)),
+    within60: tp.filter((t) => t.minutes <= 60).length,
+    within1440: tp.filter((t) => t.minutes <= 1440).length,
+    within10080: tp.filter((t) => t.minutes <= 10080).length,
+    maeMedian: median(ts.map((t) => t.mae)),
+    maeP90: p90(ts.map((t) => t.mae)),
+    maeMax: maxOf(ts.map((t) => t.mae)),
+    tpMaeMax: maxOf(tp.map((t) => t.mae)),
+    openPipsSum: open.length ? openPipsSum : null,
+    openPipsWorst: minOf(open.map((t) => t.pips)),
+    openMaeMax: maxOf(open.map((t) => t.mae)),
+    openMinutesMax: maxOf(open.map((t) => t.minutes)),
+  };
+};
+type TpGroup = ReturnType<typeof tpGroupOf>;
+
+// GROUPS: all, each pair, BUY and SELL (the trade's side), top and bottom (the entry's side)
+const tpGroupsOf = (ts: TTrade[]) => {
+  const g: Record<string, TpGroup> = { all: tpGroupOf(ts) };
+  for (const p of PAIRS) g[p] = tpGroupOf(ts.filter((t) => t.pair === p));
+  for (const s of ["BUY", "SELL"]) g[s] = tpGroupOf(ts.filter((t) => t.side === s));
+  for (const zs of ["top", "bottom"]) g[zs] = tpGroupOf(ts.filter((t) => t.zside === zs));
+  return g;
+};
+
+// the rows' order: T0, then the pairs' order, then flow before fade
+const dirOrder = (d: Dir) => (d === "flow" ? 0 : 1);
+const tpOrdered = (all: TTrade[]): TTrade[] =>
+  [...all].sort((a, b) => a.T0 - b.T0 || PAIRS.indexOf(a.pair as typeof PAIRS[number]) - PAIRS.indexOf(b.pair as typeof PAIRS[number]) || dirOrder(a.dir) - dirOrder(b.dir));
+
+const summaryTpOf = (trades: TTrade[], pairs: Array<{ pair: string; entries: number }>) => ({
+  meta: { start: iso(START), end: iso(END), loadFrom: iso(LOAD_FROM), touch: TOUCH, tp: TP },
+  pairs,
+  dirs: { flow: tpGroupsOf(trades.filter((t) => t.dir === "flow")), fade: tpGroupsOf(trades.filter((t) => t.dir === "fade")) },
+});
+
+const HEAD_TP = ["dir", "pair", "open", "T0", "zside", "side", "entry", "share0", "target", "result", "T", "exit", "pips", "mae", "minutes"];
+const csvTpOf = (ts: TTrade[]): string =>
+  [HEAD_TP.join(","), ...ts.map((t) => [t.dir, t.pair, iso(t.open), iso(t.T0), t.zside, t.side, String(t.entry), String(t.share0), String(t.target), t.result, iso(t.T), String(t.exit), String(t.pips), String(t.mae), String(t.minutes)].join(","))].join("\n") + "\n";
+
+const printTpGroup = (k: string, g: TpGroup): string[] => [
+  `${k.padEnd(8)} trades ${g.trades}: tp ${g.tp} (${fmt(g.trades ? (100 * g.tp) / g.trades : null, 1)}%) open ${g.open}`,
+  `  pips (all trades, open ones unrealized): sum ${fmt(g.pipsSum, 1)} mean ${fmt(g.pipsMean)} median ${fmt(g.pipsMedian)} | mae (all trades) median ${fmt(g.maeMedian, 1)} p90 ${fmt(g.maeP90, 1)} max ${fmt(g.maeMax, 1)}`,
+  `  tp: minutes median ${fmt(g.tpMinutesMedian, 0)} p90 ${fmt(g.tpMinutesP90, 0)} max ${fmt(g.tpMinutesMax, 0)} | within 1h ${g.within60} 1d ${g.within1440} 1w ${g.within10080} | mae max ${fmt(g.tpMaeMax, 1)}`,
+  `  open (still held at the last minute): pips sum ${fmt(g.openPipsSum, 1)} worst ${fmt(g.openPipsWorst, 1)} | mae max ${fmt(g.openMaeMax, 1)} | minutes max ${fmt(g.openMinutesMax, 0)}`,
+];
+const printSummaryTp = (s: ReturnType<typeof summaryTpOf>) => {
+  console.log("");
+  console.log(`== the touch: one entry the minute the line touches ${s.meta.touch}, take profit ${s.meta.tp} pips, no stop (summary-tp.json)`);
+  console.log(`meta ${JSON.stringify(s.meta)}`);
+  console.log(`pairs ${JSON.stringify(s.pairs)}`);
+  for (const dir of DIRS) {
+    console.log(`== ${dir} (${dir === "flow" ? "top BUY, bottom SELL" : "top SELL, bottom BUY"})`);
+    for (const [k, g] of Object.entries(s.dirs[dir])) for (const line of printTpGroup(k, g)) console.log(line);
+  }
+};
+
 // ---- loading ------------------------------------------------------------------------------------------
 
 const loadFiles = async (src: Source): Promise<{ as: PairAll[]; st: LoadStats }> => {
@@ -478,6 +707,99 @@ const sameZone = (a: Zone, b: Zone) => a.m === b.m && a.top === b.top && a.botto
 const sameWay = (a: WayOut | null, b: WayOut | null) =>
   a === null || b === null ? a === b : a.result === b.result && a.T === b.T && a.pips === b.pips && a.mae === b.mae && a.share === b.share;
 
+// the touch's entry of bar i read again minute by minute with zoneAt on the window rebuilt (no prepared state)
+const touchBySlow = (a: PairAll, i: number): { k: number; zs: Side } | null => {
+  const zp = a.zp[i];
+  if (zp === null) return null;
+  const [from, end] = minutesOf(a, i);
+  for (let k = from; k < end; k++) {
+    for (const zs of ["top", "bottom"] as Side[]) {
+      if (atShare(zp, zs, TOUCH)) continue;
+      if (atShare(slowZone(a.d, i, towardOf(a, k, zs)), zs, TOUCH)) return { k, zs };
+    }
+  }
+  return null;
+};
+
+// the touch's checks on one pair of a walk (the spec's last section, "Checks")
+const checkTouchPair = (pair: string, m: M1, a: PairAll, bad: (msg: string) => void) => {
+  const { d, m1 } = a;
+  const seen: Seen = [];
+  const { entries, trades } = touchOf(a, seen);
+  let zones = 0;
+  let bars = 0;
+  let lookahead = 0;
+  // (1) the line at a minute against zoneAt on the window rebuilt, at TOUCH: every entry's minute and a sample of the
+  // others; and bars read again minute by minute that way (every entry's bar and a sample of the others): the same entry
+  const entryK = new Set(entries.map((e) => e.k));
+  for (let q = 0; q < seen.length; q++) {
+    const s = seen[q];
+    if (!entryK.has(s.k) && q % 53 !== 0) continue;
+    zones++;
+    const slow = slowZone(d, s.j, s.x);
+    if (!sameZone(s.z, slow)) bad(`${pair} ${iso(m1.t[s.k])}: touch: the line at the minute differs from zoneAt on the window rebuilt`);
+  }
+  const byBar = new Map(entries.map((e) => [e.i, e]));
+  for (let i = W - 1; i < d.n; i++) {
+    const T = d.t[i] + HOUR;
+    if (T < START || T >= END) continue;
+    const e = byBar.get(i);
+    if (!e && i % 29 !== 0) continue;
+    bars++;
+    const s = touchBySlow(a, i);
+    if ((s === null) !== (e === undefined) || (s && e && (s.k !== e.k || s.zs !== e.zside))) bad(`${pair} ${iso(d.t[i])}: touch: the bar's entry differs when read with zoneAt on the window rebuilt`);
+  }
+  // (2) each entry's two trades: flow then fade, the same pair, open, T0, zside, share0, opposite sides, the minute's ask
+  // close for the BUY and bid close for the SELL; each trade's numbers as the spec's
+  if (trades.length !== 2 * entries.length) bad(`${pair}: touch: ${trades.length} trades for ${entries.length} entries`);
+  const lastT = m1.n ? m1.t[m1.n - 1] + MINUTE : NaN;
+  entries.forEach((e, q) => {
+    const [f, g] = [trades[2 * q], trades[2 * q + 1]];
+    if (!f || !g) return;
+    const at = `${pair} ${iso(e.T0)}: touch`;
+    if (f.dir !== "flow" || g.dir !== "fade") bad(`${at}: not flow then fade`);
+    for (const t of [f, g]) {
+      if (t.pair !== e.pair || t.open !== e.open || t.T0 !== e.T0 || t.zside !== e.zside || t.share0 !== e.share0 || t.i !== e.i || t.k !== e.k) bad(`${at} ${t.dir}: not its entry's pair, open, T0, zside, share0`);
+      if (t.entry !== (t.side === "BUY" ? m1.ac[e.k] : m1.bc[e.k])) bad(`${at} ${t.dir}: the entry is not the minute's ${t.side === "BUY" ? "ask" : "bid"} close`);
+      if (t.result === "tp" && !(t.pips === TP && t.exit === t.target && t.T > t.T0 && t.T <= lastT)) bad(`${at} ${t.dir}: a tp trade's pips ${t.pips} (TP ${TP}), exit or T`);
+      if (t.result === "open" && !(t.pips < TP && t.T === lastT)) bad(`${at} ${t.dir}: an open trade's pips ${t.pips} not below TP ${TP}, or not valued at the last minute`);
+      if (!(t.mae >= 0) || t.minutes !== (t.T - t.T0) / MINUTE) bad(`${at} ${t.dir}: mae or minutes`);
+    }
+    if (f.side === g.side) bad(`${at}: flow and fade on the same side`);
+    if (f.side !== (e.zside === "top" ? "BUY" : "SELL")) bad(`${at}: flow is not the side of the line`);
+    if (m1.t[e.k] < e.open || m1.t[e.k] >= e.open + HOUR || e.T0 !== m1.t[e.k] + MINUTE) bad(`${at}: the entry minute is not in its bar`);
+    if (e.share0 < TOUCH) bad(`${at}: share0 ${e.share0} under ${TOUCH}`);
+  });
+  // (3) the look-ahead: a sample of entries; every price after T0 moved by ±300 pips: the entry stays (bar, minute,
+  // side, price); every price after a tp trade's T moved: its result, T, pips and mae stay
+  const sample = entries.filter((_, q) => q % 7 === 0).slice(0, 4);
+  for (const e of sample) {
+    const q = entries.indexOf(e);
+    const mine = [trades[2 * q], trades[2 * q + 1]];
+    for (const pips of [300, -300]) {
+      const cuts: Array<[number, TTrade | null]> = [[e.T0, null], ...mine.filter((t) => t.result === "tp").map((t): [number, TTrade] => [t.T, t])];
+      for (const [cut, t] of cuts) {
+        const again = touchOf(synthAll(pair, poisoned(m, cut, pips)));
+        const qa = again.entries.findIndex((u) => u.T0 === e.T0);
+        lookahead++;
+        const at = `${pair} ${iso(e.T0)}: touch: when the future after ${iso(cut)} moved ${pips}`;
+        if (qa < 0) {
+          bad(`${at}: the entry went`);
+          continue;
+        }
+        const ea = again.entries[qa];
+        const theirs = [again.trades[2 * qa], again.trades[2 * qa + 1]];
+        if (ea.i !== e.i || ea.k !== e.k || ea.zside !== e.zside || ea.share0 !== e.share0 || theirs.some((u, r) => u.side !== mine[r].side || u.entry !== mine[r].entry)) bad(`${at}: the entry changed`);
+        if (t) {
+          const u = theirs.find((x) => x.dir === t.dir) as TTrade;
+          if (!(u.result === t.result && u.T === t.T && u.pips === t.pips && u.mae === t.mae)) bad(`${at}: the ${t.dir} trade changed`);
+        }
+      }
+    }
+  }
+  return { entries, trades, zones, bars, lookahead };
+};
+
 const checkWalk = (seed: number): number => {
   let fail = 0;
   const bad = (msg: string) => {
@@ -487,9 +809,21 @@ const checkWalk = (seed: number): number => {
   const all: MTrade[] = [];
   let zonesCompared = 0;
   let lookahead = 0;
+  // the touch's
+  const tAll: TTrade[] = [];
+  const tPairs: Array<{ pair: string; entries: number }> = [];
+  let tZones = 0;
+  let tBars = 0;
+  let tLookahead = 0;
   for (const pair of PAIRS) {
     const m = walkOf(seed, pair).m1;
     const a = synthAll(pair, m);
+    const tc = checkTouchPair(pair, m, a, bad);
+    tAll.push(...tc.trades);
+    tPairs.push({ pair, entries: tc.entries.length });
+    tZones += tc.zones;
+    tBars += tc.bars;
+    tLookahead += tc.lookahead;
     const seen: Array<{ j: number; k: number; x: number; z: Zone }> = [];
     const trades = tradesOfPair(a, seen);
     all.push(...trades);
@@ -563,6 +897,26 @@ const checkWalk = (seed: number): number => {
   }
   console.log(`walk seed ${seed}: zones compared ${zonesCompared}; look-ahead compared ${lookahead}`);
   if (zonesCompared === 0 || lookahead === 0) bad("the checks compared nothing");
+  // the touch: (4) the counts add up (tp + open = trades = 2 x entries, in every group and pair); (2)'s every tp trade
+  // at TP and every open one below it are checked trade by trade above
+  const st = summaryTpOf(tpOrdered(tAll), tPairs);
+  const entriesAll = tPairs.reduce((s, p) => s + p.entries, 0);
+  for (const dir of DIRS) {
+    const gs = st.dirs[dir];
+    for (const [k, g] of Object.entries(gs)) if (g.tp + g.open !== g.trades) bad(`touch ${dir} ${k}: tp + open is not trades`);
+    if (gs.all.trades !== entriesAll) bad(`touch ${dir}: ${gs.all.trades} trades for ${entriesAll} entries`);
+    for (const p of tPairs) if (gs[p.pair].trades !== p.entries) bad(`touch ${dir} ${p.pair}: ${gs[p.pair].trades} trades for ${p.entries} entries`);
+    if (gs.BUY.trades + gs.SELL.trades !== gs.all.trades || gs.top.trades + gs.bottom.trades !== gs.all.trades) bad(`touch ${dir}: BUY + SELL or top + bottom is not all`);
+    if (gs.all.tp === 0) bad(`touch ${dir}: the walk has no tp trade`);
+  }
+  if (st.dirs.flow.all.trades + st.dirs.fade.all.trades !== 2 * entriesAll) bad("touch: trades are not 2 x entries");
+  for (const dir of DIRS) {
+    const g = st.dirs[dir].all;
+    console.log(`walk seed ${seed} touch ${TOUCH} tp ${TP} ${dir}: entries ${entriesAll}`);
+    for (const line of printTpGroup("all", g)) console.log(`  ${line}`);
+  }
+  console.log(`walk seed ${seed} touch: zones compared ${tZones}; bars read again ${tBars}; look-ahead compared ${tLookahead}`);
+  if (entriesAll === 0 || tZones === 0 || tBars === 0 || tLookahead === 0) bad("the touch's checks compared nothing");
   return fail;
 };
 
@@ -571,6 +925,7 @@ const checkWalk = (seed: number): number => {
 if (import.meta.main) {
   if (MODE !== "print") await Deno.mkdir(OUT, { recursive: true });
   if (MODE !== "print") console.log(`reach ${REACH}${REACH === REACH_SPEC ? " (the spec's)" : " (REACH set: NOT the spec's 0.96)"}`);
+  if (MODE !== "print") console.log(`touch ${TOUCH} tp ${TP}${TOUCH === TOUCH_SPEC && TP === TP_SPEC ? " (the spec's)" : " (TOUCH or TP set: NOT the spec's 0.96 and 10)"}`);
   if (MODE === "synthetic") {
     let fail = 0;
     for (const seed of env("SEEDS", "1,2").split(",").map(Number)) fail += checkWalk(seed);
@@ -588,9 +943,15 @@ if (import.meta.main) {
     const trades = ordered(as.flatMap((a) => tradesOfPair(a)));
     await Deno.writeTextFile(`${OUT}/rows.csv`, csvOf(trades));
     await Deno.writeTextFile(`${OUT}/summary.json`, JSON.stringify(summaryOf(trades, as), null, 1));
+    // the touch, apart (rows.csv and summary.json above do not depend on it)
+    const touch = as.map((a) => touchOf(a));
+    const tTrades = tpOrdered(touch.flatMap((x) => x.trades));
+    await Deno.writeTextFile(`${OUT}/rows-tp.csv`, csvTpOf(tTrades));
+    await Deno.writeTextFile(`${OUT}/summary-tp.json`, JSON.stringify(summaryTpOf(tTrades, as.map((a, q) => ({ pair: a.d.pair, entries: touch[q].entries.length }))), null, 1));
     // the numbers are printed by the workflow only after the Python agreed (research/macd90m-check.py)
-    console.log(`written: ${trades.length} rows`);
+    console.log(`written: ${trades.length} rows; the touch: ${tTrades.length} rows`);
   } else if (MODE === "print") {
     printSummary(JSON.parse(await Deno.readTextFile(`${OUT}/summary.json`)));
+    printSummaryTp(JSON.parse(await Deno.readTextFile(`${OUT}/summary-tp.json`)));
   }
 }

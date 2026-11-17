@@ -237,4 +237,6 @@ sum over no trade included).
 - The Python (research/macd90m-check.py, its touch part written apart from the TypeScript's) gives every row and number
   of rows-tp.csv and summary-tp.json.
 - Not measured: gold, the shares (no bid and ask minutes in the study's data), the function's own reading (GMO's
-  forming bar, its week; a replay like research/macdride-replay.ts after the owner chooses).
+  forming bar, its week; a replay like research/macdride-replay.ts after the owner chooses), and the same trade at
+  minutes with no touch (with no stop and followed to the last minute loaded, the tp share is high by construction,
+  CLAUDE.md: the touch's tp share alone does not show what the touch adds over any entry).
