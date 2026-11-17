@@ -2136,6 +2136,10 @@ export const en: Dict = {
     rideAt: (pct: number) => `Notice (already at ${pct}%)`,
     ridePrices: (first: string, seen: string) => `first email's price ${first} / price when seen ${seen}`,
     plan: (entry: string, stop: string, target: string) => `Entry ${entry} / Stop ${stop} / Target ${target}`,
+    // the MACD fade's row (1-hour closes at 96%, research/macdfade1h-prod-spec.md section 5): its tag, and the price in
+    // only (no take-profit or stop price is written). ruleTag's " (MACD ride)" and " (Stock MACD)" stay for v9's rows
+    ruleTagFade: { macdx: " (MACD fade)", stockmacd: " (Stock MACD fade)" } as Record<string, string>,
+    fadePlan: (entry: string) => `In ${entry} / no take profit, no stop`,
     // #108: the live record of what each signal did afterwards
     record: {
       title: "How the alerts did (recorded from the prices that followed)",

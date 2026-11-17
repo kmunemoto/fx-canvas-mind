@@ -2233,6 +2233,10 @@ export const ja = {
     spikeUp: "急騰",
     spikeDown: "急落",
     plan: (entry: string, stop: string, target: string) => `目安 ${entry} / 損切り ${stop} / 利確 ${target}`,
+    // 「MACD の逆張り」（1時間足の確定・96%、research/macdfade1h-prod-spec.md 5）の行: 印と、入りの値段だけの行
+    // （利確・損切りの値段は書かない）。ruleTag の「（MACD の流れ）」「（株の MACD）」は v9 の行のために残す
+    ruleTagFade: { macdx: "（MACD の逆張り）", stockmacd: "（株の MACD・逆張り）" } as Record<string, string>,
+    fadePlan: (entry: string) => `入り ${entry} / 利確・損切りなし`,
     // #397: the MACD ride's second email and its notice, in the recent list (docs §8.150)
     // v10: the level is the row's own (v9 96%, v10 95%), read from its id
     rideOut: {

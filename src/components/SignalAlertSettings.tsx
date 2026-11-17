@@ -119,6 +119,10 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
     if (r.ride === "at" && r.rideOutPct !== null)
       return `${r.pair ?? ""} ${tf} ${a.rideAt(r.rideOutPct)}`.trim() + (a.ruleTag[r.rule] ?? "");
     if (r.rule === "spike") return `${r.pair ?? ""} ${tf} ${r.side === "BUY" ? a.spikeUp : r.side === "SELL" ? a.spikeDown : ""}`.trim();
+    // the MACD fade (research/macdfade1h-prod-spec.md section 5): its one email is an entry, its side in its colour,
+    // tagged as the fade, a share's as the stock MACD's fade (so it does not read like a v9 share email 1, whose side
+    // was the other way round)
+    if (r.fade !== null) return `${r.pair ?? ""} ${tf} ${r.side ? a.sides[r.side] : ""}`.trim() + (a.ruleTagFade[r.rule] ?? "");
     // #397: a row of the MACD rules that is not a ride's (the 95% email's, stopped when the ride took its place, and
     // older ones) keeps its side, its colour and its plan line, under a tag that does not call it the ride: that
     // email had a stop and a target, and its side was the other way round
@@ -408,7 +412,11 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
                     {r.kind === "signal" && r.ride === "out" && (r.entry !== null || r.target !== null) && (
                       <p className="font-mono text-muted-foreground" data-testid="signal-alert-ride-prices">{a.ridePrices(fmt(r.entry), fmt(r.target))}</p>
                     )}
-                    {r.kind === "signal" && r.entry !== null && r.stop !== null && (
+                    {/* the MACD fade: the price in only; no price is shown as a take-profit or a stop */}
+                    {r.kind === "signal" && r.fade !== null && r.entry !== null && (
+                      <p className="font-mono text-muted-foreground" data-testid="signal-alert-fade-plan">{a.fadePlan(fmt(r.entry))}</p>
+                    )}
+                    {r.kind === "signal" && r.fade === null && r.entry !== null && r.stop !== null && (
                       <p className="font-mono text-muted-foreground">{a.plan(fmt(r.entry), fmt(r.stop), fmt(r.target))}</p>
                     )}
                   </div>
