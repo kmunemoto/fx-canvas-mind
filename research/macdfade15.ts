@@ -23,6 +23,13 @@
 //
 //   SHARE           the share at the bar's close: above 0, at most 1 (not given or empty: 0.96).
 //   TP              the take profit in pips: a whole number, at least 1 (not given or empty: 10).
+//   TF              the chart: 15min (not given or empty) or 1h. The owner (2026-11-17, after the 15-minute run):
+//                   「やっぱりメールの判断1時間足で」. With 1h the bars are GMO's 1-hour files (1hour), read 0, 3 and 5
+//                   minutes after a close (indicators.ts gmoIntervalsDue), LOAD_FROM's default is 2023-10-01 (600
+//                   hours before START) and OUT's research/out/macdfade1h; the walks' 1-hour files are made from
+//                   their 15-minute bars (hoursOf). Everything else is the same rule on 1-hour bars (research/
+//                   macdfade15-spec.md "On 1-hour bars (TF=1h)"). With 15min every byte written is as before TF,
+//                   but summary.json's meta, which now names the chart (tf).
 //
 // Nothing here changes an email; the numbers are the study's only.
 
@@ -32,18 +39,24 @@ import { decideZoneOnWindow, LEVEL_WINDOW, ZONE_SHARE, zoneAt } from "../supabas
 import { macd } from "../supabase/functions/_shared/macd.ts";
 import { barInsideClosure, isPossiblyClosed } from "../supabase/functions/_shared/market-hours.ts";
 import { type LoadStats, loadM1, type M1, newLoadStats, type Source, synthesize, writeGmoFiles } from "./ownerhold-data.ts";
-import { loadTf, quotesOf } from "./trend-data.ts";
-import { lowerBound, weekendOutOf } from "./trend-labels.ts";
+import { loadTf, quotesOf, ruleKeyOf, STEP_OF, writeWalk } from "./trend-data.ts";
+import { emptyBars, fromQuotes, lowerBound, weekendOutOf } from "./trend-labels.ts";
 import { mean, median } from "./flowz-lib.ts";
-import { MINUTE } from "./lib.ts";
+import { HOUR, MINUTE } from "./lib.ts";
 import { atShare, coarsen, decimalsOf, iso, P, type PairData, PAIRS, poisoned, shareOf, type Side, type Zone, zonesOf } from "./macd90.ts";
 
 const env = (k: string, d: string) => Deno.env.get(k) ?? d;
 const MODE = env("MODE", "synthetic");
+const TF_IN = env("TF", "") || "15min";
+if (TF_IN !== "15min" && TF_IN !== "1h") throw new Error(`TF "${TF_IN}": 15min or 1h`);
+const TF = TF_IN as "15min" | "1h";
+// the chart's bars in words, and GMO's folder of them
+const TF_WORD = TF === "1h" ? "1-hour" : "15-minute";
+const GMO_FOLDER = TF === "1h" ? "1hour" : "15min";
 const START = Date.parse(env("START", "2024-01-01T00:00:00Z"));
 const END = Date.parse(env("END", "2026-11-10T21:00:00Z"));
-const LOAD_FROM = Date.parse(env("LOAD_FROM", "2023-12-01T00:00:00Z"));
-const OUT = env("OUT", "research/out/macdfade15");
+const LOAD_FROM = Date.parse(env("LOAD_FROM", TF === "1h" ? "2023-10-01T00:00:00Z" : "2023-12-01T00:00:00Z"));
+const OUT = env("OUT", TF === "1h" ? "research/out/macdfade1h" : "research/out/macdfade15");
 if (!(Number.isFinite(START) && Number.isFinite(END) && Number.isFinite(LOAD_FROM) && LOAD_FROM <= START && START < END)) throw new Error("LOAD_FROM <= START < END, as times");
 const SHARE_SPEC = 0.96;
 const TP_SPEC = 10;
@@ -55,14 +68,14 @@ if (!(Number.isSafeInteger(TP) && TP >= 1)) throw new Error(`TP "${env("TP", "")
 const MESS = env("MESS", "") === "1";
 if (MESS && MODE !== "walkfiles") throw new Error("MESS=1 goes with MODE=walkfiles only");
 const W = LEVEL_WINDOW;
-const STEP = 15 * MINUTE;
+const STEP = STEP_OF[TF];
 type Pair = typeof PAIRS[number];
 const pairIndex = (p: string) => PAIRS.indexOf(p as Pair);
 
-// the function reads the 15-minute chart 0, 1 and 3 minutes after a close (indicators.ts gmoIntervalsDue) and does not
-// run while isPossiblyClosed holds: a signal is mailed when one of those reads (a second into its minute) is not shut
-// (research/macd15.ts mailedAt)
-const READS = [0, 1, 3] as const;
+// the function reads the 15-minute chart 0, 1 and 3 minutes after a close, the 1-hour chart 0, 3 and 5 (indicators.ts
+// gmoIntervalsDue), and does not run while isPossiblyClosed holds: a signal is mailed when one of those reads (a second
+// into its minute) is not shut (research/macd15.ts mailedAt)
+const READS: readonly number[] = TF === "1h" ? [0, 3, 5] : [0, 1, 3];
 const mailedAt = (T: number): boolean => READS.some((r) => !isPossiblyClosed(T + r * MINUTE + 1000));
 
 // ---- the 15-minute chart ------------------------------------------------------------------------------
@@ -72,7 +85,7 @@ const mailedAt = (T: number): boolean => READS.some((r) => !isPossiblyClosed(T +
 const chartOf = (pair: string, qs: QuoteCandle[]): PairData => {
   const byT = new Map(qs.map((q) => [Date.parse(q.datetime), q]));
   const d: PairData = { pair, n: 0, t: [], mid: [], bc: [], bl: [], ac: [], ah: [] };
-  for (const c of historyRead(pair, "15min", qs, END).candles) {
+  for (const c of historyRead(pair, TF, qs, END).candles) {
     const t = Date.parse(c.datetime.replace(" ", "T") + "Z");
     const q = byT.get(t);
     if (!q) throw new Error(`${pair} ${iso(t)}: a chart bar without its quote`);
@@ -388,7 +401,7 @@ const closeVsMinuteOf = (a: PairAll, entries: Signal[]) => {
     c[r]++;
     if (r === "differ" && examples.length < 5) {
       const k = lowerBound(m1.t, T) - 1;
-      examples.push(`${iso(d.t[n])} 15min bid/ask close ${d.bc[n]}/${d.ac[n]}, last minute ${iso(m1.t[k])} ${m1.bc[k]}/${m1.ac[k]}`);
+      examples.push(`${iso(d.t[n])} ${TF} bid/ask close ${d.bc[n]}/${d.ac[n]}, last minute ${iso(m1.t[k])} ${m1.bc[k]}/${m1.ac[k]}`);
     }
   }
   for (const e of entries) {
@@ -409,7 +422,7 @@ const alignmentBad = (p: { pair: string; closeVsMinute: ReturnType<typeof closeV
   const c = p.closeVsMinute;
   const k = c.same + c.differ;
   if (k > 0 && c.differ <= ALIGN_MAX * k) return null;
-  return `${p.pair}: GMO's 15-minute close differs from the last minute inside the bar in ${c.differ} of the ${k} bars in range with a minute (more than ${100 * ALIGN_MAX}%; noMinute ${c.noMinute}): the minutes may not be labelled as the 15-minute bars are, so the numbers are not trusted`;
+  return `${p.pair}: GMO's ${TF_WORD} close differs from the last minute inside the bar in ${c.differ} of the ${k} bars in range with a minute (more than ${100 * ALIGN_MAX}%; noMinute ${c.noMinute}): the minutes may not be labelled as the ${TF_WORD} bars are, so the numbers are not trusted`;
 };
 
 // the entries whose bar before, read on its own 600-bar window (Z(n − 1)), is at the share on the entry's side
@@ -521,7 +534,7 @@ const tradeOrdered = (all: Trade[]): Trade[] => [...all].sort((a, b) => a.T0 - b
 const baseOrdered = (all: BTrade[]): BTrade[] => [...all].sort((a, b) => a.T0 - b.T0 || pairIndex(a.pair) - pairIndex(b.pair) || sideOrder(a.side) - sideOrder(b.side));
 
 const summaryOf = (trades: Trade[], pairs: PairRow[], base: BTrade[]) => ({
-  meta: { start: iso(START), end: iso(END), loadFrom: iso(LOAD_FROM), share: SHARE, tp: TP },
+  meta: { start: iso(START), end: iso(END), loadFrom: iso(LOAD_FROM), share: SHARE, tp: TP, tf: TF as string },
   pairs,
   dirs: { fade: groupsOf(trades.filter((t) => t.dir === "fade")), flow: groupsOf(trades.filter((t) => t.dir === "flow")) },
   base: baseGroupsOf(base),
@@ -547,13 +560,16 @@ const groupLines = (k: string, g: Group): string[] => [
 const sideBySide = (k: string, name: string, g: Group) =>
   `${k.padEnd(8)} ${name.padEnd(4)} trades ${g.trades} tp ${rate(g)}% open ${g.open} | pips mean ${fmt(g.pipsMean)} sum ${fmt(g.pipsSum, 1)} | mae median ${fmt(g.maeMedian, 1)} p90 ${fmt(g.maeP90, 1)} max ${fmt(g.maeMax, 1)} | tp minutes median ${fmt(g.tpMinutesMedian, 0)} p90 ${fmt(g.tpMinutesP90, 0)} max ${fmt(g.tpMinutesMax, 0)} | open pips sum ${fmt(g.openPipsSum, 1)} mean ${fmt(openMean(g))} worst ${fmt(g.openPipsWorst, 1)} minutes max ${fmt(g.openMinutesMax, 0)}`;
 
+// a summary's chart in words (a summary from before TF has no tf: 15min) and the function's reads after its closes
+const wordOf = (tf: string | undefined) => (tf === "1h" ? "1-hour" : "15-minute");
+const readsOf = (tf: string | undefined) => (tf === "1h" ? "0, 3 and 5" : "0, 1 and 3");
 const printSummary = (s: Summary) => {
-  console.log(`== the MACD fade on the 15-minute chart: one entry a closed 15-minute bar whose close puts the line at ${s.meta.share} on a side the bar before was not at`);
+  console.log(`== the MACD fade on the ${wordOf(s.meta.tf)} chart: one entry a closed ${wordOf(s.meta.tf)} bar whose close puts the line at ${s.meta.share} on a side the bar before was not at`);
   console.log(`   the email is the fade side and states no target and no stop; measured as the owner holds: take profit ${s.meta.tp} pips, no stop, every email taken`);
   console.log(`   (research/macdfade15-spec.md). Open trades are still held at the last minute loaded (their pips unrealized). Orders not filled: 0 (in at the bar's close: no limit order).`);
   console.log(`   A tp trade's pips are +${s.meta.tp} exactly; the mean a trade is set mostly by the open trades' pips at the last minute (their "open ... mean" below).`);
   console.log(`   Every trade is in at the bar's exact closing price and may reach its target from the first minute after the close. The minutes between the close and`);
-  console.log(`   the owner's order (the function reads 0, 1 and 3 minutes after the close, the email is then sent and the order placed by hand), and the price then: not measured.`);
+  console.log(`   the owner's order (the function reads ${readsOf(s.meta.tf)} minutes after the close, the email is then sent and the order placed by hand), and the price then: not measured.`);
   console.log(`meta ${JSON.stringify(s.meta)}`);
   for (const p of s.pairs) console.log(`pair ${JSON.stringify(p)}`);
   for (const dir of DIRS) {
@@ -563,11 +579,11 @@ const printSummary = (s: Summary) => {
   console.log(`== base (no signal: every bar the entries may come from, at its first minute, a BUY at the ask close and a SELL at the bid close; take profit ${s.meta.tp}, no stop)`);
   for (const [k, g] of Object.entries(s.base)) for (const line of groupLines(k, g)) console.log(line);
   console.log(`== fade, flow and base side by side (take profit ${s.meta.tp}, no stop; pips a trade over all trades, open ones unrealized)`);
-  // the one real-data check that the minutes line up with the 15-minute bars (the real run stops above ALIGN_MAX)
+  // the one real-data check that the minutes line up with the chart's bars (the real run stops above ALIGN_MAX)
   for (const p of s.pairs) {
     const c = p.closeVsMinute;
     const k = c.same + c.differ;
-    console.log(`${p.pair}: GMO's 15-minute close equals the last minute inside the bar in ${c.same} of the ${k} bars in range with a minute (${fmt(k ? (100 * c.same) / k : null, 2)}%), differs in ${c.differ}, no minute ${c.noMinute}; the entries' bars: same ${c.entrySame} differ ${c.entryDiffer} no minute ${c.entryNoMinute}`);
+    console.log(`${p.pair}: GMO's ${wordOf(s.meta.tf)} close equals the last minute inside the bar in ${c.same} of the ${k} bars in range with a minute (${fmt(k ? (100 * c.same) / k : null, 2)}%), differs in ${c.differ}, no minute ${c.noMinute}; the entries' bars: same ${c.entrySame} differ ${c.entryDiffer} no minute ${c.entryNoMinute}`);
   }
   for (const k of ["all", ...PAIRS, "BUY", "SELL", "top", "bottom"]) {
     for (const [name, g] of [["fade", s.dirs.fade[k]], ["flow", s.dirs.flow[k]], ["base", s.base[k]]] as Array<[string, Group | undefined]>) if (g) console.log(sideBySide(k, name, g));
@@ -595,7 +611,7 @@ interface NullRun {
   meta: Summary["meta"] & { seeds: number[] };
   walks: Array<{ seed: number; entries: number; gaps: Gaps }>;
 }
-const sameRun = (a: Summary["meta"], b: Summary["meta"]) => a.start === b.start && a.end === b.end && a.loadFrom === b.loadFrom && a.share === b.share && a.tp === b.tp;
+const sameRun = (a: Summary["meta"], b: Summary["meta"]) => a.start === b.start && a.end === b.end && a.loadFrom === b.loadFrom && a.share === b.share && a.tp === b.tp && a.tf === b.tf;
 const sgn = (v: number) => `${v >= 0 ? "+" : ""}${v.toFixed(2)}`;
 
 const printGaps = (s: Summary, nul0: NullRun | null) => {
@@ -640,7 +656,7 @@ const printGaps = (s: Summary, nul0: NullRun | null) => {
 // the same study with END a week earlier (OUT_END1W, checked by the Python too): the open trades valued a week
 // earlier and the last week's entries left out; how much the mean a trade moves with the last minute's price
 const printEarlier = (s: Summary, e: Summary | null) => {
-  if (!e || !(e.meta.start === s.meta.start && e.meta.loadFrom === s.meta.loadFrom && e.meta.share === s.meta.share && e.meta.tp === s.meta.tp)) {
+  if (!e || !(e.meta.start === s.meta.start && e.meta.loadFrom === s.meta.loadFrom && e.meta.share === s.meta.share && e.meta.tp === s.meta.tp && e.meta.tf === s.meta.tf)) {
     console.log(`== END a week earlier: ${e ? `another run (${JSON.stringify(e.meta)})` : "not given (OUT_END1W)"}: how much the mean a trade moves with the last minute's price is not shown`);
     return;
   }
@@ -667,8 +683,8 @@ const readJsonIfAny = async <T>(path: string): Promise<T | null> => {
 
 const walkOf = (seed: number, pair: string) => synthesize(pair, pairIndex(pair), { seed, trend: 0, startPips: null }, LOAD_FROM, END);
 
-// the walk's 15-minute bars rebuilt from its minutes, as GMO's files and the loader would give them: on the 15-minute
-// grid, opened at or after LOAD_FROM, closed by END, not wholly inside the weekend closure
+// the walk's chart bars (15-minute or 1-hour) rebuilt from its minutes, as GMO's files and the loader would give them:
+// on the chart's grid, opened at or after LOAD_FROM, closed by END, not wholly inside the weekend closure
 const bars15Of = (m: M1): QuoteCandle[] =>
   coarsen(m, STEP).filter((q) => {
     const t = Date.parse(q.datetime);
@@ -682,6 +698,33 @@ const fromStart = (m: M1): M1 => {
   return { ...m, n: m.n - k, t: cut(m.t), bo: cut(m.bo), bh: cut(m.bh), bl: cut(m.bl), bc: cut(m.bc), ao: cut(m.ao), ah: cut(m.ah), al: cut(m.al), ac: cut(m.ac) };
 };
 const synthAll = (pair: string, m: M1): PairAll => pairAllOf(chartOf(pair, bars15Of(m)), fromStart(m));
+
+// TF=1h: the walk's 1-hour bars made from its own 15-minute bars (not from its minutes; the walk's 1-hour files), each
+// side's open the first quarter's, high and low the quarters' highest and lowest, close the last quarter's; the same
+// grid and the same filter as bars15Of. Held against the bars rebuilt from the minutes (check 1).
+const hoursOf = (q15: QuoteCandle[]): QuoteCandle[] => {
+  const out: QuoteCandle[] = [];
+  for (const q of q15) {
+    const t = Math.floor(Date.parse(q.datetime) / HOUR) * HOUR;
+    const datetime = new Date(t).toISOString();
+    const last = out.length ? out[out.length - 1] : null;
+    if (last && last.datetime === datetime) {
+      for (const side of ["bid", "ask"] as const) {
+        last[side].high = Math.max(last[side].high, q[side].high);
+        last[side].low = Math.min(last[side].low, q[side].low);
+        last[side].close = q[side].close;
+      }
+    } else {
+      out.push({ datetime, bid: { datetime, open: q.bid.open, high: q.bid.high, low: q.bid.low, close: q.bid.close }, ask: { datetime, open: q.ask.open, high: q.ask.high, low: q.ask.low, close: q.ask.close } });
+    }
+  }
+  return out.filter((q) => {
+    const t = Date.parse(q.datetime);
+    return t >= LOAD_FROM && t + HOUR <= END && !barInsideClosure(t, HOUR);
+  });
+};
+// the walk's own chart bars: its 15-minute bars, or the 1-hour bars made from them
+const ownBarsOf = (q15: QuoteCandle[]): QuoteCandle[] => (TF === "1h" ? hoursOf(q15) : q15);
 
 // a pair's study, baseline and row (the walks in memory and the files alike); the index dropped after it
 const runPair = (a: PairAll, bad: (msg: string) => void) => {
@@ -720,9 +763,10 @@ const checkPair = (seed: number, pair: string, bad: (msg: string) => void) => {
   const w = walkOf(seed, pair);
   const m = w.m1;
   const c = { line: 0, both: 0, cmp95: 0, notMailedBars: 0, lookahead: 0, lookaheadTp: 0, baseLookahead: 0 };
-  // (1) the 15-minute bars rebuilt from the minutes are the walk's own (the files' bars)
+  // (1) the chart bars rebuilt from the minutes are the walk's own (the files' bars)
   const q = bars15Of(m);
-  if (JSON.stringify(q) !== JSON.stringify(w.q15)) bad(`${pair}: the 15-minute bars rebuilt from the minutes differ from the walk's own (${q.length} and ${w.q15.length})`);
+  const own = ownBarsOf(w.q15);
+  if (JSON.stringify(q) !== JSON.stringify(own)) bad(`${pair}: the ${TF_WORD} bars rebuilt from the minutes differ from the walk's own (${q.length} and ${own.length})`);
   const a = synthAll(pair, m);
   const { d, m1 } = a;
   const r = runPair(a, bad);
@@ -766,7 +810,7 @@ const checkPair = (seed: number, pair: string, bad: (msg: string) => void) => {
     if (f.dir !== "fade" || g.dir !== "flow") bad(`${at}: not fade then flow`);
     for (const t of [f, g]) {
       if (t.pair !== e.pair || t.n !== e.n || t.open !== e.open || t.T0 !== e.T0 || t.zside !== e.zside || t.share0 !== e.share0 || t.kFrom !== e.kFrom) bad(`${at} ${t.dir}: not its entry's pair, bar, open, T0, zside, share0`);
-      if (t.entry !== (t.side === "BUY" ? d.ac[e.n] : d.bc[e.n])) bad(`${at} ${t.dir}: the entry is not the 15-minute bar's ${t.side === "BUY" ? "ask" : "bid"} close`);
+      if (t.entry !== (t.side === "BUY" ? d.ac[e.n] : d.bc[e.n])) bad(`${at} ${t.dir}: the entry is not the ${TF_WORD} bar's ${t.side === "BUY" ? "ask" : "bid"} close`);
       if (t.result === "tp" && !(t.pips === TP && t.exit === t.target && t.T > t.T0 && t.T <= lastT)) bad(`${at} ${t.dir}: a tp trade's pips ${t.pips} (TP ${TP}), exit or T`);
       if (t.result === "open" && !(t.pips < TP && t.T === lastT)) bad(`${at} ${t.dir}: an open trade's pips ${t.pips} not below TP ${TP}, or not valued at the last minute`);
       if (!(t.mae >= 0) || t.minutes !== (t.T - t.T0) / MINUTE) bad(`${at} ${t.dir}: mae or minutes`);
@@ -791,7 +835,8 @@ const checkPair = (seed: number, pair: string, bad: (msg: string) => void) => {
       if (!(t.mae >= 0) || t.minutes !== (t.T - t.T0) / MINUTE) bad(`${at} ${t.side}: mae or minutes`);
     }
   }
-  // the baseline's entries counted again: the bars the entries may come from whose 15 minutes hold a minute loaded
+  // the baseline's entries counted again: the bars the entries may come from whose time (15 minutes or an hour) holds a
+  // minute loaded
   const quarters = new Set<number>();
   for (let k = 0; k < m1.n; k++) quarters.add(Math.floor(m1.t[k] / STEP) * STEP);
   let baseBars = 0;
@@ -891,30 +936,41 @@ const handCases = (bad: (msg: string) => void): number => {
 // (10) the weekend gate by hand: a signal at each bar of the table below, held against the table written from the
 // spec ("a bar is not read exactly when it closes at or after Friday 21:00 UTC and before Sunday 22:00 UTC"), through
 // studyOf (the entries and notMailed) and baseOf (the baseline's entries). mailedAt is what is tested, so the table
-// does not call it. The week: the first Friday (UTC) whose 20:30 bar closes at or after START.
+// does not call it. The week: the first Friday (UTC) whose first table bar closes at or after START.
 const gateCases = (bad: (msg: string) => void): number => {
-  const HOUR = 60 * MINUTE;
   const DAY = 24 * HOUR;
-  let fri = Math.floor(START / DAY) * DAY;
-  while (new Date(fri).getUTCDay() !== 5 || fri + 20 * HOUR + 30 * MINUTE + STEP < START) fri += DAY;
   // [the bar's open from that Friday 00:00 UTC, mailed by hand]
-  const table: Array<[number, boolean]> = [
-    [20 * HOUR + 30 * MINUTE, true], // Friday, closes 20:45: the read at 20:45:01 is before 21:00
-    [20 * HOUR + 45 * MINUTE, false], // Friday, closes 21:00: reads 21:00:01, 21:01:01, 21:03:01, all shut
-    [21 * HOUR, false], // Friday, closes 21:15
-    [DAY + 12 * HOUR, false], // Saturday, closes 12:15
-    [2 * DAY + 21 * HOUR + 30 * MINUTE, false], // Sunday, closes 21:45: reads 21:45:01 to 21:48:01, before 22:00
-    [2 * DAY + 21 * HOUR + 45 * MINUTE, true], // Sunday, closes 22:00: the read at 22:00:01 is open
-    [3 * DAY, true], // Monday, closes 00:15
-  ];
+  const table: Array<[number, boolean]> = TF === "1h"
+    ? [
+      [19 * HOUR, true], // Friday, closes 20:00: the read at 20:00:01 is before 21:00
+      [20 * HOUR, false], // Friday, closes 21:00: reads 21:00:01, 21:03:01, 21:05:01, all shut
+      [21 * HOUR, false], // Friday, closes 22:00
+      [DAY + 12 * HOUR, false], // Saturday, closes 13:00
+      [2 * DAY + 20 * HOUR, false], // Sunday, closes 21:00: reads 21:00:01 to 21:05:01, before 22:00
+      [2 * DAY + 21 * HOUR, true], // Sunday, closes 22:00: the read at 22:00:01 is open
+      [3 * DAY, true], // Monday, closes 01:00
+    ]
+    : [
+      [20 * HOUR + 30 * MINUTE, true], // Friday, closes 20:45: the read at 20:45:01 is before 21:00
+      [20 * HOUR + 45 * MINUTE, false], // Friday, closes 21:00: reads 21:00:01, 21:01:01, 21:03:01, all shut
+      [21 * HOUR, false], // Friday, closes 21:15
+      [DAY + 12 * HOUR, false], // Saturday, closes 12:15
+      [2 * DAY + 21 * HOUR + 30 * MINUTE, false], // Sunday, closes 21:45: reads 21:45:01 to 21:48:01, before 22:00
+      [2 * DAY + 21 * HOUR + 45 * MINUTE, true], // Sunday, closes 22:00: the read at 22:00:01 is open
+      [3 * DAY, true], // Monday, closes 00:15
+    ];
+  let fri = Math.floor(START / DAY) * DAY;
+  while (new Date(fri).getUTCDay() !== 5 || fri + table[0][0] + STEP < START) fri += DAY;
   const opens = table.map(([o]) => fri + o);
   const lastClose = opens[opens.length - 1] + STEP;
   if (lastClose >= END) {
     bad(`weekend gate by hand: the week of ${iso(fri)} does not end before END ${iso(END)} (the period is too short for this check)`);
     return 0;
   }
-  // 599 bars long before START (none in range), then the table's bars, each a signal on the top side
-  const t = [...Array.from({ length: W - 1 }, (_, i) => fri - 30 * DAY + i * STEP), ...opens];
+  // 599 bars long before START (none in range: 599 hours are about 25 days), then the table's bars, each a signal on
+  // the top side
+  const back = TF === "1h" ? 60 * DAY : 30 * DAY;
+  const t = [...Array.from({ length: W - 1 }, (_, i) => fri - back + i * STEP), ...opens];
   const n = t.length;
   const d: PairData = { pair: "USD/JPY", n, t, mid: t.map(() => 150), bc: t.map(() => 150), bl: t.map(() => 150), ac: t.map(() => 150.002), ah: t.map(() => 150.002) };
   const z = t.map((_, k): Zone | null => (k < W - 1 ? null : { m: 1, top: 1, bottom: -1 }));
@@ -1003,18 +1059,24 @@ const loadFiles = async (src: Source): Promise<{ as: PairAll[]; st: LoadStats; d
   const diags: Array<{ oneSide: number; crossed: number; repeated: number }> = [];
   const weekend = weekendOutOf("inside");
   for (const pair of PAIRS) {
-    const q = await loadTf(src, pair, "15min", LOAD_FROM, END, st, weekend);
+    const q = await loadTf(src, pair, TF, LOAD_FROM, END, st, weekend);
     const d = chartOf(pair, quotesOf(q.bars));
     const m1 = await loadM1(src, pair, START, END, st);
     as.push(pairAllOf(d, m1));
     diags.push({ oneSide: q.diag.oneSide, crossed: q.diag.crossed, repeated: q.diag.repeated });
-    console.log(`${pair}: 15min ${q.bars.n} chart ${d.n} (from ${d.n ? iso(d.t[0]) : "-"}), 1min ${m1.n}; 15min files ${q.diag.files} oneSide ${q.diag.oneSide} crossed ${q.diag.crossed} repeated ${q.diag.repeated} keyMismatch ${q.diag.keyMismatch}`);
+    console.log(`${pair}: ${TF} ${q.bars.n} chart ${d.n} (from ${d.n ? iso(d.t[0]) : "-"}), 1min ${m1.n}; ${TF} files ${q.diag.files} oneSide ${q.diag.oneSide} crossed ${q.diag.crossed} repeated ${q.diag.repeated} keyMismatch ${q.diag.keyMismatch}`);
   }
   return { as, st, diags };
 };
 
 const writeWalkFiles = async (dir: string, seed: number) => {
-  for (const pair of PAIRS) await writeGmoFiles(dir, pair, walkOf(seed, pair), LOAD_FROM, END);
+  for (const pair of PAIRS) {
+    const w = walkOf(seed, pair);
+    // TF=1h: the 1-hour day files first (research/macd90m.ts's way: trend-data.ts writeWalk, its other timeframes
+    // empty), then the 1-minute and 15-minute files over them
+    if (TF === "1h") await writeWalk(dir, pair, { "5min": emptyBars(0), "15min": emptyBars(0), "1h": fromQuotes(hoursOf(w.q15), (t) => ruleKeyOf("1h", t)), "4h": emptyBars(0) }, LOAD_FROM, END);
+    await writeGmoFiles(dir, pair, w, LOAD_FROM, END);
+  }
 };
 
 // MESS=1: a walk's GMO files made untidy as GMO's can be, then read back through the real run's loaders (the Python
@@ -1040,7 +1102,7 @@ const messFiles = async (dir: string, pair: string) => {
   const withClose = (r: GmoRow, close: number): GmoRow => ({ ...r, close: px(close), high: px(Math.max(pt(r.high), close)), low: px(Math.min(pt(r.low), close)) });
   const count: Record<string, number> = {};
   const hit = (k: string) => (count[k] = (count[k] ?? 0) + 1);
-  for (const iv of ["15min", "1min"] as const) {
+  for (const iv of [GMO_FOLDER, "1min"]) {
     const base = `${dir}/${symbol}/${iv}`;
     const keys: string[] = [];
     for await (const f of Deno.readDir(`${base}/bid`)) if (f.name.endsWith(".json")) keys.push(f.name.slice(0, -5));
@@ -1061,25 +1123,25 @@ const messFiles = async (dir: string, pair: string) => {
         asks.delete(b.openTime);
         let bb: GmoRow | null = b;
         if (!a) throw new Error(`MESS ${pair} ${iv} ${keys[i]}: a walk row on one side only`);
-        if (iv === "15min") {
+        if (iv !== "1min") {
           if (q % 37 === 0) {
             a = undefined;
-            hit("15min one side");
+            hit(`${TF} one side`);
           } else if (q % 41 === 1) {
             a = withClose(a, pt(b.close) - 1);
-            hit("15min crossed");
+            hit(`${TF} crossed`);
           } else if (q % 43 === 2 && next) {
             next.bid.push(withClose(b, pt(b.close) - 2));
             next.ask.push(withClose(a, pt(b.close) - 1));
-            hit("15min repeated, the first bid crossed");
+            hit(`${TF} repeated, the first bid crossed`);
           } else if (q % 47 === 3 && next) {
             next.bid.push({ ...b });
             next.ask.push({ ...a });
-            hit("15min repeated, the same");
+            hit(`${TF} repeated, the same`);
           } else if (q % 53 === 4) {
             bb = withClose(b, pt(b.close) + 1);
             a = withClose(a, pt(a.close) + 1);
-            hit("15min closes moved");
+            hit(`${TF} closes moved`);
           }
         } else {
           if (q % 59 === 5) {
@@ -1123,8 +1185,8 @@ const messChecks = (as: PairAll[], st: LoadStats, diags: Array<{ oneSide: number
     let taken = 0;
     for (let n = 0; n < d.n; n++) if (Math.floor(d.t[n] / STEP) % 43 === 2) taken++;
     const cv = closeVsMinuteOf(a, []).c;
-    console.log(`MESS ${d.pair}: 15min oneSide ${g.oneSide} crossed ${g.crossed} repeated ${g.repeated}; minutes in no chart bar ${outside}; chart bars whose first bid row was crossed (the next bid row taken) ${taken}; close vs minute ${JSON.stringify(cv)}`);
-    if (!(g.oneSide > 0 && g.crossed > 0 && g.repeated > 0)) bad(`MESS ${d.pair}: the 15-minute loader met oneSide ${g.oneSide} crossed ${g.crossed} repeated ${g.repeated} (each should be above 0)`);
+    console.log(`MESS ${d.pair}: ${TF} oneSide ${g.oneSide} crossed ${g.crossed} repeated ${g.repeated}; minutes in no chart bar ${outside}; chart bars whose first bid row was crossed (the next bid row taken) ${taken}; close vs minute ${JSON.stringify(cv)}`);
+    if (!(g.oneSide > 0 && g.crossed > 0 && g.repeated > 0)) bad(`MESS ${d.pair}: the ${TF_WORD} loader met oneSide ${g.oneSide} crossed ${g.crossed} repeated ${g.repeated} (each should be above 0)`);
     if (outside === 0) bad(`MESS ${d.pair}: no minute in no chart bar`);
     if (taken < 2) bad(`MESS ${d.pair}: ${taken} chart bars from a time's second bid row`);
     if (!(cv.differ > 0 && cv.noMinute > 1)) bad(`MESS ${d.pair}: close vs minute differ ${cv.differ} noMinute ${cv.noMinute}`);
@@ -1136,7 +1198,7 @@ const messChecks = (as: PairAll[], st: LoadStats, diags: Array<{ oneSide: number
 if (import.meta.main) {
   if (MODE !== "print") {
     await Deno.mkdir(OUT, { recursive: true });
-    console.log(`share ${SHARE} tp ${TP}${SHARE === SHARE_SPEC && TP === TP_SPEC ? " (the spec's)" : " (SHARE or TP set: NOT the spec's 0.96 and 10)"}; start ${iso(START)} end ${iso(END)} loadFrom ${iso(LOAD_FROM)}`);
+    console.log(`tf ${TF} share ${SHARE} tp ${TP}${SHARE === SHARE_SPEC && TP === TP_SPEC ? " (the spec's)" : " (SHARE or TP set: NOT the spec's 0.96 and 10)"}; start ${iso(START)} end ${iso(END)} loadFrom ${iso(LOAD_FROM)}`);
   }
   if (MODE === "synthetic") {
     let fail = 0;
@@ -1180,7 +1242,7 @@ if (import.meta.main) {
       console.log(
         `${p.pair}: judged ${p.judged} (short ${p.short}, zoneless ${p.zoneless}); signals ${p.signals}: entries ${p.entries}, not mailed ${p.notMailed}; prevAt ${p.prevAt}; base ${p.baseEntries} entries; study ${r.ms.study.toFixed(0)} ms, base ${r.ms.base.toFixed(0)} ms (the index built and searched), checked in ${r.ms.check.toFixed(0)} ms: entry trades followed with the index ${r.checked.indexed}, baseline trades walked minute by minute ${r.checked.plain}`,
       );
-      console.log(`${p.pair}: GMO's 15-minute close against the last 1-minute bar in it: ${JSON.stringify(p.closeVsMinute)}`);
+      console.log(`${p.pair}: GMO's ${TF_WORD} close against the last 1-minute bar in it: ${JSON.stringify(p.closeVsMinute)}`);
       for (const x of closeVsMinuteOf(a, r.st.entries).examples) console.log(`  differs: ${x}`);
       return r;
     });
@@ -1237,7 +1299,7 @@ if (import.meta.main) {
       console.log(`${fail} CHECKS FAILED: null.json not written`);
       Deno.exit(1);
     }
-    const nul: NullRun = { meta: { start: iso(START), end: iso(END), loadFrom: iso(LOAD_FROM), share: SHARE, tp: TP, seeds }, walks };
+    const nul: NullRun = { meta: { start: iso(START), end: iso(END), loadFrom: iso(LOAD_FROM), share: SHARE, tp: TP, tf: TF, seeds }, walks };
     await Deno.writeTextFile(`${OUT}/null.json`, JSON.stringify(nul, null, 1));
     console.log(`written: ${OUT}/null.json (${walks.length} walks)`);
   } else if (MODE === "print") {

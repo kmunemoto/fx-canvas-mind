@@ -13,6 +13,11 @@
 #   real  GMO's real 15-minute and 1-minute bars (research/.cache, fetched when missing), after syn passed; the Python;
 #         the same with END a week earlier and the Python; ten driftless walks (the noise of the gaps); the numbers
 #
+# TF (2026-11-17): the owner then said 「やっぱりメールの判断1時間足で」, so a push measures the same rule on 1-hour bars
+# (TF=1h: GMO's 1hour files, the reads 0, 3 and 5 minutes after a close, LOAD_FROM 2023-10-01; research/
+# macdfade15-spec.md "On 1-hour bars (TF=1h)"); the 15-minute run (TF=15min) is the workflow_dispatch input's other
+# value. The syn job's period is New York's winter on 1h, when the walks have a Friday bar the weekend gate keeps.
+#
 # GitHub's runners reach GMO's public price API, which the development container cannot. Read-only: public files
 # fetched, a report printed; it writes nothing to the repository and holds no secret.
 name: Research macdfade15
@@ -43,6 +48,10 @@ on:
       - supabase/functions/track-outcomes/quotes.ts
   workflow_dispatch:
     inputs:
+      tf:
+        description: "The chart: 1h (the email's, 2026-11-17) or 15min. research/macdfade15-spec.md"
+        required: false
+        default: "1h"
       share:
         description: "The share at the bar's close (the spec's is 0.96). research/macdfade15-spec.md"
         required: false
@@ -56,9 +65,11 @@ permissions:
   contents: read
 
 env:
+  TF: ${{ github.event.inputs.tf || '1h' }}
   START: "2024-01-01T00:00:00Z"
   END: "2026-11-10T21:00:00Z"
-  LOAD_FROM: "2023-12-01T00:00:00Z"
+  # 600 bars before START: about 25 trading days of 1-hour bars, about 6 of 15-minute bars
+  LOAD_FROM: ${{ (github.event.inputs.tf || '1h') == '1h' && '2023-10-01T00:00:00Z' || '2023-12-01T00:00:00Z' }}
   SHARE: ${{ github.event.inputs.share || '0.96' }}
   TP: ${{ github.event.inputs.tp || '10' }}
 
@@ -67,9 +78,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      LOAD_FROM: "2024-01-01T00:00:00Z"
-      START: "2024-02-01T00:00:00Z"
-      END: "2024-05-01T00:00:00Z"
+      LOAD_FROM: ${{ (github.event.inputs.tf || '1h') == '1h' && '2023-10-01T00:00:00Z' || '2024-01-01T00:00:00Z' }}
+      START: ${{ (github.event.inputs.tf || '1h') == '1h' && '2023-11-10T00:00:00Z' || '2024-02-01T00:00:00Z' }}
+      END: ${{ (github.event.inputs.tf || '1h') == '1h' && '2024-03-08T21:00:00Z' || '2024-05-01T00:00:00Z' }}
     steps:
       - uses: actions/checkout@v4
       - uses: denoland/setup-deno@v2
@@ -128,7 +139,7 @@ jobs:
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: macdfade15-syn-failed-${{ github.run_id }}
+          name: macdfade15-syn-${{ env.TF }}-failed-${{ github.run_id }}
           path: |
             research/out/macdfade15-*/rows.csv
             research/out/macdfade15-*/summary.json
@@ -139,7 +150,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
-      OUT: research/out/macdfade15
+      OUT: research/out/macdfade${{ (github.event.inputs.tf || '1h') == '1h' && '1h' || '15' }}
     steps:
       - uses: actions/checkout@v4
       - uses: denoland/setup-deno@v2
@@ -211,11 +222,11 @@ jobs:
         run: |
           END1W=$(date -u -d "@$(( $(date -u -d "$END" +%s) - 604800 ))" +%Y-%m-%dT%H:%M:%SZ)
           echo "END $END, a week earlier $END1W"
-          mkdir -p research/out/macdfade15-end1w
-          END=$END1W OUT=research/out/macdfade15-end1w MODE=real deno run --v8-flags=--max-old-space-size=12288 \
+          mkdir -p $OUT-end1w
+          END=$END1W OUT=$OUT-end1w MODE=real deno run --v8-flags=--max-old-space-size=12288 \
             --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env \
             research/macdfade15.ts
-          END=$END1W python3 -I research/macdfade15-check.py --cache research/.cache --out research/out/macdfade15-end1w
+          END=$END1W python3 -I research/macdfade15-check.py --cache research/.cache --out $OUT-end1w
       # driftless walks over the same period through the same code (no signal can do better than none on them): the
       # gaps fade − base and fade − flow that chance alone gives, printed next to the real ones ($OUT/null.json)
       - name: Ten driftless walks (the noise of the gaps)
@@ -226,25 +237,24 @@ jobs:
         run: deno run --v8-flags=--max-old-space-size=12288 --allow-read=. --allow-write=research/out --allow-env research/macdfade15.ts
       - uses: actions/upload-artifact@v4
         with:
-          name: macdfade15-share${{ env.SHARE }}-tp${{ env.TP }}-${{ github.run_id }}
+          name: macdfade15-${{ env.TF }}-share${{ env.SHARE }}-tp${{ env.TP }}-${{ github.run_id }}
           path: |
-            research/out/macdfade15
-            research/out/macdfade15-end1w
+            ${{ env.OUT }}
+            ${{ env.OUT }}-end1w
           if-no-files-found: error
       # kept when a step fails, to look into (whatever was written; the step logs are kept by GitHub)
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: macdfade15-failed-${{ github.run_id }}
+          name: macdfade15-${{ env.TF }}-failed-${{ github.run_id }}
           path: |
-            research/out/macdfade15
-            research/out/macdfade15-end1w
+            ${{ env.OUT }}
+            ${{ env.OUT }}-end1w
           if-no-files-found: ignore
       - name: The numbers (the Python agreed)
         env:
           MODE: print
-          OUT_END1W: research/out/macdfade15-end1w
         run: |
-          deno run --allow-read=. --allow-env research/macdfade15.ts
-          echo "share ${SHARE} tp ${TP}"
-          sha256sum $OUT/rows.csv $OUT/summary.json $OUT/null.json research/out/macdfade15-end1w/rows.csv research/out/macdfade15-end1w/summary.json
+          OUT_END1W=$OUT-end1w deno run --allow-read=. --allow-env research/macdfade15.ts
+          echo "tf ${TF} share ${SHARE} tp ${TP}"
+          sha256sum $OUT/rows.csv $OUT/summary.json $OUT/null.json $OUT-end1w/rows.csv $OUT-end1w/summary.json

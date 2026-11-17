@@ -30,14 +30,18 @@ Checks of the Python's own work (a failure is counted as a difference too):
   - every entry trade, and every WALK_EVERY-th baseline trade, followed with the index equals the plain minute walk;
   - the counts add up (the spec's check 8).
 
+TF (the spec's "On 1-hour bars (TF=1h)"): 15min (not given or empty) or 1h. The owner (2026-11-17, after the
+15-minute run): 「やっぱりメールの判断1時間足で」. With 1h the chart is GMO's 1hour files, the reads 0, 3 and 5 minutes
+after a close, LOAD_FROM's default 2023-10-01; the rest is the same. summary.json's meta ends with tf.
+
 Usage:
-  [START=… END=… LOAD_FROM=… SHARE=… TP=…] python3 -I research/macdfade15-check.py --cache DIR --out OUT
-      DIR: <DIR>/<USD_JPY …>/<15min|1min>/<bid|ask>/<day key>.json (GMO's form)
+  [TF=… START=… END=… LOAD_FROM=… SHARE=… TP=…] python3 -I research/macdfade15-check.py --cache DIR --out OUT
+      DIR: <DIR>/<USD_JPY …>/<15min|1hour|1min>/<bid|ask>/<day key>.json (GMO's form)
       OUT: research/macdfade15.ts's rows.csv and summary.json (read only)
-  [START=… END=… LOAD_FROM=… SHARE=… TP=…] python3 -I research/macdfade15-check.py --cache DIR --self OUT2
+  [TF=… START=… END=… LOAD_FROM=… SHARE=… TP=…] python3 -I research/macdfade15-check.py --cache DIR --self OUT2
       writes the Python's own rows.csv and summary.json to OUT2, compares nothing
-  The defaults are the spec's: START 2024-01-01T00:00:00Z, END 2026-11-10T21:00:00Z, LOAD_FROM 2023-12-01T00:00:00Z,
-  SHARE 0.96, TP 10.
+  The defaults are the spec's: TF 15min, START 2024-01-01T00:00:00Z, END 2026-11-10T21:00:00Z, LOAD_FROM
+  2023-12-01T00:00:00Z (TF=1h: 2023-10-01T00:00:00Z), SHARE 0.96, TP 10.
 Exit: 0 = every row and number the same (last line PYTHON AGREES); 1 = a difference, a failed check or a bad input
 (last line PYTHON DISAGREES: n differences). --self: 0 when the Python's own checks pass.
 Printed: counts (bars, minutes, judged, signals, entries, baseline entries) and differences; no result of a trade.
@@ -65,13 +69,21 @@ m90 = _load('macd90_check', 'macd90-check.py')
 fc = m90.fc
 
 MIN = fc.MIN
-STEP = 15 * MIN                      # the 15-minute chart
+TF = os.environ.get('TF') or '15min'
+if TF not in ('15min', '1h'):
+    print(f'ERROR: TF {TF!r}: 15min or 1h')
+    print('PYTHON DISAGREES: 1 differences')
+    sys.exit(1)
+STEP = (60 if TF == '1h' else 15) * MIN    # the chart's bar
+FOLDER = '1hour' if TF == '1h' else '15min'   # GMO's folder of the chart's files
 WINDOW = 600                         # macd-level.ts LEVEL_WINDOW
 LO = WINDOW - 1                      # the first bar with 600 closes up to it
 PAIRS = ['USD/JPY', 'EUR/JPY', 'AUD/JPY', 'EUR/USD', 'AUD/USD']
-READS = (0, 1, 3)                    # signal-alerts/indicators.ts gmoIntervalsDue: the 15-minute chart's reads
+# signal-alerts/indicators.ts gmoIntervalsDue: the 15-minute chart's reads, the 1-hour chart's
+READS = (0, 3, 5) if TF == '1h' else (0, 1, 3)
 V8_SHARE = 0.95                      # macd-level.ts ZONE_SHARE (decideZoneOnWindow)
-DEFAULTS = dict(START='2024-01-01T00:00:00Z', END='2026-11-10T21:00:00Z', LOAD_FROM='2023-12-01T00:00:00Z')
+DEFAULTS = dict(START='2024-01-01T00:00:00Z', END='2026-11-10T21:00:00Z',
+                LOAD_FROM='2023-10-01T00:00:00Z' if TF == '1h' else '2023-12-01T00:00:00Z')
 DIRS = ('fade', 'flow')              # one entry's two rows: fade first
 BASE_SIDES = ('BUY', 'SELL')         # one baseline entry's two trades: BUY first
 COLS = ['dir', 'pair', 'open', 'T0', 'zside', 'side', 'entry', 'share0', 'target', 'result', 'T', 'exit', 'pips',
@@ -167,7 +179,7 @@ def rows_text(rows):
 
 # ---------------------------------------------------------------- one pair
 def mailed(T):
-    """the weekend gate: at least one of the reads (T + r minutes + 1 second, r in 0, 1, 3) not isPossiblyClosed"""
+    """the weekend gate: at least one of the reads (T + r minutes + 1 second, r in READS) not isPossiblyClosed"""
     return any(not fc.is_possibly_closed(T + r * MIN + 1000) for r in READS)
 
 
@@ -289,12 +301,12 @@ def compute_pair(cache, pi, pair, start, end, load_from, ld, prob, log):
     sym = pair.replace('/', '_')
     dec = 5 if pair.endswith('/USD') else 3
     scale = 10.0 ** dec
-    # the 15-minute chart: GMO's 15min day files, both sides (loadTf, weekend "inside"), the mid close rounded as drawn
-    got = fc.load_tf(cache, sym, '15min', STEP, fc.keys_of(load_from, end), load_from, end, ld)
+    # the chart: GMO's 15min (or 1hour) day files, both sides (loadTf, weekend "inside"), the mid close rounded as drawn
+    got = fc.load_tf(cache, sym, FOLDER, STEP, fc.keys_of(load_from, end), load_from, end, ld)
     n = len(got)
     t = [x[0] for x in got]
     c = [fc.round_chart((x[1][4] + x[2][4]) / 2, dec) for x in got]
-    bc = [x[1][4] for x in got]                      # GMO's own 15-minute bid close (not rounded)
+    bc = [x[1][4] for x in got]                      # GMO's own bid close of the bar (not rounded)
     ac = [x[2][4] for x in got]                      # and ask close
     del got
     # the 1-minute bars (loadM1, START to END)
@@ -351,7 +363,7 @@ def compute_pair(cache, pi, pair, start, end, load_from, ld, prob, log):
         else:
             cv = 'differ'
             if cvm['differ'] < 3:
-                log(f'  {pair} bar {fc.iso(t[j])}: the 15-minute close bid {bc[j]!r} ask {ac[j]!r} / its last minute '
+                log(f'  {pair} bar {fc.iso(t[j])}: the {TF} close bid {bc[j]!r} ask {ac[j]!r} / its last minute '
                     f'{fc.iso(mt[q])} bid {mbc[q]!r} ask {mac[q]!r}')
         cvm['bars'] += 1
         cvm[cv] += 1
@@ -589,7 +601,7 @@ def compute(cache, start, end, load_from, log):
         base.extend(b)
     rows.sort(key=lambda r: (r['_T0'], r['_pi'], r['_di']))
     base.sort(key=lambda b: (b[0], b[1], b[2]))
-    summ = dict(meta=dict(start=fc.iso(start), end=fc.iso(end), loadFrom=fc.iso(load_from), share=SHARE, tp=TP),
+    summ = dict(meta=dict(start=fc.iso(start), end=fc.iso(end), loadFrom=fc.iso(load_from), share=SHARE, tp=TP, tf=TF),
                 pairs=[{k: p[k] for k in ['pair', 'bars', 'minutes', 'short', 'zoneless', 'judged', 'signals',
                                            'entries', 'notMailed', 'prevAt', 'baseEntries', 'closeVsMinute']}
                        for p in pairs],
@@ -689,7 +701,7 @@ def main():
     if not load_from <= start < end:
         die('LOAD_FROM <= START < END does not hold')
     t0 = time.time()
-    print(f'share {SHARE!r} tp {TP}; start {fc.iso(start)} end {fc.iso(end)} loadFrom {fc.iso(load_from)}')
+    print(f'tf {TF} share {SHARE!r} tp {TP}; start {fc.iso(start)} end {fc.iso(end)} loadFrom {fc.iso(load_from)}')
     rows, summ, prob = compute(args.cache, start, end, load_from, print)
     rtext = rows_text(rows)
     stext = js_json1(summ)

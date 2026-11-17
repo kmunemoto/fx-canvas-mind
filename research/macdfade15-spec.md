@@ -9,6 +9,10 @@ gaps (driftless walks), the run with `END` a week earlier, the weekend gate by h
 on GMO's minutes not lining up with its 15-minute bars, and the delay before an order listed as not measured. Nothing here changes an email: production stays on v9 until the release
 (research/macdfade96-spec.md and the production spec that follows it).
 
+**1-hour bars (2026-11-17, after the real run below).** The owner then said 「やっぱりメールの判断1時間足で」: the email is
+judged on 1-hour bars. The same study measures them with `TF=1h` (section "On 1-hour bars (TF=1h)", before the result).
+The 15-minute result below stays as the record of the 15-minute form, which is not built.
+
 ## Why
 
 The owner (2026-11-17), after the 96% touch had been measured on 1-hour bars (research/macd90m-spec.md, its last
@@ -198,7 +202,7 @@ first; every line, the last included, ends with `\n`.
 **summary.json** (`JSON.stringify(x, null, 1)`, nothing after the closing brace: no newline at the end):
 
 ```
-{ meta: { start, end, loadFrom, share, tp },
+{ meta: { start, end, loadFrom, share, tp, tf },
   pairs: [ { pair, bars, minutes, short, zoneless, judged, signals, entries, notMailed, prevAt, baseEntries,
              closeVsMinute: { bars, same, differ, noMinute, entrySame, entryDiffer, entryNoMinute } } ],
   dirs: { fade: GROUPS, flow: GROUPS },
@@ -236,7 +240,7 @@ included); a count over no trade (`within…`) is 0.
 
 **null.json** (MODE=null; the TypeScript's only: the walks go through the code the Python checks on walks 1 and 2,
 the untidy walk and the real files, but the Python does not recompute these numbers):
-`{ meta: { start, end, loadFrom, share, tp, seeds }, walks: [ { seed, entries, gaps } ] }`; `gaps` has the keys `all`,
+`{ meta: { start, end, loadFrom, share, tp, tf, seeds }, walks: [ { seed, entries, gaps } ] }`; `gaps` has the keys `all`,
 each pair, `BUY`, `SELL`, each `{ fade, flow, base, fadeMinusBase, fadeMinusFlow }`; `fade`, `flow`, `base` each
 `{ trades, tpShare, pipsMean, openShare }` (the shares in % of the trades; null with no trade); a gap
 `{ tpShare, pipsMean, openShare }`, fade's less the other's (null when either is). The print shows it only when its
@@ -306,6 +310,53 @@ The minutes stay where 15-minute rows go, so some minutes are in no chart bar. T
 row reached the loaders on every pair, some minutes are in no chart bar, some chart bars come from a time's second bid
 row, `closeVsMinute` has `differ > 0` and `noMinute > 1`, and the alignment check (Data) trips; it is not held against
 the walk in memory (its chart is not the walk's), but the Python is run on the same files and must agree.
+
+## On 1-hour bars (TF=1h)
+
+The owner (2026-11-17, after the 15-minute run below): 「やっぱりメールの判断1時間足で」. `TF`, an environment variable of
+both implementations: `15min` (not given or empty: everything above) or `1h`. With `TF=1h` the rule, the two trades,
+the follow, the baseline, the files and the checks are the ones above on 1-hour bars, with these differences only:
+
+- **The chart**: GMO's 1-hour day files (interval `1hour`, both sides), read as above through
+  `loadTf(src, pair, "1h", LOAD_FROM, END, st, weekendOutOf("inside"))` and `historyRead(pair, "1h", quotes, END)`;
+  `T(n) = t[n] + 1 hour`. Python: `load_tf(cache, sym, '1hour', 1 hour, …)`, as research/macd90m-check.py reads them.
+- **The window and the pane**: 600 1-hour closes; the pane the newest 120 1-hour bars (the 1-hour chart's pane, v8's
+  and v9's: about five trading days).
+- **`LOAD_FROM`** 2023-10-01T00:00:00Z (600 1-hour bars are about 25 trading days; research/macd90m's).
+- **The function's reads**: 0, 3 and 5 minutes after a close (signal-alerts/indicators.ts `gmoIntervalsDue`: `1h` at
+  minutes 0, 3 and 5). All three are in the close's own hour, so the gate is as above: a bar is not read exactly when it
+  closes at or after Friday 21:00 UTC and before Sunday 22:00 UTC.
+- **Prices in**: GMO's own 1-hour bar's bid close and ask close. `closeVsMinute` and the stop on it as above, the
+  minutes against the 1-hour bars.
+- **The baseline**: each judged and mailed hour's first minute (research/macd90m-spec.md's baseline: each hour's first
+  minute, a BUY and a SELL), about 59 minutes before a signal at the same bar would be. About 17,600 bars a pair.
+- **Following**: the minutes in no 1-hour chart bar are followed too.
+- **Check 1**: the bars rebuilt from the minutes on the 1-hour grid are held against the walk's 1-hour bars made from
+  its own 15-minute bars (research/macdfade15.ts `hoursOf`: each side's open the first quarter's, high and low the
+  quarters' highest and lowest, close the last quarter's; the same grid and filter). These are also the 1-hour files
+  MODE=walkfiles writes (research/trend-data.ts `writeWalk`, as research/macd90m.ts writes them, its other timeframes
+  empty; then the 1-minute and 15-minute files as above).
+- **Check 10 by hand**: in the first week whose Friday 19:00 bar closes at or after `START`, a signal at bars closing
+  Friday 20:00, 21:00 and 22:00, Saturday 13:00, Sunday 21:00 and 22:00, and Monday 01:00 UTC; mailed: Friday 20:00,
+  Sunday 22:00, Monday 01:00. The 599 bars before them start 60 days before that Friday.
+- **MESS**: `q` is the row's open over 1 hour; the same rules on the `1hour` rows; 1-minute rows removed for a whole hour
+  (`q % 59 == 5`).
+- **The syn job's period**: `LOAD_FROM` 2023-10-01, `START` 2023-11-10, `END` 2024-03-08T21:00Z: New York's winter, when
+  the walks' market shuts Friday 21:00 UTC (in its summer, 20:00) and opens Sunday 22:00, so a Friday 20:00 bar exists
+  and is the one bar a week the gate keeps.
+- **Files**: research/out/macdfade1h (and -end1w); the forms above. `summary.json`'s `meta` and `null.json`'s `meta`
+  end with `tf` (`"15min"` or `"1h"`; with `15min` too), and the print and its comparisons of `null.json` and of the run
+  a week earlier hold `tf` too. With `TF=15min` every other byte written is as before `TF` (checked below).
+- **Who wrote it**: the `TF` switch was written into both implementations by one hand, the same day, after their rule
+  had been held between them on the 15-minute files. What was written apart is the rule above, not the switch.
+- **Checked (the development container, 2026-11-17, before the real run).** `TF=15min` against the code before `TF`
+  (commit 9bcfd70), on the syn job's 15-minute period: walks 1 and 2 and the untidy walk 1 written as files give the
+  same rows.csv byte for byte and the same summary.json but its added `"tf": "15min"` line; MODE=synthetic prints the
+  same lines but its first (which now names `tf`); the Python agrees on all three. `TF=1h` on the 1-hour syn period
+  above: MODE=synthetic passes every check (hand cases 6, the gate by hand 7 bars, 4 signals kept by the gate over the
+  two walks; walk 1 180 entries, walk 2 189); walks 1 and 2 read back from their files give the walk in memory byte for
+  byte (rows.csv sha256 `fe7752b2…c296` and `60d64dc2…82ae`); the untidy walk 1 met every kind of untidy row, tripped the
+  alignment check on all five pairs and wrote 350 rows; the Python agrees on all three (`PYTHON AGREES`).
 
 ## Result of the real run (2026-11-17, Actions run 44077464383, commit fff5ddb)
 
