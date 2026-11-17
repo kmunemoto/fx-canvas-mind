@@ -1,5 +1,8 @@
 # The MACD fade at 96%: one email the moment the line touches 96%, take profit 10 pips, no stop
 
+**Superseded (2026-11-17), not to be built.** The owner then asked 「もうシンプル96%の足できたら逆張りのメールちょうだい」 and
+「メールを1時間足から15分足に変更」; the production spec is now research/macdfade15-prod-spec.md.
+
 Status: a production spec, written 2026-11-17 on branch `claude/app-confirmation-jvmk03` (fab0f7e), and revised the
 same day (on 345a3f4) with the owner's answers to section 9's eight questions (section 1.1, item 6), and again after
 three reviews of that revision (section 10). Nothing in it is built yet. Production still runs v9 (signal-alerts v39).
