@@ -12,9 +12,10 @@ day after a review of 16 findings, each checked against the code (section 8 says
 origin/main's).
 
 **The study it must equal.** research/macdfade15-spec.md (written the same day by another hand, built in
-research/macdfade15.ts and .github/workflows/macdfade15.yml, checked by research/macdfade15-check.py, not yet written).
-Its spec was read here after this file's first draft, and sections 2, 4.5 and 7.2 were aligned with it; its code was
-not read. Its rule, files and numbers govern: where it reads differently from section 2, this file is corrected before
+research/macdfade15.ts and .github/workflows/macdfade15.yml, checked by research/macdfade15-check.py, which agreed on
+GMO's real files in Actions run 44077464383: the numbers for 4.5 are in the study spec's last sections). Its spec was
+read here after this file's first draft, and sections 2, 4.5 and 7.2 were aligned with it; its code was not read by
+the writer. Its rule, files and numbers govern: where it reads differently from section 2, this file is corrected before
 anything is built.
 
 ## 1. What the owner asked

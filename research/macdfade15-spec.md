@@ -3,8 +3,8 @@
 Status: a study rule, written 2026-11-17 on branch `claude/app-confirmation-jvmk03` (f681256) before its code
 (research/macdfade15.ts, .github/workflows/macdfade15.yml). The Python written apart from the TypeScript, from this
 text alone (research/macdfade15-check.py; research/macdfade15.ts was not read for it), agrees with every row and
-number of walks 1 and 2 and of walk 1's untidy files (the files byte for byte); it has not yet been run on GMO's real
-files, and until it agrees there, no real number is printed. Revised after a review the same day: the noise of the
+number of walks 1 and 2, of walk 1's untidy files and of GMO's real files (the files byte for byte; Actions run
+44077464383, the result at the end). Revised after a review the same day: the noise of the
 gaps (driftless walks), the run with `END` a week earlier, the weekend gate by hand, the untidy walk files, the stop
 on GMO's minutes not lining up with its 15-minute bars, and the delay before an order listed as not measured. Nothing here changes an email: production stays on v9 until the release
 (research/macdfade96-spec.md and the production spec that follows it).
@@ -306,6 +306,38 @@ The minutes stay where 15-minute rows go, so some minutes are in no chart bar. T
 row reached the loaders on every pair, some minutes are in no chart bar, some chart bars come from a time's second bid
 row, `closeVsMinute` has `differ > 0` and `noMinute > 1`, and the alignment check (Data) trips; it is not held against
 the walk in memory (its chart is not the walk's), but the Python is run on the same files and must agree.
+
+## Result of the real run (2026-11-17, Actions run 44077464383, commit fff5ddb)
+
+The syn job passed (the walks' checks, walks 1 and 2 read back byte for byte, the Python on them, the untidy walk and
+the Python on it). The real run read GMO's files (21,250 files: 21,030 from the caches, 220 fetched, none failed) and
+the Python agreed with every row and number (12,012 rows, 180,850 cells and fields; `PYTHON AGREES`), and again with
+`END` a week earlier (11,936 rows). Files: rows.csv sha256 `f2d27000b2999a523d3c4317fbe22392d32a54bbe244dbb1f0b6363fb7d65856`,
+summary.json sha256 `76c86aa8fa1e4bce9e8ea77418bd32cd043166a5a420a2958747943f932a61e0` (artifact
+`macdfade15-share0.96-tp10-44077464383`; not downloaded into the repository: the development container's proxy refused
+the artifact host, so the numbers below are copied from the job's printed lines).
+
+- GMO's 15-minute close equalled the last 1-minute close inside the bar in every bar with a minute (differ 0 on all five
+  pairs; 92 bars with no minute on three pairs). `prevAt` 0, `short` 0, `zoneless` 0 on every pair.
+- Signals 6,009: entries 6,006, `notMailed` 3 (USD/JPY, AUD/JPY, AUD/USD one each).
+- Take profit 10, no stop, from 2024-01-01 to 2026-11-10T21:00Z (open trades valued at the last minute loaded):
+
+| all | trades | tp | open | pips a trade | open: sum / mean / worst | mae median / P90 / max | tp minutes median / P90 / max | open longest (min) |
+|---|---|---|---|---|---|---|---|---|
+| fade | 6,006 | 5,926 (98.7%) | 80 | +2.41 | −44,784.5 / −559.81 / −1,913.4 | 11.9 / 104.0 / 2,975.8 | 144 / 5,740 / 784,561 | 959,205 |
+| flow | 6,006 | 5,945 (99.0%) | 61 | +3.19 | −40,269.4 / −660.15 / −2,249.7 | 12.0 / 98.2 / 3,312.1 | 148 / 5,736 / 804,937 | 916,245 |
+| base | 704,078 | 695,765 (98.8%) | 8,313 | +3.31 | −4,626,320.8 / −556.52 / −2,284.1 | 13.1 / 106.1 / 3,309.9 | 219 / 6,105 / 1,046,557 | 1,131,209 |
+
+- Fade a trade by pair (base): USD/JPY +2.67 (+5.68), EUR/JPY +1.29 (+3.41), AUD/JPY −0.82 (−0.31), EUR/USD +3.86
+  (+2.59), AUD/USD +4.94 (+5.18). Fade by side: bottom (BUY) 2,956 trades +6.29, open 28; top (SELL) 3,050 trades
+  −1.35, open 52.
+- Gaps against the ten driftless walks: fade − base −0.90 pips a trade (walks −0.80..+2.24: below their range),
+  −0.15 points of tp share (walks −0.31..+0.23: inside); fade − flow −0.78 pips a trade (walks −2.25..+5.70: inside).
+  So the fade did not do better than entering with no signal; the gap's sign is against it, and a gap outside ten walks'
+  range is not a test (about 2 times in 11 by chance alone).
+- With `END` a week earlier (2026-11-03T21:00Z): fade 5,968 trades, 98.7%, open 80, +1.96 a trade (open sum
+  −47,194.0); flow +2.73; base +2.97.
+- Orders not filled: 0 (in at the bar's close).
 
 ## Not measured here
 
