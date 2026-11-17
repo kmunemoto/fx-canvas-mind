@@ -258,3 +258,10 @@ jobs:
           OUT_END1W=$OUT-end1w deno run --allow-read=. --allow-env research/macdfade15.ts
           echo "tf ${TF} share ${SHARE} tp ${TP}"
           sha256sum $OUT/rows.csv $OUT/summary.json $OUT/null.json $OUT-end1w/rows.csv $OUT-end1w/summary.json
+      # summary.json whole, as one line of base64 (the artifact host is refused by the development container's proxy):
+      # copied from this log into research/ledger/ and held against the sha256 above before anything is filled from it
+      # (research/macdfade1h-prod-spec.md 4.5)
+      - name: summary.json whole (base64, one line)
+        run: |
+          echo "summary.json sha256 $(sha256sum < $OUT/summary.json | cut -d' ' -f1) bytes $(wc -c < $OUT/summary.json)"
+          echo "SUMMARY_JSON_BASE64 $(base64 -w0 $OUT/summary.json)"
