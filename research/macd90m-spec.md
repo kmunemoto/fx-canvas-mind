@@ -237,6 +237,30 @@ sum over no trade included).
 - The Python (research/macd90m-check.py, its touch part written apart from the TypeScript's) gives every row and number
   of rows-tp.csv and summary-tp.json.
 - Not measured: gold, the shares (no bid and ask minutes in the study's data), the function's own reading (GMO's
-  forming bar, its week; a replay like research/macdride-replay.ts after the owner chooses), and the same trade at
-  minutes with no touch (with no stop and followed to the last minute loaded, the tp share is high by construction,
-  CLAUDE.md: the touch's tp share alone does not show what the touch adds over any entry).
+  forming bar, its week; a replay like research/macdride-replay.ts after the owner chooses).
+
+### The same trade with no signal (a baseline beside the touch)
+
+On the seeded walks the touch's tp share (about 96%) was the same as that of the same trade entered with no signal at
+all (the adversarial check, 2026-11-17): with no stop and followed to the last minute loaded, the tp share is high by
+construction (CLAUDE.md), so the touch's numbers alone do not show what the touch adds. So the same trade is also
+measured with no signal, as a baseline the owner can hold the two directions against:
+
+- **Entries**: every 1-hour bar `i` (close in [START, END), the same bars the touch may enter), at its first minute
+  loaded (the 1-minute bar with the lowest `u` in `[t[i], t[i] + 1 hour)`; a bar with none has no baseline entry);
+  `T0` that minute's end. Each is **two trades**: a BUY in at that minute's ask close and a SELL in at its bid close.
+- **Following**: exactly as "Following a trade" above (the target `TP`, no stop, from the next minute through the last
+  one loaded, open at the last minute's close), so a baseline trade and a touch trade entered at the same minute on
+  the same side have the same numbers.
+- **Output**: no rows; summary-tp.json gains `base: { all, <each pair>, BUY, SELL }`, each the same `G` as above
+  (BUY and SELL by the trade's side), and `pairs[].baseEntries` (the baseline entries of the pair).
+- **Speed**: about 17,600 bars a pair, so about 176,000 baseline trades; a trade not reaching its target is followed
+  to the last minute loaded. Both implementations must find a trade's tp minute and its `mae` without a minute-by-minute
+  walk for each trade (e.g. a sparse table or a segment tree over the minutes' `P(bid high)`, `P(ask low)`, `P(bid
+  low)`, `P(ask high)`, searched for the first minute reaching the target, then the range's extreme), and the numbers
+  must equal the plain walk's (the walks check it on every trade of the touch and a sample of the baseline).
+- **Checks**: the counts add up (tp + open = trades = 2 × baseEntries in each group); a baseline trade at a touch
+  entry's minute and side has the touch trade's result, `T`, pips and mae (wherever a touch entry is at a bar's first
+  minute); look-ahead as the touch's; the Python gives every number of `base`.
+- What the baseline is not: it is not a strategy and no email; it only shows the tp share, the pips a trade, the
+  losses held and the open trades that the same holding gives with no signal, over the same period and pairs.
