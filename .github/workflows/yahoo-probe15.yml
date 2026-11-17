@@ -1,0 +1,53 @@
+# The MACD fade on 15-minute bars (research/macdfade15-prod-spec.md 3.3): read only. How Yahoo's 15-minute answer
+# (interval=15m&range=60d, as live-chart/stocks.ts yahooChartUrl reads it) stamps a share's bars: one US share and two
+# Tokyo shares, the last three sessions' rows in the market's local time (open, high, low, close, volume), whether a
+# finished session ends with a closing point (volume 0) and where, Tokyo's lunch and afternoon stamps, the meta's
+# trading periods and gmtoffset, and the answer's size. Runs once per push of this file.
+name: yahoo-probe15
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - .github/workflows/yahoo-probe15.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Read 15-minute bars of AAPL, 7203.T and 6758.T
+        run: |
+          python3 - <<'PY'
+          import json, time, datetime, urllib.request
+          utc = datetime.timezone.utc
+          f = lambda s, off: datetime.datetime.fromtimestamp(s + off, utc).strftime("%a %Y-%m-%d %H:%M:%S")
+          print("read at", datetime.datetime.now(utc).strftime("%Y-%m-%d %H:%M:%S"), "UTC", flush=True)
+          for sym in ("AAPL", "7203.T", "6758.T"):
+              url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=15m&range=60d&includePrePost=false"
+              try:
+                  raw = urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=30).read()
+                  r = json.loads(raw)["chart"]["result"][0]
+              except Exception as e:
+                  print(sym, "unreadable", e, flush=True); continue
+              m = r["meta"]; ts = r.get("timestamp", []); q = r["indicators"]["quote"][0]
+              off = m.get("gmtoffset", 0)
+              print(f"== {sym}: {len(ts)} rows, {len(raw)} bytes; gmtoffset {off}; dataGranularity {m.get('dataGranularity')}; range {m.get('range')}", flush=True)
+              print("  currentTradingPeriod", json.dumps(m.get("currentTradingPeriod")), flush=True)
+              print("  regularMarketTime", m.get("regularMarketTime") and f(m["regularMarketTime"], off), "price", m.get("regularMarketPrice"), flush=True)
+              days = sorted({f(t, off)[:14] for t in ts})
+              last = set(days[-3:])
+              print("  first row", ts and f(ts[0], off), "| sessions", len(days), flush=True)
+              for k, t in enumerate(ts):
+                  d = f(t, off)
+                  if d[:14] in last:
+                      print(f"  {d} local | o {q['open'][k]} h {q['high'][k]} l {q['low'][k]} c {q['close'][k]} v {q['volume'][k]}", flush=True)
+              gaps = {}
+              for a, b in zip(ts, ts[1:]):
+                  g = b - a
+                  if g != 900: gaps[g] = gaps.get(g, 0) + 1
+              print("  steps other than 900 s (count):", dict(sorted(gaps.items())[:20]), flush=True)
+              time.sleep(2)
+          PY
