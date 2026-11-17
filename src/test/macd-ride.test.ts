@@ -1,12 +1,6 @@
 // #397 (docs §8.150): the MACD email as a ride (in at 90% with the flow, told
-// at 96% in v9, at 95% from v10) — the code the function and the replay share
-// (supabase/functions/_shared/macd-ride.ts; the rule: research/macdride-spec.md,
-// and from v10 research/macdride10-spec.md, which amends it).
-//
-// What v10 adds (the moment the line touches 90%: Zp, the touch at a share,
-// the hit, the step's v10 cases, the catch-up of the entry bar) is held in
-// src/test/macd-ride-v10.test.ts. Here: what v9 had and v10 keeps, at 95%
-// (the close entries are the shares' from v10).
+// at 96%) — the code the function and the replay share
+// (supabase/functions/_shared/macd-ride.ts; the rule: research/macdride-spec.md).
 //
 //   1. the state and the line while a bar forms, against zoneAt on the window
 //      rebuilt with the price in the forming slot: bit for bit, on seeded
@@ -34,7 +28,7 @@ import {
   RIDE_IN_SHARE,
   RIDE_OUT_PCT,
   RIDE_OUT_SHARE,
-  RIDE_CLOSE_TAG,
+  RIDE_RULE_TAG,
   type RideBar,
   rideCatchUp,
   rideCatchUpByClose,
@@ -44,7 +38,6 @@ import {
   rideLineAt,
   type RideRow,
   rideRuleId,
-  RIDE_TOUCH_TAG,
   type RideSide,
   rideSideOf,
   type RideState,
@@ -122,15 +115,12 @@ const WALKS: Walk[] = [
 // ---- 0. the numbers -------------------------------------------------------------------------
 
 describe("#397 the ride's numbers", () => {
-  it("90 and 95 percent of the v8 pane (600 closed bars, the newest 120), as the doubles the study held against (v10)", () => {
+  it("90 and 96 percent of the v8 pane (600 closed bars, the newest 120), as the doubles the study held against", () => {
     expect(RIDE_IN_PCT).toBe(90);
-    expect(RIDE_OUT_PCT).toBe(95);
-    // research/macd90.ts ENTER, and research/macd90m.ts REACH as docs §8.154 ran it (Number("0.95"))
+    expect(RIDE_OUT_PCT).toBe(96);
+    // research/macd90.ts ENTER and REACH
     expect(RIDE_IN_SHARE).toBe(0.9);
-    expect(RIDE_OUT_SHARE).toBe(0.95);
-    expect(RIDE_OUT_SHARE).toBe(Number("0.95"));
-    expect(RIDE_IN_SHARE).toBe(90 / 100);
-    expect(RIDE_OUT_SHARE).toBe(95 / 100);
+    expect(RIDE_OUT_SHARE).toBe(0.96);
     expect(LEVEL_WINDOW).toBe(600);
     expect(ZONE_BARS).toBe(120);
     expect(MACD_DEFAULTS).toEqual({ fast: 12, slow: 26, signal: 9 });
@@ -140,32 +130,14 @@ describe("#397 the ride's numbers", () => {
     expect(ZONE_PCT).toBe(95);
   });
 
-  it("the six rule ids (v10: macdx's touch, stockmacd's ride), built from the constants (research/macdride10-spec.md section 2)", () => {
-    expect(RIDE_TOUCH_TAG).toBe("touch90to95of120");
-    expect(RIDE_CLOSE_TAG).toBe("ride90to95of120");
-    const pairs = (["in", "at", "out"] as const).map((m) => rideRuleId("macdx", RIDE_TOUCH_TAG, m, 10));
-    const shares = (["in", "at", "out"] as const).map((m) => rideRuleId("stockmacd", RIDE_CLOSE_TAG, m, 3));
-    expect(pairs).toEqual([
-      "macdx_12_26_9_w600_1h_touch90to95of120_in_v10",
-      "macdx_12_26_9_w600_1h_touch90to95of120_at_v10",
-      "macdx_12_26_9_w600_1h_touch90to95of120_out_v10",
-    ]);
-    expect(shares).toEqual([
-      "stockmacd_12_26_9_w600_1h_ride90to95of120_in_v3",
-      "stockmacd_12_26_9_w600_1h_ride90to95of120_at_v3",
-      "stockmacd_12_26_9_w600_1h_ride90to95of120_out_v3",
-    ]);
-    // each rule's in, at and out ids are three different strings, and the two rules share none
-    expect(new Set(pairs).size).toBe(3);
-    expect(new Set(shares).size).toBe(3);
-    expect(new Set([...pairs, ...shares]).size).toBe(6);
-    // v9's and v2's ids are never made again: the 96 and the old versions are gone from every id
-    for (const id of [...pairs, ...shares]) {
-      expect(id).not.toContain("96");
-      expect(id).not.toMatch(/_v(9|2)$/);
-      // the app's reading of an id (research/macdride10-spec.md section 2): the entry's word, the two levels, the mail
-      expect(id).toMatch(/_(touch|ride)90to95of120_(in|at|out)_v\d+$/);
-    }
+  it("the three rule ids of each run, built from the constants (spec section 2)", () => {
+    expect(RIDE_RULE_TAG).toBe("ride90to96of120");
+    expect(rideRuleId("macdx", "in", 9)).toBe("macdx_12_26_9_w600_1h_ride90to96of120_in_v9");
+    expect(rideRuleId("macdx", "at", 9)).toBe("macdx_12_26_9_w600_1h_ride90to96of120_at_v9");
+    expect(rideRuleId("macdx", "out", 9)).toBe("macdx_12_26_9_w600_1h_ride90to96of120_out_v9");
+    expect(rideRuleId("stockmacd", "in", 2)).toBe("stockmacd_12_26_9_w600_1h_ride90to96of120_in_v2");
+    expect(rideRuleId("stockmacd", "at", 2)).toBe("stockmacd_12_26_9_w600_1h_ride90to96of120_at_v2");
+    expect(rideRuleId("stockmacd", "out", 2)).toBe("stockmacd_12_26_9_w600_1h_ride90to96of120_out_v2");
   });
 
   it("the top is a BUY and the bottom a SELL (with the flow)", () => {
@@ -179,7 +151,7 @@ describe("#397 the ride's numbers", () => {
     const z = (m: number, top: number, bottom: number): RideZone => ({ m, top, bottom });
     expect(atShare(z(0.9 * 0.07, 0.07, -0.01), "top", 0.9)).toBe(true);
     expect(atShare(z(0.9 * 0.07 - 1e-12, 0.07, -0.01), "top", 0.9)).toBe(false);
-    expect(atShare(z(0.07, 0.07, -0.01), "top", 0.95)).toBe(true);
+    expect(atShare(z(0.07, 0.07, -0.01), "top", 0.96)).toBe(true);
     expect(atShare(z(0.9 * -0.07, 0.01, -0.07), "bottom", 0.9)).toBe(true);
     expect(atShare(z(0.9 * -0.07 + 1e-12, 0.01, -0.07), "bottom", 0.9)).toBe(false);
     // the top side is not read on the bottom, nor the bottom on the top
@@ -341,7 +313,7 @@ describe("#397 the forming bar's line from the state is zoneAt on the window reb
     for (const w of WALKS) for (const st of w.state) if (st !== null) expect(st.top119 >= 0 && st.bottom119 <= 0).toBe(true);
   });
 
-  it("a touch is the line with the high (top side) or the low (bottom side) at 95% on that side", () => {
+  it("a touch is the line with the high (top side) or the low (bottom side) at 96% on that side", () => {
     const seen = { top: 0, bottom: 0, none: 0 };
     for (const w of WALKS) {
       for (let j = W - 1; j < w.bars.length; j++) {
@@ -350,7 +322,7 @@ describe("#397 the forming bar's line from the state is zoneAt on the window reb
         for (const zs of SIDES) {
           const x = zs === "top" ? b.high : b.low;
           const z = zoneAt(macd([...w.closes.slice(j - (W - 1), j), x]), W - 1) as RideZone;
-          const want = zs === "top" ? z.top > 0 && z.m >= 0.95 * z.top : z.bottom < 0 && z.m <= 0.95 * z.bottom;
+          const want = zs === "top" ? z.top > 0 && z.m >= 0.96 * z.top : z.bottom < 0 && z.m <= 0.96 * z.bottom;
           const got = rideTouch(st, zs, b.high, b.low);
           if (!want) {
             expect(got).toBeNull();
@@ -358,7 +330,7 @@ describe("#397 the forming bar's line from the state is zoneAt on the window reb
             continue;
           }
           expect(got).toEqual({ m: z.m, top: z.top, bottom: z.bottom, share: zs === "top" ? z.m / z.top : z.m / z.bottom });
-          expect((got as { share: number }).share).toBeGreaterThanOrEqual(0.95);
+          expect((got as { share: number }).share).toBeGreaterThanOrEqual(0.96);
           seen[zs]++;
         }
       }
@@ -376,10 +348,9 @@ describe("#397 the forming bar's line from the state is zoneAt on the window reb
 
 // ---- 2. the entry at a bar's close ------------------------------------------------------------
 
-// The rule again, apart from the module, from research/macdride-spec.md section 1 (the shares' close entry, at 95%
-// from v10: research/macdride10-spec.md section 5):
+// The rule again, apart from the module, from research/macdride-spec.md section 1:
 // r = macd(the 600 closes ending at i); Z(i) = zoneAt(r, 599), Zp(i) = zoneAt(r, 598);
-// an entry on a side when Z(i) is at 0.90 there and Zp(i) is not; already when Z(i) is at 0.95
+// an entry on a side when Z(i) is at 0.90 there and Zp(i) is not; already when Z(i) is at 0.96
 const bruteEntry = (closes600: number[]): RideEntry | null => {
   const r = macd(closes600);
   const Z = zoneAt(r, 599);
@@ -391,12 +362,12 @@ const bruteEntry = (closes600: number[]): RideEntry | null => {
   const topBefore = Zp.top > 0 && Zp.m >= 0.9 * Zp.top;
   const bottomNow = Z.bottom < 0 && Z.m <= 0.9 * Z.bottom;
   const bottomBefore = Zp.bottom < 0 && Zp.m <= 0.9 * Zp.bottom;
-  if (topNow && !topBefore) return { zside: "top", side: "BUY", already: Z.m >= 0.95 * Z.top, z, zp };
-  if (bottomNow && !bottomBefore) return { zside: "bottom", side: "SELL", already: Z.m <= 0.95 * Z.bottom, z, zp };
+  if (topNow && !topBefore) return { zside: "top", side: "BUY", already: Z.m >= 0.96 * Z.top, z, zp };
+  if (bottomNow && !bottomBefore) return { zside: "bottom", side: "SELL", already: Z.m <= 0.96 * Z.bottom, z, zp };
   return null;
 };
 
-describe("#397 the entry at a bar's close (the shares' from v10)", () => {
+describe("#397 the entry at a bar's close", () => {
   it("is the rule written again from the spec's sentences, on every bar of the walks", () => {
     const n = { BUY: 0, SELL: 0, already: 0, ride: 0, none: 0 };
     for (const w of WALKS) {
@@ -439,7 +410,7 @@ describe("#397 the entry at a bar's close (the shares' from v10)", () => {
     expect(entries).toBeGreaterThan(20);
   }, SLOW);
 
-  it("an entry holds Z and Zp, the share at the entry is at least 90%, and already is 95% or more", () => {
+  it("an entry holds Z and Zp, the share at the entry is at least 90%, and already is 96% or more", () => {
     for (const w of WALKS) {
       for (let i = W - 1; i < w.bars.length; i++) {
         const e = rideEntryAt(w.closes.slice(i - (W - 1), i + 1));
@@ -581,8 +552,8 @@ describe("#397 the catch-up of the pairs and gold (the closed bars' highs and lo
         for (const zs of SIDES) {
           const b = v.bars[i];
           const want = rideTouch(v.state[i] as RideState, zs, b.high, b.low);
-          // far enough inside 95% that the later seed cannot decide it
-          if (want === null || want.share < 0.951) continue;
+          // far enough inside 96% that the later seed cannot decide it
+          if (want === null || want.share < 0.961) continue;
           const got = rideCatchUp(v.bars.slice(i - RIDE_CATCHUP_MIN_BEFORE, i + 1), zs, v.bars[i - 1].t);
           expect(got).not.toBeNull();
           expect((got as { index: number }).index).toBe(RIDE_CATCHUP_MIN_BEFORE);
@@ -624,14 +595,14 @@ describe("#397 the catch-up of the pairs and gold (the closed bars' highs and lo
 });
 
 describe("#397 the catch-up of the shares (each closed bar's own Z)", () => {
-  it("the first bar after the entry bar among the newest 100 whose Z is at 95% on the ride's side, exactly", () => {
+  it("the first bar after the entry bar among the newest 100 whose Z is at 96% on the ride's side, exactly", () => {
     const seen = { caught: 0, older: 0, none: 0 };
     for (const w of [WALKS[4], WALKS[7]]) {
       // Z(j) from the spec's sentence: zoneAt at 599 of the 600 closes ending at j
       const Z = w.bars.map((_, j) => (j >= W - 1 ? (zoneAt(macd(w.closes.slice(j - (W - 1), j + 1)), 599) as RideZone) : null));
-      const at95 = (j: number, zs: RideZoneSide) => {
+      const at96 = (j: number, zs: RideZoneSide) => {
         const z = Z[j] as RideZone;
-        return zs === "top" ? z.top > 0 && z.m >= 0.95 * z.top : z.bottom < 0 && z.m <= 0.95 * z.bottom;
+        return zs === "top" ? z.top > 0 && z.m >= 0.96 * z.top : z.bottom < 0 && z.m <= 0.96 * z.bottom;
       };
       for (let i = W - 1 + RIDE_CATCHUP_BARS; i < w.bars.length; i += 11) {
         // a share's read brings more than 600 bars: all of them in hand
@@ -640,7 +611,7 @@ describe("#397 the catch-up of the shares (each closed bar's own Z)", () => {
           const e = i - back;
           for (const zs of SIDES) {
             let want: number | null = null;
-            for (let j = Math.max(e + 1, i - (RIDE_CATCHUP_BARS - 1)); j <= i && want === null; j++) if (at95(j, zs)) want = j;
+            for (let j = Math.max(e + 1, i - (RIDE_CATCHUP_BARS - 1)); j <= i && want === null; j++) if (at96(j, zs)) want = j;
             const got = rideCatchUpByClose(hand, zs, w.bars[e].t);
             if (want === null) {
               expect(got).toBeNull();
@@ -712,8 +683,8 @@ describe("#397 what a bar's close does (rideCloseStep)", () => {
     { name: "no entry, rides open on both sides", entry: null, rows: [open("BUY", B - 5 * HOUR), open("SELL", B - 2 * HOUR)], step: null },
     { name: "an entry, no ride: in", entry: entryOf("BUY", false), rows: [], step: "in" },
     { name: "a SELL entry, no ride: in", entry: entryOf("SELL", false), rows: [], step: "in" },
-    { name: "already at 95%, no ride: the notice", entry: entryOf("BUY", true), rows: [], step: "at" },
-    { name: "already at 95% on the bottom, no ride: the notice", entry: entryOf("SELL", true), rows: [], step: "at" },
+    { name: "already at 96%, no ride: the notice", entry: entryOf("BUY", true), rows: [], step: "at" },
+    { name: "already at 96% on the bottom, no ride: the notice", entry: entryOf("SELL", true), rows: [], step: "at" },
     // skipped entries
     { name: "another ride of the side open: skip", entry: entryOf("BUY", false), rows: [open("BUY", B - 5 * HOUR)], step: "skip", by: 0 },
     { name: "another ride of the side open since the bar before: skip", entry: entryOf("SELL", false), rows: [open("SELL", B - HOUR)], step: "skip", by: 0 },
@@ -763,7 +734,7 @@ describe("#397 what a bar's close does (rideCloseStep)", () => {
       by: 0,
     },
     // the bar's first decision stands (the review's finding A3): its own ride is there, and a later read of the bar
-    // gives a close at which the line is already at 95% — still "in", never the notice on top of email 1
+    // gives a close at which the line is already at 96% — still "in", never the notice on top of email 1
     { name: "again, already now but the bar's own ride is open: in, not the notice", entry: entryOf("BUY", true), rows: [open("BUY", B)], step: "in", own: 0 },
     { name: "again, already now but the bar's own ride was reached in the next bar: in", entry: entryOf("SELL", true), rows: [reached("SELL", B, B + HOUR)], step: "in", own: 0 },
     {
@@ -775,12 +746,7 @@ describe("#397 what a bar's close does (rideCloseStep)", () => {
     },
     { name: "already, and the bar's own row of the OTHER side: the notice", entry: entryOf("BUY", true), rows: [open("SELL", B)], step: "at" },
     { name: "the bar's own row of the other side changes nothing: in", entry: entryOf("BUY", false), rows: [open("SELL", B)], step: "in" },
-    // v10 (research/macdride10-spec.md section 1.1): a ride of the side entered in a bar after this one makes the entry
-    // skip, or quiet when already (v9 took it: "a ride entered at a later bar does not skip an older bar"). A shares'
-    // close cannot meet one; src/test/macd-ride-v10.test.ts holds the tail's cases
-    { name: "v10: a ride of the side entered at a later bar skips an older bar's entry", entry: entryOf("BUY", false), rows: [open("BUY", B + HOUR)], step: "skip", by: 0 },
-    { name: "v10: already, and a ride of the side entered at a later bar: quiet", entry: entryOf("BUY", true), rows: [open("BUY", B + HOUR)], step: "quiet", by: 0 },
-    { name: "v10: a ride of the OTHER side entered at a later bar changes nothing: in", entry: entryOf("SELL", false), rows: [open("BUY", B + HOUR)], step: "in" },
+    { name: "a ride entered at a later bar does not skip an older bar", entry: entryOf("BUY", false), rows: [open("BUY", B + HOUR)], step: "in" },
     // both sides at once
     {
       name: "rides of both sides, the side's own reached earlier, the other open: in",
@@ -828,7 +794,7 @@ describe("#397 what a bar's close does (rideCloseStep)", () => {
     // a made-up chart's table, as the function keeps it (at most one open ride a side), and a made-up course:
     // bar 0 a BUY entry; bar 2 a BUY entry while it is held (skipped); the ride reached in bar 3; bar 3 closes as a
     // BUY entry again (taken: the older ride was reached in this very bar); that ride reached in bar 4, and bar 4
-    // closes already at 95% (quiet); bar 6 closes already at 95% with nothing reached in it (the notice)
+    // closes already at 96% (quiet); bar 6 closes already at 96% with nothing reached in it (the notice)
     const table: RideRow[] = [];
     const bar = (k: number) => B + k * HOUR;
     const judge = (k: number, entry: RideEntry | null): RideStep | null => {
@@ -866,9 +832,9 @@ describe("#397 what a bar's close does (rideCloseStep)", () => {
     reach(bar(3), 4);
     for (let again = 0; again < 3; again++) expect(judge(3, entryOf("BUY", false))).toBe("in");
     expect(table).toHaveLength(3);
-    // bar 4 closes already at 95% on that side: its email 2 said so, no notice
+    // bar 4 closes already at 96% on that side: its email 2 said so, no notice
     for (let again = 0; again < 3; again++) expect(judge(4, entryOf("BUY", true))).toBe("quiet");
-    // bar 6 closes already at 95%, nothing reached in it: the notice, and no ride of it
+    // bar 6 closes already at 96%, nothing reached in it: the notice, and no ride of it
     for (let again = 0; again < 3; again++) expect(judge(6, entryOf("BUY", true))).toBe("at");
     expect(table).toHaveLength(3);
     expect(table.filter((r) => r.side === "BUY").map((r) => [r.entryBar, r.status, r.reachedBar])).toEqual([
@@ -883,7 +849,7 @@ describe("#397 what a bar's close does (rideCloseStep)", () => {
   });
 
   it("driven bar by bar over walks with a ride table, the rides are the study's way C, every close judged three times", () => {
-    const totals = { rides: 0, reached: 0, open: 0, skip: 0, at: 0, quiet: 0, lateQuiet: 0 };
+    const totals = { rides: 0, reached: 0, open: 0, skip: 0, at: 0, quiet: 0 };
     // bars without wicks too: fewer touches, longer rides, more entries while one is held
     const walks = [...WALKS.slice(0, 5), walkOf("150.123 seed 21, no wicks", 3000, 21, 150.123, 3, 0), walkOf("1.10234 seed 22, no wicks", 3000, 22, 1.10234, 5, 0)];
     for (const w of walks) {
@@ -950,17 +916,8 @@ describe("#397 what a bar's close does (rideCloseStep)", () => {
       expect(table.map((r) => ({ side: r.side, entryBar: r.entryBar, reachedBar: r.reachedBar })).sort(order)).toEqual(want.sort(order));
       expect(first.filter((x) => x === "skip")).toHaveLength(wantSkipped);
       expect(first.filter((x) => x === "at" || x === "quiet")).toHaveLength(wantAlready);
-      // (3) every close judged once more on the finished table (a fresh instance, hours later): the same step, but a
-      // notice there is quiet when a ride of its side was entered in a later bar (v10, research/macdride10-spec.md
-      // section 1.1: a notice for an earlier moment would come after that ride's email 1); in stays in (its own row),
-      // skip stays skip
-      for (let i = W - 1; i < n; i++) {
-        const e = entries[i];
-        const later = e !== null && table.some((r) => r.side === e.side && r.entryBar > w.bars[i].t);
-        const again = rideCloseStep(e, w.bars[i].t, table).step;
-        expect(again).toBe(first[i] === "at" && later ? "quiet" : first[i]);
-        if (first[i] === "at" && later) totals.lateQuiet++;
-      }
+      // (3) every close judged once more on the finished table (a fresh instance, hours later): the same step
+      for (let i = W - 1; i < n; i++) expect(rideCloseStep(entries[i], w.bars[i].t, table).step).toBe(first[i]);
       totals.rides += table.length;
       totals.reached += table.filter((r) => r.status === "reached").length;
       totals.open += table.filter((r) => r.status === "open").length;
@@ -970,7 +927,5 @@ describe("#397 what a bar's close does (rideCloseStep)", () => {
     expect(totals.skip).toBeGreaterThan(0);
     expect(totals.at).toBeGreaterThan(20);
     expect(totals.quiet).toBeGreaterThan(0);
-    // the v10 case was met: notices judged again after a later ride of their side opened
-    expect(totals.lateQuiet).toBeGreaterThan(0);
   }, SLOW);
 });
