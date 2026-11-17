@@ -358,6 +358,49 @@ the follow, the baseline, the files and the checks are the ones above on 1-hour 
   byte (rows.csv sha256 `fe7752b2…c296` and `60d64dc2…82ae`); the untidy walk 1 met every kind of untidy row, tripped the
   alignment check on all five pairs and wrote 350 rows; the Python agrees on all three (`PYTHON AGREES`).
 
+## Result of the real 1-hour run (TF=1h; 2026-11-17, Actions run 44099401423, commit 53f7003)
+
+The syn job passed on the 1-hour syn period (the walks' checks, walks 1 and 2 read back byte for byte, the Python on
+them, the untidy walk and the Python on it). The real run read GMO's files (21,860 files: 21,800 from the caches, 60
+fetched, none failed; 4,143 1-minute rows on one side left out) and the Python agreed with every row and number
+(2,980 rows, 45,371 cells and fields; `PYTHON AGREES`), and again with `END` a week earlier (2,960 rows). Files:
+rows.csv sha256 `9bd958cc40bab89ddbf6bef15d4c40bba578c86e0c5fcd52f1a0d21ed38605e9`, summary.json sha256
+`60edab22302e5fe755c70b38f87b8b28fa27389ccc1bb10c1a0c0c88c448a9e2`, null.json sha256
+`3d285440123d50ac776228092b1a2560db12ff1d114b97bbec676350175b9b96`; with `END` a week earlier rows.csv
+`287d358657ba83c60595fbb306b92d306fbc0cfb9e5aa6bca44877235808a695`, summary.json
+`ada0b69bcb772c4bc76f7e9e32afcd335291e9201d71e3d57d88e7ff0b075ed1` (artifact `macdfade15-1h-share0.96-tp10-44099401423`,
+not downloaded: the development container's proxy refused the artifact host on the 15-minute run, so the numbers below
+are copied from the job's printed lines).
+
+- The chart's 1-hour bars start 2023-10-26T21:00Z on every pair (18,726 bars), not at `LOAD_FROM`; why was not looked
+  into. It changes no number here: every bar in range had 600 bars up to it (`short` 0, `zoneless` 0, 17,654 judged a
+  pair), and a bar's line reads only the 600 closes ending at it.
+- GMO's 1-hour close equalled the last 1-minute close inside the bar in every bar with a minute (differ 0 on all five
+  pairs; 23 bars with no minute on USD/JPY, AUD/JPY and EUR/USD). `prevAt` 0 on every pair.
+- Signals 1,501: entries 1,490, `notMailed` 11 (USD/JPY 2, AUD/JPY 2, EUR/USD 3, AUD/USD 4). Entries by pair: USD/JPY
+  274, EUR/JPY 300, AUD/JPY 288, EUR/USD 316, AUD/USD 312.
+- Take profit 10, no stop, from 2024-01-01 to 2026-11-10T21:00Z (open trades valued at the last minute loaded):
+
+| all | trades | tp | open | pips a trade | open: sum / mean / worst | mae median / P90 / max | tp minutes median / P90 / max | open longest (min) |
+|---|---|---|---|---|---|---|---|---|
+| fade | 1,490 | 1,468 (98.5%) | 22 | +3.26 | −9,820.9 / −446.40 / −1,733.2 | 10.7 / 102.7 / 2,243.6 | 140 / 4,489 / 687,037 | 888,900 |
+| flow | 1,490 | 1,469 (98.6%) | 21 | −2.08 | −17,790.6 / −847.17 / −1,941.0 | 14.7 / 109.9 / 2,527.3 | 183 / 6,302 / 1,024,954 | 959,700 |
+| base | 174,912 | 172,831 (98.8%) | 2,081 | +3.20 | −1,168,310.8 / −561.42 / −2,241.5 | 13.1 / 105.8 / 3,271.7 | 213 / 6,059 / 1,046,272 | 1,130,939 |
+
+- Fade: pips a trade median +10.00, sum +4,859.1; tp within 1 hour 508, 1 day 1,195, 1 week 1,380 of the 1,468; the
+  largest loss on the way of a trade that did reach the target 1,937.9 pips.
+- Fade a trade by pair (base): USD/JPY −0.26 (+5.74), EUR/JPY +4.30 (+3.28), AUD/JPY +4.44 (−0.77), EUR/USD +3.11
+  (+2.60), AUD/USD +4.42 (+5.16). Open trades by pair: 3, 3, 4, 4, 8. Fade by side: bottom (BUY) 734 trades +5.84,
+  open 9 (sum −2,966.9, worst −595.5); top (SELL) 756 trades +0.76, open 13 (sum −6,854.0, worst −1,733.2).
+- Gaps against the ten driftless walks: fade − base +0.06 pips a trade (walks −4.10..+0.83: inside), −0.29 points of
+  tp share (walks −0.45..+0.15: inside); fade − flow +5.34 pips a trade (walks −5.42..+5.81: inside). So on 1-hour bars
+  the fade did not do better than entering with no signal beyond what chance gives on the walks; it is about the same
+  as no signal. (Outside the walks' range: AUD/JPY's fade − base +5.20 and fade − flow +23.72; SELL's fade − base tp
+  share −0.39 points and fade − flow +12.54; with ten walks about 2 gaps in 11 fall outside by chance alone.)
+- With `END` a week earlier (2026-11-03T21:00Z): fade 1,480 trades, 98.5%, open 22, +3.02 a trade (open sum
+  −10,110.1); flow −3.10; base +2.86.
+- Orders not filled: 0 (in at the bar's close).
+
 ## Result of the real run (2026-11-17, Actions run 44077464383, commit fff5ddb)
 
 The syn job passed (the walks' checks, walks 1 and 2 read back byte for byte, the Python on them, the untidy walk and
