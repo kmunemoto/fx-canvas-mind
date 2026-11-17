@@ -3,9 +3,20 @@
 # on research/macd90-spec.md), and the Python written apart from it (research/macd90m-check.py): the numbers are
 # printed only when every row and number agree.
 #
+# The touch (research/macd90m-spec.md, its last section; the owner 2026-11-17: 「やっぱり96%をメールの合図にして」,
+# 「利確10・損切りなし」, 「両方を測って決める」): one entry the minute the line touches TOUCH (0.96) on a side the bar before
+# was not at, two trades each (flow: top BUY, bottom SELL; fade: top SELL, bottom BUY), out at a take profit of TP (10)
+# pips or still open at the last minute. Written apart to rows-tp.csv and summary-tp.json (rows.csv and summary.json
+# stay as they are), checked on the walks as the rest, held against the Python and printed with the rest.
+#
+# Beside the touch, the same trade with no signal (research/macd90m-spec.md, "a baseline beside the touch"): every
+# 1-hour bar's first minute, a BUY and a SELL, followed as a touch trade. No rows: summary-tp.json gains `base` and
+# pairs[].baseEntries (rows-tp.csv stays as it is); checked on the walks, held against the Python and printed beside
+# flow and fade.
+#
 #   syn   two seeded walks (the line at a minute against zoneAt on the window rebuilt, the close entries against
-#         research/macd90.ts's, the look-ahead check, the counts); then the first walk written as GMO's files, the
-#         study read from them, and the Python on the same files
+#         research/macd90.ts's, the look-ahead check, the counts; the touch's too); then the first walk written as
+#         GMO's files, the study read from them, and the Python on the same files
 #   real  GMO's real 1-hour and 1-minute bars (research/.cache, fetched when missing), after syn passed
 #
 # GitHub's runners reach GMO's public price API, which the development container cannot. Read-only: public files
@@ -26,6 +37,14 @@ on:
         description: "The share that counts as reached (the spec's is 0.96; e.g. 0.95). research/macd90m-spec.md, the reach share"
         required: false
         default: "0.96"
+      touch:
+        description: "The touch: the share the line touches for the one entry (the spec's is 0.96). research/macd90m-spec.md, the last section"
+        required: false
+        default: "0.96"
+      tp:
+        description: "The touch: the take profit in pips, a whole number (the spec's is 10)"
+        required: false
+        default: "10"
 
 permissions:
   contents: read
@@ -35,6 +54,8 @@ env:
   END: "2026-11-10T21:00:00Z"
   LOAD_FROM: "2023-10-01T00:00:00Z"
   REACH: ${{ github.event.inputs.reach || '0.96' }}
+  TOUCH: ${{ github.event.inputs.touch || '0.96' }}
+  TP: ${{ github.event.inputs.tp || '10' }}
 
 jobs:
   syn:
@@ -49,7 +70,7 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.9.6
-      - name: Two walks (the line at a minute against zoneAt, the close entries, the look-ahead check, the counts)
+      - name: Two walks (the line at a minute against zoneAt, the close entries, the look-ahead check, the counts; the touch's too)
         env:
           MODE: synthetic
           SEEDS: "1,2"
@@ -57,7 +78,8 @@ jobs:
           deno run --v8-flags=--max-old-space-size=8192
           --allow-read=. --allow-write=research/out --allow-env
           research/macd90m.ts
-      - name: The first walk as GMO's files, the study read from them, and the Python on the same files
+      # the Python reads TOUCH and TP from the environment and the touch's rows-tp.csv and summary-tp.json from --out
+      - name: The first walk as GMO's files, the study read from them (the touch's files too), and the Python on the same files
         env:
           MODE: walkfiles
           SEEDS: "1"
@@ -108,22 +130,25 @@ jobs:
             --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env \
             research/macd90m.ts
           ls -la $OUT
-          sha256sum $OUT/rows.csv $OUT/summary.json
+          sha256sum $OUT/rows.csv $OUT/summary.json $OUT/rows-tp.csv $OUT/summary-tp.json
       - if: always()
         uses: actions/cache/save@v4
         with:
           path: research/.cache
           key: gmo-macd90m-${{ github.run_id }}
-      - name: The Python on the same files and rows
+      # the touch's rows-tp.csv and summary-tp.json are in $OUT beside rows.csv and summary.json; TOUCH and TP in the env
+      - name: The Python on the same files and rows (the touch's too)
         run: python3 -I research/macd90m-check.py --cache research/.cache --out $OUT
+      # all of $OUT: rows.csv, summary.json, rows-tp.csv, summary-tp.json
       - uses: actions/upload-artifact@v4
         with:
-          name: macd90m-reach${{ env.REACH }}-${{ github.run_id }}
+          name: macd90m-reach${{ env.REACH }}-touch${{ env.TOUCH }}-tp${{ env.TP }}-${{ github.run_id }}
           path: research/out/macd90m
+          if-no-files-found: error
       - name: The numbers (the Python agreed)
         env:
           MODE: print
         run: |
           deno run --allow-read=. --allow-env research/macd90m.ts
-          echo "reach ${REACH}"
-          sha256sum $OUT/rows.csv $OUT/summary.json
+          echo "reach ${REACH} touch ${TOUCH} tp ${TP}"
+          sha256sum $OUT/rows.csv $OUT/summary.json $OUT/rows-tp.csv $OUT/summary-tp.json

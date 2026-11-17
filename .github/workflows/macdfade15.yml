@@ -1,0 +1,267 @@
+# The owner (2026-11-17): 「もうシンプル96%の足できたら逆張りのメールちょうだい」, then 「メールを1時間足から15分足に変更」.
+# One email at a closed 15-minute bar whose close puts the MACD line (600 closes, the newest 120 bars' pane) at 96% on a
+# side the bar before was not at, on the fade side (top SELL, bottom BUY), the price in only. Measured as the owner
+# holds (take profit 10 pips, no stop, every email taken), the other side (flow) beside it, and the same holding with no
+# signal (the baseline): research/macdfade15.ts, its rule research/macdfade15-spec.md, and the Python written apart from
+# it (research/macdfade15-check.py): the numbers are printed only when every row and number agree.
+#
+#   syn   two seeded walks (the checks of the spec: the line at the close against zoneAt on the windows rebuilt, at
+#         0.95 against the email's decideZoneOnWindow, the trades, the indexed follow against the plain minute walk,
+#         the look-ahead, the weekend gate by hand, the counts); then walks 1 and 2 written as GMO's files, the study
+#         read from them (held byte for byte against the same walk in memory), and the Python on the same files; then
+#         walk 1's files made untidy, the study and the Python on them
+#   real  GMO's real 15-minute and 1-minute bars (research/.cache, fetched when missing), after syn passed; the Python;
+#         the same with END a week earlier and the Python; ten driftless walks (the noise of the gaps); the numbers
+#
+# TF (2026-11-17): the owner then said 「やっぱりメールの判断1時間足で」, so a push measures the same rule on 1-hour bars
+# (TF=1h: GMO's 1hour files, the reads 0, 3 and 5 minutes after a close, LOAD_FROM 2023-10-01; research/
+# macdfade15-spec.md "On 1-hour bars (TF=1h)"); the 15-minute run (TF=15min) is the workflow_dispatch input's other
+# value. The syn job's period is New York's winter on 1h, when the walks have a Friday bar the weekend gate keeps.
+#
+# GitHub's runners reach GMO's public price API, which the development container cannot. Read-only: public files
+# fetched, a report printed; it writes nothing to the repository and holds no secret.
+name: Research macdfade15
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - research/macdfade15.ts
+      - research/macdfade15-check.py
+      - .github/workflows/macdfade15.yml
+      # the code they run: a change there runs the study again (a commit with [skip ci] does not)
+      - research/macd90.ts
+      - research/trend-data.ts
+      - research/ownerhold-data.ts
+      - research/trend-labels.ts
+      - research/flowz-lib.ts
+      - research/lib.ts
+      - research/macd90-check.py
+      - research/flowz-check.py
+      - supabase/functions/_shared/macd-level.ts
+      - supabase/functions/_shared/macd.ts
+      - supabase/functions/_shared/macd-extreme.ts
+      - supabase/functions/_shared/pine.ts
+      - supabase/functions/_shared/market-hours.ts
+      - supabase/functions/live-chart/logic.ts
+      - supabase/functions/track-outcomes/quotes.ts
+  workflow_dispatch:
+    inputs:
+      tf:
+        description: "The chart: 1h (the email's, 2026-11-17) or 15min. research/macdfade15-spec.md"
+        required: false
+        default: "1h"
+      share:
+        description: "The share at the bar's close (the spec's is 0.96). research/macdfade15-spec.md"
+        required: false
+        default: "0.96"
+      tp:
+        description: "The take profit in pips the trades are measured with, a whole number (the spec's is 10)"
+        required: false
+        default: "10"
+
+permissions:
+  contents: read
+
+env:
+  TF: ${{ github.event.inputs.tf || '1h' }}
+  START: "2024-01-01T00:00:00Z"
+  END: "2026-11-10T21:00:00Z"
+  # 600 bars before START: about 25 trading days of 1-hour bars, about 6 of 15-minute bars
+  LOAD_FROM: ${{ (github.event.inputs.tf || '1h') == '1h' && '2023-10-01T00:00:00Z' || '2023-12-01T00:00:00Z' }}
+  SHARE: ${{ github.event.inputs.share || '0.96' }}
+  TP: ${{ github.event.inputs.tp || '10' }}
+
+jobs:
+  syn:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      LOAD_FROM: ${{ (github.event.inputs.tf || '1h') == '1h' && '2023-10-01T00:00:00Z' || '2024-01-01T00:00:00Z' }}
+      START: ${{ (github.event.inputs.tf || '1h') == '1h' && '2023-11-10T00:00:00Z' || '2024-02-01T00:00:00Z' }}
+      END: ${{ (github.event.inputs.tf || '1h') == '1h' && '2024-03-08T21:00:00Z' || '2024-05-01T00:00:00Z' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      - name: Two walks (the line at the close, decideZoneOnWindow at 0.95, the trades, the indexed follow, the look-ahead, the weekend gate by hand, the counts)
+        env:
+          MODE: synthetic
+          SEEDS: "1,2"
+        run: >
+          deno run --v8-flags=--max-old-space-size=8192
+          --allow-read=. --allow-write=research/out --allow-env
+          research/macdfade15.ts
+      - name: Walk 1 as GMO's files, the study read from them (held against the walk in memory)
+        env:
+          MODE: walkfiles
+          SEEDS: "1"
+          OUT: research/out/macdfade15-walk1
+        run: |
+          deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/macdfade15.ts
+          sha256sum $OUT/rows.csv $OUT/summary.json
+      - name: Walk 2 as GMO's files, the study read from them (held against the walk in memory)
+        env:
+          MODE: walkfiles
+          SEEDS: "2"
+          OUT: research/out/macdfade15-walk2
+        run: |
+          deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/macdfade15.ts
+          sha256sum $OUT/rows.csv $OUT/summary.json
+      # The Python written apart from the TypeScript, from research/macdfade15-spec.md alone (research/macdfade15.ts was
+      # not read for it), reads SHARE, TP, START, END and LOAD_FROM from the environment, the walk's GMO files from
+      # --cache and the TypeScript's rows.csv and summary.json from --out, holds every row cell by cell and every number
+      # of summary.json field by field (then both files as text), runs its own checks (the windows rebuilt, decide-
+      # ZoneOnWindow at 0.95, the index against the minute walk, hand cases, the counts), and exits 0 only when all
+      # agree (last line PYTHON AGREES). A difference fails this step, so the real job does not run.
+      - name: The Python on walks 1 and 2 (research/macdfade15-check.py)
+        run: |
+          for s in 1 2; do
+            python3 -I research/macdfade15-check.py --cache research/out/macdfade15-walk$s/gmo --out research/out/macdfade15-walk$s
+          done
+      # walk 1's files made untidy (MESS=1: 15-minute rows on one side, crossed, repeated across files with the first
+      # bid row crossed, closes moved; minutes missing, on one side, crossed, repeated), so some minutes are in no
+      # chart bar and some bars have none: the paths the tidy walks never take, compared with the Python before the
+      # real run. The TypeScript stops unless each kind of row reached the loaders and the alignment check tripped.
+      - name: Walk 1 as untidy GMO files, then the Python on them
+        env:
+          MODE: walkfiles
+          MESS: "1"
+          SEEDS: "1"
+          OUT: research/out/macdfade15-mess1
+        run: |
+          deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/macdfade15.ts
+          sha256sum $OUT/rows.csv $OUT/summary.json
+          python3 -I research/macdfade15-check.py --cache $OUT/gmo --out $OUT
+      # kept when a step fails, to look into (the walks' GMO files left out)
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macdfade15-syn-${{ env.TF }}-failed-${{ github.run_id }}
+          path: |
+            research/out/macdfade15-*/rows.csv
+            research/out/macdfade15-*/summary.json
+          if-no-files-found: ignore
+
+  real:
+    needs: [syn]
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      OUT: research/out/macdfade${{ (github.event.inputs.tf || '1h') == '1h' && '1h' || '15' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.6
+      # GMO's day files never change once the day has rolled; each restore only adds files (the 1-minute ones are
+      # ownerhold's, macdlive's, macd90's and macd90m's; the 15-minute ones trend's, flowz's and macd15's)
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-1min-none
+          restore-keys: gmo-1min-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-macdlive-none
+          restore-keys: gmo-macdlive-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-macd90-none
+          restore-keys: gmo-macd90-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-macd90m-none
+          restore-keys: gmo-macd90m-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-trend-none
+          restore-keys: gmo-trend-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-flowz-none
+          restore-keys: gmo-flowz-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-macd15-none
+          restore-keys: gmo-macd15-
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-macdfade15-none
+          restore-keys: gmo-macdfade15-
+      - name: The study (its numbers go to files; none printed here)
+        env:
+          MODE: real
+        run: |
+          mkdir -p $OUT
+          df -h .
+          deno run --v8-flags=--max-old-space-size=12288 \
+            --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env \
+            research/macdfade15.ts
+          ls -la $OUT
+          sha256sum $OUT/rows.csv $OUT/summary.json
+      - if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: research/.cache
+          key: gmo-macdfade15-${{ github.run_id }}
+      - name: The Python on the same files and rows (research/macdfade15-check.py)
+        run: python3 -I research/macdfade15-check.py --cache research/.cache --out $OUT
+      # the same study with END a week earlier (the files already kept), and the Python on it: how much the mean a
+      # trade moves with the last minute's price (research/macdfade15-spec.md "How it is measured")
+      - name: The study and the Python again, with END a week earlier
+        run: |
+          END1W=$(date -u -d "@$(( $(date -u -d "$END" +%s) - 604800 ))" +%Y-%m-%dT%H:%M:%SZ)
+          echo "END $END, a week earlier $END1W"
+          mkdir -p $OUT-end1w
+          END=$END1W OUT=$OUT-end1w MODE=real deno run --v8-flags=--max-old-space-size=12288 \
+            --allow-net=forex-api.coin.z.com --allow-read=. --allow-write=research/.cache,research/out --allow-env \
+            research/macdfade15.ts
+          END=$END1W python3 -I research/macdfade15-check.py --cache research/.cache --out $OUT-end1w
+      # driftless walks over the same period through the same code (no signal can do better than none on them): the
+      # gaps fade − base and fade − flow that chance alone gives, printed next to the real ones ($OUT/null.json)
+      - name: Ten driftless walks (the noise of the gaps)
+        env:
+          # quoted: a bare null is YAML's null, not the word
+          MODE: "null"
+          NULL_SEEDS: "1,2,3,4,5,6,7,8,9,10"
+        run: deno run --v8-flags=--max-old-space-size=12288 --allow-read=. --allow-write=research/out --allow-env research/macdfade15.ts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macdfade15-${{ env.TF }}-share${{ env.SHARE }}-tp${{ env.TP }}-${{ github.run_id }}
+          path: |
+            ${{ env.OUT }}
+            ${{ env.OUT }}-end1w
+          if-no-files-found: error
+      # kept when a step fails, to look into (whatever was written; the step logs are kept by GitHub)
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macdfade15-${{ env.TF }}-failed-${{ github.run_id }}
+          path: |
+            ${{ env.OUT }}
+            ${{ env.OUT }}-end1w
+          if-no-files-found: ignore
+      - name: The numbers (the Python agreed)
+        env:
+          MODE: print
+        run: |
+          OUT_END1W=$OUT-end1w deno run --allow-read=. --allow-env research/macdfade15.ts
+          echo "tf ${TF} share ${SHARE} tp ${TP}"
+          sha256sum $OUT/rows.csv $OUT/summary.json $OUT/null.json $OUT-end1w/rows.csv $OUT-end1w/summary.json
+      # summary.json whole, as one line of base64 (the artifact host is refused by the development container's proxy):
+      # copied from this log into research/ledger/ and held against the sha256 above before anything is filled from it
+      # (research/macdfade1h-prod-spec.md 4.5)
+      - name: summary.json whole (base64, one line)
+        run: |
+          echo "summary.json sha256 $(sha256sum < $OUT/summary.json | cut -d' ' -f1) bytes $(wc -c < $OUT/summary.json)"
+          echo "SUMMARY_JSON_BASE64 $(base64 -w0 $OUT/summary.json)"
