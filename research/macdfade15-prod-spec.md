@@ -1,5 +1,8 @@
 # The MACD fade on 15-minute closes: one email when the line closes at 96%, no target, no stop
 
+**Superseded (2026-11-17) by research/macdfade1h-prod-spec.md, not to be built.** The owner then said
+「やっぱりメールの判断1時間足で」; its line numbers were read on the shelved v10 files, which 9bcfd70 put back to main's.
+
 Status: a production spec, written 2026-11-17 on branch `claude/app-confirmation-jvmk03` (f681256). Nothing in it is
 built. Production still runs v9 (signal-alerts v39, 1-hour bars). For production it replaces research/macdride-spec.md
 (v9) and research/macdfade96-spec.md (the minute touch, never built); both stay as the records of their forms. A
