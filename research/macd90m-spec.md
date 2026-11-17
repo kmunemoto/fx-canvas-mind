@@ -253,14 +253,19 @@ measured with no signal, as a baseline the owner can hold the two directions aga
   one loaded, open at the last minute's close), so a baseline trade and a touch trade entered at the same minute on
   the same side have the same numbers.
 - **Output**: no rows; summary-tp.json gains `base: { all, <each pair>, BUY, SELL }`, each the same `G` as above
-  (BUY and SELL by the trade's side), and `pairs[].baseEntries` (the baseline entries of the pair).
+  (BUY and SELL by the trade's side), and `pairs[].baseEntries` (the baseline entries of the pair). With no rows, a
+  group's sums and mean (`pipsSum`, `openPipsSum`, `pipsMean`) add its trades one by one from 0 in the order rows would
+  have: by `T0`, then the pairs' order, then the BUY before the SELL (research/macd90-spec.md's "in the rows' order";
+  another order can change a sum's last bits).
 - **Speed**: about 17,600 bars a pair, so about 176,000 baseline trades; a trade not reaching its target is followed
   to the last minute loaded. Both implementations must find a trade's tp minute and its `mae` without a minute-by-minute
   walk for each trade (e.g. a sparse table or a segment tree over the minutes' `P(bid high)`, `P(ask low)`, `P(bid
   low)`, `P(ask high)`, searched for the first minute reaching the target, then the range's extreme), and the numbers
   must equal the plain walk's (the walks check it on every trade of the touch and a sample of the baseline).
-- **Checks**: the counts add up (tp + open = trades = 2 × baseEntries in each group); a baseline trade at a touch
-  entry's minute and side has the touch trade's result, `T`, pips and mae (wherever a touch entry is at a bar's first
-  minute); look-ahead as the touch's; the Python gives every number of `base`.
+- **Checks**: the counts add up (tp + open = trades in each group; trades = 2 × baseEntries in `all` (the pairs'
+  baseEntries added) and in each pair (its own); trades = the pairs' baseEntries added in `BUY` and in `SELL`, one
+  trade of each side an entry); a baseline trade at a touch entry's minute and side has the touch trade's result, `T`,
+  pips and mae (wherever a touch entry is at a bar's first minute); look-ahead as the touch's; the Python gives every
+  number of `base`.
 - What the baseline is not: it is not a strategy and no email; it only shows the tp share, the pips a trade, the
   losses held and the open trades that the same holding gives with no signal, over the same period and pairs.

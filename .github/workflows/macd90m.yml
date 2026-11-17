@@ -9,6 +9,11 @@
 # pips or still open at the last minute. Written apart to rows-tp.csv and summary-tp.json (rows.csv and summary.json
 # stay as they are), checked on the walks as the rest, held against the Python and printed with the rest.
 #
+# Beside the touch, the same trade with no signal (research/macd90m-spec.md, "a baseline beside the touch"): every
+# 1-hour bar's first minute, a BUY and a SELL, followed as a touch trade. No rows: summary-tp.json gains `base` and
+# pairs[].baseEntries (rows-tp.csv stays as it is); checked on the walks, held against the Python and printed beside
+# flow and fade.
+#
 #   syn   two seeded walks (the line at a minute against zoneAt on the window rebuilt, the close entries against
 #         research/macd90.ts's, the look-ahead check, the counts; the touch's too); then the first walk written as
 #         GMO's files, the study read from them, and the Python on the same files

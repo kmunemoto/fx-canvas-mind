@@ -28,6 +28,12 @@
 //   TOUCH           the share touched: a number above 0, at most 1 (not given or empty: 0.96).
 //   TP              the take profit in pips: a whole number, at least 1 (not given or empty: 10).
 //
+// The same trade with no signal (the spec's last subsection, a baseline beside the touch): every 1-hour bar the touch
+// may enter, at its first minute loaded, a BUY at the minute's ask close and a SELL at its bid close, followed as a touch
+// trade. No rows: summary-tp.json gains `base` (all, each pair, BUY, SELL) and pairs[].baseEntries. The tp minute and
+// the mae are found with an index over the minutes (segment trees), checked against the plain walk on every touch trade
+// and every 97th baseline trade (on the walks, and on the real run too); MODE=print prints base beside flow and fade.
+//
 // Nothing here changes an email; the numbers are the study's only.
 
 import { LEVEL_WINDOW, ZONE_BARS, zoneAt } from "../supabase/functions/_shared/macd-level.ts";
@@ -447,6 +453,190 @@ const touchOf = (a: PairAll, seen?: Seen): { entries: TEntry[]; trades: TTrade[]
   return { entries, trades: entries.flatMap((e) => DIRS.map((dir) => tpTradeOf(a, e, dir))) };
 };
 
+// ---- the same trade with no signal (the spec's last subsection: a baseline beside the touch) ----------------------
+//
+// Every 1-hour bar the touch may enter, at its first minute loaded: a BUY in at that minute's ask close and a SELL at
+// its bid close, each followed exactly as a touch trade (tpTradeOf). About 17,600 bars a pair on the real run, some of
+// the trades followed to the last of about 1,057,000 minutes: the tp minute and the mae are found with segment trees
+// over the minutes, not minute by minute; the plain walk (tpTradeOf) is held against it on every touch trade and every
+// 97th baseline trade (checkBaseOf).
+
+// the minutes' P(bid high), P(ask low), P(bid low), P(ask high) in segment trees: leaf k at size + k, a parent the
+// highest (bh, ah) or lowest (al, bl) of its two children, the leaves past the last minute -Infinity in a tree of the
+// highest and +Infinity in one of the lowest (so they reach no target and change no extreme)
+interface MinuteIndex {
+  n: number;
+  size: number;
+  bh: Float64Array;
+  al: Float64Array;
+  bl: Float64Array;
+  ah: Float64Array;
+}
+
+const treeOf = (xs: Float64Array, dec: number, n: number, size: number, high: boolean): Float64Array => {
+  const t = new Float64Array(2 * size).fill(high ? -Infinity : Infinity);
+  for (let k = 0; k < n; k++) t[size + k] = P(xs[k], dec);
+  for (let v = size - 1; v >= 1; v--) t[v] = high ? Math.max(t[2 * v], t[2 * v + 1]) : Math.min(t[2 * v], t[2 * v + 1]);
+  return t;
+};
+
+const minuteIndexOf = (a: PairAll): MinuteIndex => {
+  const { m1, dec } = a;
+  let size = 1;
+  while (size < m1.n) size *= 2;
+  return {
+    n: m1.n,
+    size,
+    bh: treeOf(m1.bh, dec, m1.n, size, true),
+    al: treeOf(m1.al, dec, m1.n, size, false),
+    bl: treeOf(m1.bl, dec, m1.n, size, false),
+    ah: treeOf(m1.ah, dec, m1.n, size, true),
+  };
+};
+
+// the first minute k >= l whose value reaches x (a tree of the highest: >= x; of the lowest: <= x); n when none
+const firstReaching = (ix: MinuteIndex, t: Float64Array, high: boolean, l: number, x: number): number => {
+  if (l >= ix.n) return ix.n;
+  let v = ix.size + l;
+  for (;;) {
+    if (high ? t[v] >= x : t[v] <= x) {
+      // down to the leftmost leaf under v that reaches it
+      while (v < ix.size) {
+        v *= 2;
+        if (!(high ? t[v] >= x : t[v] <= x)) v++;
+      }
+      return v - ix.size;
+    }
+    // on to the node just right of v's range: up while v is a right child (the root climbs to 0: none left)
+    while (v & 1) v >>= 1;
+    if (v === 0) return ix.n;
+    v++;
+  }
+};
+
+// the highest (high) or lowest of minutes l..r (l <= r)
+const extremeOver = (ix: MinuteIndex, t: Float64Array, high: boolean, l: number, r: number): number => {
+  let x = high ? -Infinity : Infinity;
+  let lo = l + ix.size;
+  let hi = r + ix.size + 1;
+  while (lo < hi) {
+    if (lo & 1) {
+      x = high ? Math.max(x, t[lo]) : Math.min(x, t[lo]);
+      lo++;
+    }
+    if (hi & 1) {
+      hi--;
+      x = high ? Math.max(x, t[hi]) : Math.min(x, t[hi]);
+    }
+    lo >>= 1;
+    hi >>= 1;
+  }
+  return x;
+};
+
+// what a trade followed as tpTradeOf follows it comes to
+interface Followed {
+  entry: number;
+  targetP: number;
+  target: number;
+  result: "tp" | "open";
+  T: number;
+  exit: number;
+  pips: number;
+  mae: number;
+  minutes: number;
+}
+
+// a trade in at minute k's close (ask for a BUY, bid for a SELL), followed with the index: tp at the first minute after
+// k whose bid high (BUY) or ask low (SELL) reaches the target, out at the target; else open at the last minute's close;
+// the mae over the minutes after k up to and including the minute out (none: 0). The same numbers as tpTradeOf's.
+const tpFollowIndexed = (a: PairAll, ix: MinuteIndex, k: number, side: "BUY" | "SELL"): Followed => {
+  const { m1, dec } = a;
+  const entry = side === "BUY" ? m1.ac[k] : m1.bc[k];
+  const pe = P(entry, dec);
+  const targetP = side === "BUY" ? pe + 10 * TP : pe - 10 * TP;
+  const target = targetP / 10 ** dec;
+  const kTp = side === "BUY" ? firstReaching(ix, ix.bh, true, k + 1, targetP) : firstReaching(ix, ix.al, false, k + 1, targetP);
+  const tp = kTp < m1.n;
+  const kOut = tp ? kTp : m1.n - 1;
+  let worst = 0;
+  if (k + 1 <= kOut) {
+    const adv = side === "BUY" ? pe - extremeOver(ix, ix.bl, false, k + 1, kOut) : extremeOver(ix, ix.ah, true, k + 1, kOut) - pe;
+    if (adv > worst) worst = adv;
+  }
+  const exit = tp ? target : side === "BUY" ? m1.bc[kOut] : m1.ac[kOut];
+  const pts = tp ? 10 * TP : side === "BUY" ? P(exit, dec) - pe : pe - P(exit, dec);
+  const T = m1.t[kOut] + MINUTE;
+  return { entry, targetP, target, result: tp ? "tp" : "open", T, exit, pips: pts / 10, mae: worst / 10, minutes: (T - (m1.t[k] + MINUTE)) / MINUTE };
+};
+
+interface BTrade extends Followed {
+  pair: string;
+  i: number;
+  k: number;
+  T0: number;
+  side: "BUY" | "SELL";
+}
+
+// the baseline of a pair: every bar the touch may enter (close in [START, END), at least 600 bars up to it, Zp(i)
+// read) that has a minute loaded, at its first one (the lowest u in [t[i], t[i] + 1 hour)); a BUY then a SELL each
+const baseOf = (a: PairAll, ix: MinuteIndex): { entries: number; trades: BTrade[] } => {
+  const { d, m1 } = a;
+  const trades: BTrade[] = [];
+  let entries = 0;
+  for (let i = W - 1; i < d.n; i++) {
+    const T = d.t[i] + HOUR;
+    if (T < START || T >= END || a.zp[i] === null) continue;
+    const [from, end] = minutesOf(a, i);
+    if (from >= end) continue;
+    entries++;
+    for (const side of ["BUY", "SELL"] as const) trades.push({ pair: d.pair, i, k: from, T0: m1.t[from] + MINUTE, side, ...tpFollowIndexed(a, ix, from, side) });
+  }
+  return { entries, trades };
+};
+
+// the same numbers (the index's against the plain walk's, a baseline trade's against a touch trade's)
+const sameFollowed = (x: Followed, y: Followed) =>
+  x.entry === y.entry && x.targetP === y.targetP && x.target === y.target && x.result === y.result && x.T === y.T && x.exit === y.exit && x.pips === y.pips && x.mae === y.mae && x.minutes === y.minutes;
+
+// the baseline's checks that need no second run (the walks and the real run): every touch trade followed again with
+// the index equals its plain walk; every 97th baseline trade followed again minute by minute (tpTradeOf, as a touch
+// trade of that side at that minute) equals the index's; a baseline trade at a touch entry's minute and side has the
+// touch trade's numbers, and every touch entry at its bar's first minute has its baseline trade
+const BASE_PLAIN_EVERY = 97;
+const checkBaseOf = (a: PairAll, ix: MinuteIndex, touch: TTrade[], base: BTrade[], bad: (msg: string) => void) => {
+  const { d } = a;
+  let indexed = 0;
+  let plain = 0;
+  let same = 0;
+  for (const t of touch) {
+    indexed++;
+    if (!sameFollowed(tpFollowIndexed(a, ix, t.k, t.side), t)) bad(`${d.pair} ${iso(t.T0)} ${t.dir} ${t.side}: the touch trade followed with the index differs from its plain walk`);
+  }
+  base.forEach((b, q) => {
+    if (q % BASE_PLAIN_EVERY !== 0) return;
+    plain++;
+    const p = tpTradeOf(a, { pair: b.pair, i: b.i, k: b.k, open: d.t[b.i], T0: b.T0, zside: b.side === "BUY" ? "top" : "bottom", share0: NaN }, "flow");
+    if (p.side !== b.side || p.T0 !== b.T0 || !sameFollowed(b, p)) bad(`${d.pair} ${iso(b.T0)} ${b.side}: the baseline trade differs from its plain walk`);
+  });
+  const byMinute = new Map(base.map((b) => [`${b.k} ${b.side}`, b]));
+  for (const t of touch) {
+    const b = byMinute.get(`${t.k} ${t.side}`);
+    if (!b) {
+      if (t.k === a.k0[t.i]) bad(`${d.pair} ${iso(t.T0)} ${t.dir}: a touch entry at its bar's first minute has no baseline trade`);
+      continue;
+    }
+    same++;
+    if (!(b.i === t.i && b.T0 === t.T0 && sameFollowed(b, t))) bad(`${d.pair} ${iso(t.T0)} ${t.dir} ${t.side}: the baseline trade at the touch's minute and side has other numbers`);
+  }
+  return { indexed, plain, same };
+};
+
+// the order the baseline's numbers add up in (it has no rows): T0, then the pairs' order, then BUY before SELL
+const sideOrder = (s: "BUY" | "SELL") => (s === "BUY" ? 0 : 1);
+const baseOrdered = (all: BTrade[]): BTrade[] =>
+  [...all].sort((a, b) => a.T0 - b.T0 || PAIRS.indexOf(a.pair as typeof PAIRS[number]) - PAIRS.indexOf(b.pair as typeof PAIRS[number]) || sideOrder(a.side) - sideOrder(b.side));
+
 // ---- the numbers --------------------------------------------------------------------------------------
 
 const wayStats = (ws: WayOut[]) => {
@@ -592,8 +782,8 @@ const minOf = (xs: number[]): number | null => {
   return v;
 };
 
-// G of summary-tp.json, over trades in the rows' order (sums and means add in it)
-const tpGroupOf = (ts: TTrade[]) => {
+// G of summary-tp.json, over trades in the rows' order (sums and means add in it; the baseline's in baseOrdered's)
+const tpGroupOf = (ts: Followed[]) => {
   const tp = ts.filter((t) => t.result === "tp");
   const open = ts.filter((t) => t.result === "open");
   let pipsSum = 0;
@@ -639,10 +829,20 @@ const dirOrder = (d: Dir) => (d === "flow" ? 0 : 1);
 const tpOrdered = (all: TTrade[]): TTrade[] =>
   [...all].sort((a, b) => a.T0 - b.T0 || PAIRS.indexOf(a.pair as typeof PAIRS[number]) - PAIRS.indexOf(b.pair as typeof PAIRS[number]) || dirOrder(a.dir) - dirOrder(b.dir));
 
-const summaryTpOf = (trades: TTrade[], pairs: Array<{ pair: string; entries: number }>) => ({
+// the baseline's GROUPS: all, each pair, BUY and SELL (the trade's side)
+const baseGroupsOf = (ts: BTrade[]) => {
+  const g: Record<string, TpGroup> = { all: tpGroupOf(ts) };
+  for (const p of PAIRS) g[p] = tpGroupOf(ts.filter((t) => t.pair === p));
+  for (const s of ["BUY", "SELL"]) g[s] = tpGroupOf(ts.filter((t) => t.side === s));
+  return g;
+};
+
+// base (the trades in baseOrdered's order) after dirs; pairs[].baseEntries after entries
+const summaryTpOf = (trades: TTrade[], pairs: Array<{ pair: string; entries: number; baseEntries: number }>, base: BTrade[]) => ({
   meta: { start: iso(START), end: iso(END), loadFrom: iso(LOAD_FROM), touch: TOUCH, tp: TP },
   pairs,
   dirs: { flow: tpGroupsOf(trades.filter((t) => t.dir === "flow")), fade: tpGroupsOf(trades.filter((t) => t.dir === "fade")) },
+  base: baseGroupsOf(base),
 });
 
 const HEAD_TP = ["dir", "pair", "open", "T0", "zside", "side", "entry", "share0", "target", "result", "T", "exit", "pips", "mae", "minutes"];
@@ -663,6 +863,22 @@ const printSummaryTp = (s: ReturnType<typeof summaryTpOf>) => {
   for (const dir of DIRS) {
     console.log(`== ${dir} (${dir === "flow" ? "top BUY, bottom SELL" : "top SELL, bottom BUY"})`);
     for (const [k, g] of Object.entries(s.dirs[dir])) for (const line of printTpGroup(k, g)) console.log(line);
+  }
+  // the baseline (a summary-tp.json written before it has none)
+  if (!s.base) {
+    console.log("== base: not in summary-tp.json");
+    return;
+  }
+  console.log(`== base (no signal: every 1-hour bar's first minute, a BUY at the ask close and a SELL at the bid close; take profit ${s.meta.tp}, no stop)`);
+  for (const [k, g] of Object.entries(s.base)) for (const line of printTpGroup(k, g)) console.log(line);
+  console.log(`== flow, fade and base side by side (pips a trade over all trades, open ones unrealized)`);
+  for (const k of ["all", ...PAIRS, "BUY", "SELL"]) {
+    for (const [name, g] of [["flow", s.dirs.flow[k]], ["fade", s.dirs.fade[k]], ["base", s.base[k]]] as Array<[string, TpGroup | undefined]>) {
+      if (!g) continue;
+      console.log(
+        `${k.padEnd(8)} ${name.padEnd(4)} trades ${g.trades} tp ${fmt(g.trades ? (100 * g.tp) / g.trades : null, 1)}% open ${g.open} | pips mean ${fmt(g.pipsMean)} sum ${fmt(g.pipsSum, 1)} | mae median ${fmt(g.maeMedian, 1)} p90 ${fmt(g.maeP90, 1)} max ${fmt(g.maeMax, 1)} | open pips sum ${fmt(g.openPipsSum, 1)} worst ${fmt(g.openPipsWorst, 1)} mae max ${fmt(g.openMaeMax, 1)}`,
+      );
+    }
   }
 };
 
@@ -800,6 +1016,64 @@ const checkTouchPair = (pair: string, m: M1, a: PairAll, bad: (msg: string) => v
   return { entries, trades, zones, bars, lookahead };
 };
 
+// the baseline's checks on one pair of a walk (the spec's baseline "Checks"): checkBaseOf; each entry a BUY and a SELL
+// at its bar's first minute, at the minute's ask and bid closes; the entries counted again from the minutes; every tp
+// trade's pips TP and every open one's below it; and the look-ahead as the touch's on a sample of entries spread over
+// the period: every price after T0 moved by ±300 pips, the entry stays (bar, minute, sides, prices); every price after a
+// tp trade's T moved, its result, T, pips and mae stay
+const checkBasePair = (pair: string, m: M1, a: PairAll, touch: TTrade[], bad: (msg: string) => void) => {
+  const { d, m1 } = a;
+  const ix = minuteIndexOf(a);
+  const base = baseOf(a, ix);
+  const c = checkBaseOf(a, ix, touch, base.trades, bad);
+  if (base.trades.length !== 2 * base.entries) bad(`${pair}: base: ${base.trades.length} trades for ${base.entries} entries`);
+  const lastT = m1.n ? m1.t[m1.n - 1] + MINUTE : NaN;
+  for (let q = 0; 2 * q + 1 < base.trades.length; q++) {
+    const [b, s] = [base.trades[2 * q], base.trades[2 * q + 1]];
+    const at = `${pair} ${iso(b.T0)}: base`;
+    if (b.side !== "BUY" || s.side !== "SELL" || b.i !== s.i || b.k !== s.k || b.T0 !== s.T0) bad(`${at}: not a BUY and a SELL at one minute`);
+    if (b.k !== a.k0[b.i] || m1.t[b.k] < d.t[b.i] || m1.t[b.k] >= d.t[b.i] + HOUR || b.T0 !== m1.t[b.k] + MINUTE) bad(`${at}: not its bar's first minute`);
+    if (b.entry !== m1.ac[b.k] || s.entry !== m1.bc[s.k]) bad(`${at}: not the minute's ask close (BUY) and bid close (SELL)`);
+    for (const t of [b, s]) {
+      if (t.result === "tp" && !(t.pips === TP && t.exit === t.target && t.T > t.T0 && t.T <= lastT)) bad(`${at} ${t.side}: a tp trade's pips ${t.pips} (TP ${TP}), exit or T`);
+      if (t.result === "open" && !(t.pips < TP && t.T === lastT)) bad(`${at} ${t.side}: an open trade's pips ${t.pips} not below TP ${TP}, or not valued at the last minute`);
+      if (!(t.mae >= 0) || t.minutes !== (t.T - t.T0) / MINUTE) bad(`${at} ${t.side}: mae or minutes`);
+    }
+  }
+  // the entries again: the bars (as the touch may enter) whose hour has a minute loaded
+  const hours = new Set<number>();
+  for (let k = 0; k < m1.n; k++) hours.add(Math.floor(m1.t[k] / HOUR) * HOUR);
+  let bars = 0;
+  for (let i = W - 1; i < d.n; i++) if (d.t[i] + HOUR >= START && d.t[i] + HOUR < END && a.zp[i] !== null && hours.has(d.t[i])) bars++;
+  if (bars !== base.entries) bad(`${pair}: base: ${base.entries} entries, ${bars} bars with a minute`);
+  // the look-ahead
+  let lookahead = 0;
+  const picks = [...new Set([0.1, 0.35, 0.6, 0.85].map((f) => Math.floor(f * base.entries)))].filter((q) => q < base.entries);
+  for (const q of picks) {
+    const mine = [base.trades[2 * q], base.trades[2 * q + 1]];
+    const T0 = mine[0].T0;
+    for (const pips of [300, -300]) {
+      const cuts: Array<[number, BTrade | null]> = [[T0, null], ...mine.filter((t) => t.result === "tp").map((t): [number, BTrade] => [t.T, t])];
+      for (const [cut, t] of cuts) {
+        const aa = synthAll(pair, poisoned(m, cut, pips));
+        const again = baseOf(aa, minuteIndexOf(aa)).trades.filter((u) => u.T0 === T0);
+        lookahead++;
+        const at = `${pair} ${iso(T0)}: base: when the future after ${iso(cut)} moved ${pips}`;
+        if (again.length !== 2) {
+          bad(`${at}: the entry went`);
+          continue;
+        }
+        if (again.some((u, r) => u.i !== mine[r].i || u.k !== mine[r].k || u.side !== mine[r].side || u.entry !== mine[r].entry)) bad(`${at}: the entry changed`);
+        if (t) {
+          const u = again.find((x) => x.side === t.side) as BTrade;
+          if (!(u.result === t.result && u.T === t.T && u.pips === t.pips && u.mae === t.mae)) bad(`${at}: the ${t.side} trade changed`);
+        }
+      }
+    }
+  }
+  return { base, ...c, lookahead };
+};
+
 const checkWalk = (seed: number): number => {
   let fail = 0;
   const bad = (msg: string) => {
@@ -811,19 +1085,28 @@ const checkWalk = (seed: number): number => {
   let lookahead = 0;
   // the touch's
   const tAll: TTrade[] = [];
-  const tPairs: Array<{ pair: string; entries: number }> = [];
+  const tPairs: Array<{ pair: string; entries: number; baseEntries: number }> = [];
   let tZones = 0;
   let tBars = 0;
   let tLookahead = 0;
+  // the baseline's
+  const bAll: BTrade[] = [];
+  const bChecked = { indexed: 0, plain: 0, same: 0, lookahead: 0 };
   for (const pair of PAIRS) {
     const m = walkOf(seed, pair).m1;
     const a = synthAll(pair, m);
     const tc = checkTouchPair(pair, m, a, bad);
     tAll.push(...tc.trades);
-    tPairs.push({ pair, entries: tc.entries.length });
     tZones += tc.zones;
     tBars += tc.bars;
     tLookahead += tc.lookahead;
+    const bc = checkBasePair(pair, m, a, tc.trades, bad);
+    bAll.push(...bc.base.trades);
+    tPairs.push({ pair, entries: tc.entries.length, baseEntries: bc.base.entries });
+    bChecked.indexed += bc.indexed;
+    bChecked.plain += bc.plain;
+    bChecked.same += bc.same;
+    bChecked.lookahead += bc.lookahead;
     const seen: Array<{ j: number; k: number; x: number; z: Zone }> = [];
     const trades = tradesOfPair(a, seen);
     all.push(...trades);
@@ -899,7 +1182,7 @@ const checkWalk = (seed: number): number => {
   if (zonesCompared === 0 || lookahead === 0) bad("the checks compared nothing");
   // the touch: (4) the counts add up (tp + open = trades = 2 x entries, in every group and pair); (2)'s every tp trade
   // at TP and every open one below it are checked trade by trade above
-  const st = summaryTpOf(tpOrdered(tAll), tPairs);
+  const st = summaryTpOf(tpOrdered(tAll), tPairs, baseOrdered(bAll));
   const entriesAll = tPairs.reduce((s, p) => s + p.entries, 0);
   for (const dir of DIRS) {
     const gs = st.dirs[dir];
@@ -917,6 +1200,21 @@ const checkWalk = (seed: number): number => {
   }
   console.log(`walk seed ${seed} touch: zones compared ${tZones}; bars read again ${tBars}; look-ahead compared ${tLookahead}`);
   if (entriesAll === 0 || tZones === 0 || tBars === 0 || tLookahead === 0) bad("the touch's checks compared nothing");
+  // the baseline: the counts add up (tp + open = trades = 2 x baseEntries, in every group and pair; BUY and SELL one
+  // each an entry)
+  const bg = st.base;
+  const baseAll = tPairs.reduce((s, p) => s + p.baseEntries, 0);
+  for (const [k, g] of Object.entries(bg)) if (g.tp + g.open !== g.trades) bad(`base ${k}: tp + open is not trades`);
+  if (bg.all.trades !== 2 * baseAll) bad(`base: ${bg.all.trades} trades for ${baseAll} entries`);
+  for (const p of tPairs) if (bg[p.pair].trades !== 2 * p.baseEntries) bad(`base ${p.pair}: ${bg[p.pair].trades} trades for ${p.baseEntries} entries`);
+  if (bg.BUY.trades !== baseAll || bg.SELL.trades !== baseAll) bad("base: BUY or SELL is not one a baseline entry");
+  if (bg.all.tp === 0 || bg.all.open === 0) bad("base: the walk has no tp or no open trade");
+  console.log(`walk seed ${seed} base tp ${TP}: entries ${baseAll}`);
+  for (const line of printTpGroup("all", bg.all)) console.log(`  ${line}`);
+  console.log(
+    `walk seed ${seed} base: touch trades followed with the index ${bChecked.indexed}; baseline trades walked minute by minute ${bChecked.plain}; baseline trades at a touch's minute and side ${bChecked.same}; look-ahead compared ${bChecked.lookahead}`,
+  );
+  if (baseAll === 0 || bChecked.indexed === 0 || bChecked.plain === 0 || bChecked.same === 0 || bChecked.lookahead === 0) bad("the baseline's checks compared nothing");
   return fail;
 };
 
@@ -947,9 +1245,34 @@ if (import.meta.main) {
     const touch = as.map((a) => touchOf(a));
     const tTrades = tpOrdered(touch.flatMap((x) => x.trades));
     await Deno.writeTextFile(`${OUT}/rows-tp.csv`, csvTpOf(tTrades));
-    await Deno.writeTextFile(`${OUT}/summary-tp.json`, JSON.stringify(summaryTpOf(tTrades, as.map((a, q) => ({ pair: a.d.pair, entries: touch[q].entries.length }))), null, 1));
+    // the baseline (no rows; rows-tp.csv above does not depend on it), each pair's index dropped after its pair; the
+    // index held against the plain walk and the baseline against the touch (checkBaseOf) before summary-tp.json is written
+    let fail = 0;
+    const bad = (msg: string) => {
+      fail++;
+      if (fail <= 30) console.log(`  CHECK FAILED: ${msg}`);
+    };
+    const base = as.map((a, q) => {
+      const t0 = performance.now();
+      const ix = minuteIndexOf(a);
+      const b = baseOf(a, ix);
+      const t1 = performance.now();
+      const c = checkBaseOf(a, ix, touch[q].trades, b.trades, bad);
+      const t2 = performance.now();
+      console.log(
+        `${a.d.pair}: base ${b.entries} entries, ${b.trades.length} trades in ${(t1 - t0).toFixed(0)} ms (the index built and searched); checked in ${(t2 - t1).toFixed(0)} ms: touch trades followed with the index ${c.indexed}, baseline trades walked minute by minute ${c.plain}, baseline trades at a touch's minute and side ${c.same}`,
+      );
+      return b;
+    });
+    if (fail) {
+      console.log(`${fail} BASELINE CHECKS FAILED: summary-tp.json not written`);
+      Deno.exit(1);
+    }
+    const bTrades = baseOrdered(base.flatMap((x) => x.trades));
+    const tpPairs = as.map((a, q) => ({ pair: a.d.pair, entries: touch[q].entries.length, baseEntries: base[q].entries }));
+    await Deno.writeTextFile(`${OUT}/summary-tp.json`, JSON.stringify(summaryTpOf(tTrades, tpPairs, bTrades), null, 1));
     // the numbers are printed by the workflow only after the Python agreed (research/macd90m-check.py)
-    console.log(`written: ${trades.length} rows; the touch: ${tTrades.length} rows`);
+    console.log(`written: ${trades.length} rows; the touch: ${tTrades.length} rows; the baseline: ${bTrades.length} trades (no rows)`);
   } else if (MODE === "print") {
     printSummary(JSON.parse(await Deno.readTextFile(`${OUT}/summary.json`)));
     printSummaryTp(JSON.parse(await Deno.readTextFile(`${OUT}/summary-tp.json`)));

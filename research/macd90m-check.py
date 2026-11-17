@@ -53,15 +53,32 @@ spec の文と、このファイルの上の部分（準備した 598 番の状�
   1つの足）。2つの取引の pair・open・T0・zside・share0 が同じで向きが逆、入りがその分の Ask と Bid の終値。
   tp の pips は TP、open の pips は TP より下。tp + open = trades、flow と fade の trades = entries。
 
+合図なしの比べ（base。spec の最後の小節「The same trade with no signal」、2026-11-17）: touch と同じ持ち方を、合図なしで。
+TypeScript の側（research/macd90m.ts）とその差分は読まずに、spec の文から書いた。
+  入り: 1時間足 i（確定が [START, END)、600本そろう。touch が入りうる足と同じ）ごとに、その足の最初の1分足
+        （t[i] <= u < t[i] + 1時間 の一番早い u。無い足は入りなし）。T0 = その分の終わり。1つの入りに2つの取引:
+        BUY（その分の Ask の終値）と SELL（Bid の終値）。
+  追い方: touch とまったく同じ（目標 TP、損切りなし、次の分から読み込んだ最後の分まで、最後の分の終値で open）。
+        利確の分と mae は、塊ごとの最小・最大（flowz-check.py Seek。touch と同じ索引）で引く。
+  出力: 行は無い。summary-tp.json に base: { all, 通貨ごと, BUY, SELL }（それぞれ touch と同じ G）と、
+        pairs[].baseEntries（その通貨の入りの数）を足す。和の順は、行があればの順（T0、通貨の順、BUY・SELL）。
+  確かめ（食い違いとして数える）: tp + open = trades、trades = 2 × baseEntries（全体と通貨ごと）、BUY と SELL の
+        trades = baseEntries。touch の入りが足の最初の分にあるとき、同じ分・同じ向きの base の取引が、touch の
+        取引と result・T・exit・pips・mae・minutes で同じ。索引で引いた数が、1分ずつ歩いた数と同じ（touch の取引
+        すべてと、BASE_SAMPLE 個に1つの base の取引）。--out では base と pairs[].baseEntries をすべて比べ、
+        無ければ食い違い。
+
 使い方:
   [START=… END=… LOAD_FROM=… REACH=… TOUCH=… TP=…] python3 -I research/macd90m-check.py --cache DIR --out OUT
       DIR: <DIR>/<USD_JPY など>/<1hour|1min>/<bid|ask>/<鍵>.json（GMO の形）
       OUT: research/macd90m.ts の出力（rows.csv・summary.json・rows-tp.csv・summary-tp.json）。読むだけで、
       書かない。touch の2つのファイルが無ければ、そう書いて食い違いとする。
   [START=… END=… LOAD_FROM=… REACH=… TOUCH=… TP=…] python3 -I research/macd90m-check.py --cache DIR --self OUT2
-      比べずに、自分の rows.csv・summary.json・rows-tp.csv・summary-tp.json を OUT2 に書く。
+      比べずに、自分の rows.csv・summary.json・rows-tp.csv・summary-tp.json（base と pairs[].baseEntries も）を
+      OUT2 に書く。
   [START=… END=… LOAD_FROM=… TOUCH=… TP=…] python3 -I research/macd90m-check.py --cache DIR --touch-only OUT3
-      touch だけを数え、比べずに、自分の rows-tp.csv と summary-tp.json を OUT3 に書く（close・moment は数えない）。
+      touch と base（合図なしの比べ）だけを数え、比べずに、自分の rows-tp.csv と summary-tp.json（base と
+      pairs[].baseEntries も）を OUT3 に書く（close・moment は数えない）。
   期間の既定は spec の START 2024-01-01T00:00:00Z、END 2026-11-10T21:00:00Z、LOAD_FROM 2023-10-01T00:00:00Z。
 終了コード: 0 = 行と数がすべて一致（最後の行 PYTHON AGREES）、1 = 食い違いあり、または入力の誤り
 （最後の行 PYTHON DISAGREES: n differences）。--self・--touch-only は確かめが通れば 0。
@@ -134,8 +151,12 @@ TG_KEYS = ['trades', 'tp', 'open', 'pipsSum', 'pipsMean', 'pipsMedian', 'tpMinut
            'openPipsSum', 'openPipsWorst', 'openMaeMax', 'openMinutesMax']
 TG_NEAR = {'pipsMean', 'pipsMedian', 'tpMinutesMedian', 'maeMedian'}   # C_NEAR と同じく平均と中央値だけ
 TP_GROUPS = ['all'] + PAIRS + ['BUY', 'SELL', 'top', 'bottom']
-TP_PAIR_KEYS = ['entries']
+TP_PAIR_KEYS = ['entries', 'baseEntries']        # baseEntries: 合図なしの比べ（base）の入りの数
 TOUCH_SAMPLE = 97                # 入りの足のほか、この数に1つの足でも、分ごとの触れ方を線と帯で読み直す
+# ---- 合図なしの比べ（base。spec の最後の小節）
+BASE_SIDES = ('BUY', 'SELL')     # 1つの入りの2つの取引（行があればこの順）
+BASE_GROUPS = ['all'] + PAIRS + ['BUY', 'SELL']
+BASE_SAMPLE = 97                 # base の取引のうち、この数に1つを1分ずつ歩いて確かめる（touch の取引はすべて）
 
 js_str, js_div, cell, in_band, die = m90.js_str, m90.js_div, m90.cell, m90.in_band, m90.die
 
@@ -550,10 +571,21 @@ def compute_pair(cache, pi, pair, start, end, load_from, ld, chk, log, old=True)
             check_minute(-1, k)
 
     t_old = time.time()
-    trows, n_touch, t_short = touch_pair(pi, pair, start, end, dict(
-        n=n, lo=lo, t=t, ms=ms, me=me, flags=flags, M8=M8, T8=T8, B8=B8, mt=mt, nm=nm, mbh=mbh, mbl=mbl, mbc=mbc,
-        mah=mah, mal=mal, mac=mac, P=P, scale=scale, minute_line=minute_line, c=c), chk)
+    # 利確の分と mae を引く索引（整数の点。P は単調なので、min P(bid low) = P(min bid low)）。touch と base で共有。
+    # 塊ごとの最小・最大で引く（flowz-check.py Seek）
+    seeks = (fc.Seek([P(x) for x in mbh], False),    # BUY の利確: 最初の P(bid high) >= 目標
+             fc.Seek([P(x) for x in mal], True),     # SELL の利確: 最初の P(ask low) <= 目標
+             fc.Seek([P(x) for x in mbl], True),     # BUY の mae: P(bid low) の最小
+             fc.Seek([P(x) for x in mah], False))    # SELL の mae: P(ask high) の最大
+    t_seek = time.time() - t_old
+    d = dict(n=n, lo=lo, t=t, ms=ms, me=me, flags=flags, M8=M8, T8=T8, B8=B8, mt=mt, nm=nm, mbh=mbh, mbl=mbl, mbc=mbc,
+             mah=mah, mal=mal, mac=mac, P=P, scale=scale, minute_line=minute_line, c=c, seeks=seeks)
+    t_old = time.time()
+    trows, n_touch, t_short = touch_pair(pi, pair, start, end, d, chk)
     t_touch = time.time() - t_old
+    t_old = time.time()
+    brows, n_base, b_none, b_short, t_walk = base_pair(pi, pair, start, end, d, trows, chk)
+    t_base = time.time() - t_old
 
     if old:
         log(f'  {pair}: bars {n}, 1-min bars {nm} (in no bar, not read: {orphan}), entries close {n_close} '
@@ -564,9 +596,15 @@ def compute_pair(cache, pi, pair, start, end, load_from, ld, chk, log, old=True)
         f'bottom {sum(1 for r in trows if r["dir"] == "flow" and r["zside"] == "bottom")}), '
         + ', '.join(f'{d} tp {sum(1 for r in trows if r["dir"] == d and r["result"] == "tp")} / open '
                     f'{sum(1 for r in trows if r["dir"] == d and r["result"] == "open")}' for d in TP_DIRS) +
-        f'; short of 600 in [START, END) {t_short}; touch {t_touch:.1f}s')
+        f'; short of 600 in [START, END) {t_short}; touch {t_touch:.1f}s (the index {t_seek:.1f}s)')
+    log(f'  {pair} base (no signal), tp {TP}: entries {n_base} (bars with no 1-minute bar {b_none}, short of 600 '
+        f'{b_short}), ' + ', '.join(f'{sd} tp {sum(1 for r in brows if r["side"] == sd and r["result"] == "tp")} / open '
+                                    f'{sum(1 for r in brows if r["side"] == sd and r["result"] == "open")}'
+                                    for sd in BASE_SIDES) +
+        f'; base {t_base:.1f}s (of which the plain walks {t_walk:.1f}s)')
     chk['orphan'] += orphan
-    return rows, dict(pair=pair, bars=n, minutes=nm, close=n_close, moment=n_moment), trows, dict(pair=pair, entries=n_touch)
+    return (rows, dict(pair=pair, bars=n, minutes=nm, close=n_close, moment=n_moment), trows,
+            dict(pair=pair, entries=n_touch, baseEntries=n_base), brows)
 
 
 # ---------------------------------------------------------------- touch（spec の最後の節）: 1つの通貨
@@ -577,11 +615,8 @@ def touch_pair(pi, pair, start, end, d, chk):
     M8, T8, B8 = d['M8'], d['T8'], d['B8']
     mt, nm, mbh, mbl, mbc, mah, mal, mac = d['mt'], d['nm'], d['mbh'], d['mbl'], d['mbc'], d['mah'], d['mal'], d['mac']
     P, scale, minute_line, c = d['P'], d['scale'], d['minute_line'], d['c']
-    # 整数の点（P は単調なので、min P(bid low) = P(min bid low)）。塊ごとの最小・最大で引く（flowz-check.py Seek）
-    s_tp_buy = fc.Seek([P(x) for x in mbh], False)   # BUY の利確: 最初の P(bid high) >= 目標
-    s_tp_sell = fc.Seek([P(x) for x in mal], True)   # SELL の利確: 最初の P(ask low) <= 目標
-    s_mae_buy = fc.Seek([P(x) for x in mbl], True)   # BUY の mae: P(bid low) の最小
-    s_mae_sell = fc.Seek([P(x) for x in mah], False)  # SELL の mae: P(ask high) の最大
+    # 整数の点の索引（compute_pair が作る。base と共有）: BUY の利確・SELL の利確・BUY の mae・SELL の mae
+    s_tp_buy, s_tp_sell, s_mae_buy, s_mae_sell = d['seeks']
     checked = set()
 
     def check_line(sd, k):
@@ -675,6 +710,121 @@ def touch_pair(pi, pair, start, end, d, chk):
     return rows, n_entries, short
 
 
+# ---------------------------------------------------------------- 合図なしの比べ（base。spec の最後の小節）: 1つの通貨
+def base_pair(pi, pair, start, end, d, trows, chk):
+    """1時間足 i（確定が [START, END)、600本そろう。touch が入りうる足）ごとに、その足の最初の1分足で BUY と SELL。
+    追い方は touch と同じ（目標 TP、損切りなし、最後の分まで）。利確の分と mae は索引（d['seeks']）で引く。
+    返すのは (取引, 入りの数, 1分足の無い足の数, 600本に足りない足の数, 1分ずつ歩いた確かめの秒)。
+    確かめ: touch の取引すべてと、BASE_SAMPLE 個に1つの base の取引を、1分ずつ歩いた数と比べる。touch の入りが
+    足の最初の分にあるときは、同じ分・同じ向きの base の取引が touch の取引と同じ数か。"""
+    n, lo, t, ms, me = d['n'], d['lo'], d['t'], d['ms'], d['me']
+    mt, nm, mbc, mac = d['mt'], d['nm'], d['mbc'], d['mac']
+    P, scale = d['P'], d['scale']
+    s_tp_buy, s_tp_sell, s_mae_buy, s_mae_sell = d['seeks']
+    pbh, pal, pbl, pah = s_tp_buy.a, s_tp_sell.a, s_mae_buy.a, s_mae_sell.a   # 分ごとの整数の点（歩く確かめ用）
+
+    def by_index(k, buy):
+        """入りの分 k・向き（buy）の取引を索引で: (result, 出る分 ko, exit, pips, mae)"""
+        pe = P(mac[k] if buy else mbc[k])
+        if buy:
+            target = pe + 10 * TP
+            ko = s_tp_buy.first(k + 1, target)
+        else:
+            target = pe - 10 * TP
+            ko = s_tp_sell.first(k + 1, target)
+        if ko >= 0:
+            result, px, pips = 'tp', target / scale, TP
+        else:
+            result, ko = 'open', nm - 1               # 最後の分（入りの分が最後なら、その分）
+            px = mbc[ko] if buy else mac[ko]
+            pips = (P(px) - pe) / 10 if buy else (pe - P(px)) / 10
+        if ko > k:
+            against = pe - s_mae_buy.ext(k + 1, ko) if buy else s_mae_sell.ext(k + 1, ko) - pe
+        else:
+            against = 0
+        return result, ko, px, pips, against / 10 if against > 0 else 0
+
+    def by_walk(k, buy):
+        """同じ取引を、入りの分の次の分から1分ずつ歩いて（spec の「Following a trade」をそのまま）"""
+        pe = P(mac[k] if buy else mbc[k])
+        target = pe + 10 * TP if buy else pe - 10 * TP
+        worst = pe
+        q = k + 1
+        if buy:
+            while q < nm:
+                if pbl[q] < worst:
+                    worst = pbl[q]
+                if pbh[q] >= target:
+                    break
+                q += 1
+            against = pe - worst
+        else:
+            while q < nm:
+                if pah[q] > worst:
+                    worst = pah[q]
+                if pal[q] <= target:
+                    break
+                q += 1
+            against = worst - pe
+        if q < nm:
+            result, ko, px, pips = 'tp', q, target / scale, TP
+        else:
+            result, ko = 'open', nm - 1
+            px = mbc[ko] if buy else mac[ko]
+            pips = (P(px) - pe) / 10 if buy else (pe - P(px)) / 10
+        return result, ko, px, pips, against / 10 if against > 0 else 0
+
+    rows = []
+    n_entries = none = short = 0
+    for i in range(n):
+        T = t[i] + HOUR
+        if T < start or T >= end:
+            continue
+        if i < lo:                                   # touch が入りうる足と同じ（600本そろう足）
+            short += 1
+            continue
+        k = ms[i]
+        if k >= me[i]:                               # 1分足の無い足: 入りなし
+            none += 1
+            continue
+        T0 = mt[k] + MIN
+        n_entries += 1
+        for si, sd in enumerate(BASE_SIDES):
+            result, ko, px, pips, mae = by_index(k, sd == 'BUY')
+            dt = mt[ko] + MIN - T0
+            rows.append(dict(pair=pair, pi=pi, si=si, side=sd, _T0=T0, _k=k, _ko=ko, result=result, exit=px, pips=pips,
+                             mae=mae, minutes=dt // MIN if dt % MIN == 0 else dt / MIN))
+
+    t_walk = time.time()
+    # 索引で引いた数と、1分ずつ歩いた数: touch の取引すべてと、base の取引の一部
+    for r in trows:
+        got = (r['result'], r['_ko'], r['exit'], r['pips'], r['mae'])
+        ref = by_walk(r['_k'], r['side'] == 'BUY')
+        chk['bWalk'] += 1
+        if got != ref:
+            chk['bWalkBad'].append(f'{pair} touch {r["dir"]} {r["open"]} {r["side"]}: the index {got!r} / the walk {ref!r}')
+    for q in range(0, len(rows), BASE_SAMPLE):
+        r = rows[q]
+        got = (r['result'], r['_ko'], r['exit'], r['pips'], r['mae'])
+        ref = by_walk(r['_k'], r['side'] == 'BUY')
+        chk['bWalk'] += 1
+        if got != ref:
+            chk['bWalkBad'].append(f'{pair} base {fc.iso(r["_T0"])} {r["side"]}: the index {got!r} / the walk {ref!r}')
+    t_walk = time.time() - t_walk
+    # touch の入りが足の最初の分にあるとき: 同じ分・同じ向きの base の取引は、touch の取引と同じ数
+    at = {(r['_k'], r['side']): r for r in rows}
+    for r in trows:
+        b = at.get((r['_k'], r['side']))
+        if b is None:
+            continue
+        chk['bTouch'] += 1
+        for col in ('result', '_ko', 'exit', 'pips', 'mae', 'minutes', '_T0'):
+            if b[col] != r[col]:
+                chk['bTouchBad'].append(f'{pair} touch {r["dir"]} {r["open"]} {r["side"]} at the bar\'s first minute: '
+                                        f'{col} touch {r[col]!r} / base {b[col]!r}')
+    return rows, n_entries, none, short, t_walk
+
+
 def touch_rows_bad(rows):
     """行だけから: 1つの入りの2つの取引（flow が先）が、pair・open・T0・zside・share0 が同じで向きが逆、flow の向きが
     上 → BUY・下 → SELL、BUY の入り >= SELL の入り。tp は pips = TP・exit = target、open は pips < TP。
@@ -718,19 +868,23 @@ def touch_rows_bad(rows):
 def compute(cache, start, end, load_from, log, old=True):
     ld = fc.LoadStats()
     chk = dict(minutesChecked=0, orphan=0, mismatch=[], both=[], bothMinute=[], aNotB=[], cOverlap=[], cBefore=[],
-               cNotSame=[], tLines=0, tFlagMinutes=0, tMismatch=[], tFlag=[], tEntry=[], tBoth=[], tRows=[])
-    rows, pairs, trows, tpairs = [], [], [], []
+               cNotSame=[], tLines=0, tFlagMinutes=0, tMismatch=[], tFlag=[], tEntry=[], tBoth=[], tRows=[],
+               bWalk=0, bWalkBad=[], bTouch=0, bTouchBad=[])
+    rows, pairs, trows, tpairs, brows = [], [], [], [], []
     for pi, pair in enumerate(PAIRS):
-        r, info, tr, tinfo = compute_pair(cache, pi, pair, start, end, load_from, ld, chk, log, old)
+        r, info, tr, tinfo, br = compute_pair(cache, pi, pair, start, end, load_from, ld, chk, log, old)
         rows.extend(r)
         pairs.append(info)
         trows.extend(tr)
         tpairs.append(tinfo)
+        brows.extend(br)
     rows.sort(key=lambda r: (r['_T0'], r['pi'], r['wi']))
     chk['cOverlap'] = c_overlaps(rows)
     trows.sort(key=lambda r: (r['_T0'], r['pi'], r['di']))
     chk['tRows'] = touch_rows_bad(trows)
-    return rows, pairs, ld, chk, trows, tpairs
+    # base: 行は書かないが、和の順は行があればの順（T0、通貨の順、BUY・SELL）
+    brows.sort(key=lambda r: (r['_T0'], r['pi'], r['si']))
+    return rows, pairs, ld, chk, trows, tpairs, brows
 
 
 def c_overlaps(rows):
@@ -894,9 +1048,57 @@ def tp_groups_of(rows):
     return g
 
 
-def tp_summary_of(trows, tpairs, start, end, load_from):
+def base_groups_of(brows):
+    """base の組 { all, 通貨ごと, BUY, SELL }（BUY・SELL は取引の向き）。brows は T0・通貨・BUY/SELL の順。"""
+    g = {'all': tp_stats(brows)}
+    for p in PAIRS:
+        g[p] = tp_stats([r for r in brows if r['pair'] == p])
+    for sd in BASE_SIDES:
+        g[sd] = tp_stats([r for r in brows if r['side'] == sd])
+    return g
+
+
+def base_alt_sums(brows):
+    """食い違いの説明だけに使う: 和を通貨ごとに（通貨の順、その中は T0・BUY/SELL の順）取ったときの pipsSum と
+    openPipsSum。比べる数ではない（行があればの順が spec に合う読み）。"""
+    alt = sorted(brows, key=lambda r: (r['pi'], r['_T0'], r['si']))
+    groups = {'all': alt}
+    for sd in BASE_SIDES:
+        groups[sd] = [r for r in alt if r['side'] == sd]
+    out = {}
+    for name, xs in groups.items():
+        ops = [r['pips'] for r in xs if r['result'] == 'open']
+        out[name] = dict(pipsSum=fc.add_in_order([r['pips'] for r in xs]) if xs else None,
+                         openPipsSum=fc.add_in_order(ops) if ops else None)
+    return out
+
+
+def tp_summary_of(trows, tpairs, start, end, load_from, brows):
     return dict(meta=dict(start=fc.iso(start), end=fc.iso(end), loadFrom=fc.iso(load_from), touch=TOUCH, tp=TP),
-                pairs=tpairs, dirs={dn: tp_groups_of([r for r in trows if r['dir'] == dn]) for dn in TP_DIRS})
+                pairs=tpairs, dirs={dn: tp_groups_of([r for r in trows if r['dir'] == dn]) for dn in TP_DIRS},
+                base=base_groups_of(brows))
+
+
+def base_counts_add_up(ts):
+    """base: tp + open = trades（どの組も）、trades = 2 × baseEntries（全体と通貨ごと）、BUY と SELL の trades =
+    baseEntries の和、BUY + SELL = all。"""
+    bad = []
+    g = ts['base']
+    entries = sum(p['baseEntries'] for p in ts['pairs'])
+    for name, s in g.items():
+        if s['tp'] + s['open'] != s['trades']:
+            bad.append(f'base.{name}: tp + open != trades')
+    if g['all']['trades'] != 2 * entries:
+        bad.append(f'base.all: trades {g["all"]["trades"]} != 2 x baseEntries {entries}')
+    for p in ts['pairs']:
+        if g[p['pair']]['trades'] != 2 * p['baseEntries']:
+            bad.append(f'base.{p["pair"]}: trades {g[p["pair"]]["trades"]} != 2 x baseEntries {p["baseEntries"]}')
+    for sd in BASE_SIDES:
+        if g[sd]['trades'] != entries:
+            bad.append(f'base.{sd}: trades {g[sd]["trades"]} != baseEntries {entries}')
+    if g['BUY']['trades'] + g['SELL']['trades'] != g['all']['trades']:
+        bad.append('base: BUY + SELL != all')
+    return bad
 
 
 def tp_counts_add_up(ts):
@@ -1113,8 +1315,9 @@ def compare_tp_rows(C, mine, head, theirs):
                 C.bad(f'{where} {col}: TS {s!r} / Python {cell(v)!r}')
 
 
-def compare_tp_summary(C, mine, S):
-    """summary-tp.json の数をすべて（meta の touch・tp も）。near は平均と中央値だけ。"""
+def compare_tp_summary(C, mine, S, alt=None):
+    """summary-tp.json の数をすべて（meta の touch・tp も。base と pairs[].baseEntries も）。near は平均と中央値だけ。
+    alt: base の和を通貨ごとに取った数（食い違いの説明だけ。base_alt_sums）。"""
     skipped = []
     meta = S.get('meta')
     for k in ('start', 'end', 'loadFrom'):
@@ -1140,17 +1343,23 @@ def compare_tp_summary(C, mine, S):
     if [x.get('pair') for x in tpl] != PAIRS:
         C.bad(f'summary-tp pairs: TS {[x.get("pair") for x in tpl]} / Python {PAIRS}')
     tpd = {x.get('pair'): x for x in tpl}
+    C.base_pair_fields = C.base_pair_n = 0           # pairs[].baseEntries（base の数として compare_base が足す）
     for info in mine['pairs']:
         t = tpd.get(info['pair'])
         if t is None:
             C.bad(f'summary-tp pairs.{info["pair"]}: missing in summary-tp.json')
             continue
         for k in TP_PAIR_KEYS:
+            f0, n0 = C.fields, C.n
             C.num(f'summary-tp pairs.{info["pair"]}.{k}', info[k], t.get(k), False)
+            if k == 'baseEntries':
+                C.base_pair_fields += C.fields - f0
+                C.base_pair_n += C.n - n0
         skipped += [f'summary-tp pairs.{info["pair"]}.{k}' for k in t if k not in ['pair'] + TP_PAIR_KEYS]
     td_all = S.get('dirs')
     if not isinstance(td_all, dict):
         C.bad('summary-tp dirs: missing in summary-tp.json')
+        compare_base(C, mine, S, alt)
         return skipped
     for dn in TP_DIRS:
         tg = td_all.get(dn)
@@ -1176,16 +1385,66 @@ def compare_tp_summary(C, mine, S):
     for k in td_all:
         if k not in TP_DIRS:
             C.bad(f'summary-tp dirs.{k}: in summary-tp.json, not a direction here ({", ".join(TP_DIRS)})')
-    skipped += [f'summary-tp {k}' for k in S if k not in ('meta', 'pairs', 'dirs')]
+    compare_base(C, mine, S, alt)
+    skipped += [f'summary-tp {k}' for k in S if k not in ('meta', 'pairs', 'dirs', 'base')]
     return skipped
+
+
+def compare_base(C, mine, S, alt):
+    """summary-tp.json の base（合図なしの比べ）を組ごと・数ごとに。near は touch と同じく平均と中央値だけ。
+    無ければ食い違い。和（pipsSum・openPipsSum）が違い、TypeScript の数が通貨ごとに取った和（alt）と同じなら、
+    そう書き添える（食い違いには変わりない）。比べた数・near・食い違いを、pairs[].baseEntries（compare_tp_summary
+    が比べる）と合わせて C.base_fields・C.base_near・C.base_n に書く。"""
+    f0, n0, near0 = C.fields, C.n, C.near
+    try:
+        _compare_base(C, mine, S, alt)
+    finally:
+        C.base_fields = getattr(C, 'base_pair_fields', 0) + C.fields - f0
+        C.base_n = getattr(C, 'base_pair_n', 0) + C.n - n0
+        C.base_near = C.near - near0
+
+
+def _compare_base(C, mine, S, alt):
+    tb = S.get('base')
+    if not isinstance(tb, dict):
+        C.bad('summary-tp base: missing in summary-tp.json (the baseline with no signal, the spec\'s last subsection)')
+        return
+    for g in BASE_GROUPS:
+        th = m90.pick(tb, g)
+        if not isinstance(th, dict):
+            C.bad(f'summary-tp base.{g}: missing in summary-tp.json')
+            continue
+        mg = mine['base'][g]
+        for k in TG_KEYS:
+            where = f'summary-tp base.{g}.{k}'
+            if k not in th:
+                C.bad(f'{where}: missing in summary-tp.json')
+                continue
+            v, a = th[k], (alt or {}).get(g, {}).get(k)
+            if (a is not None and mg[k] is not None and isinstance(v, (int, float)) and not isinstance(v, bool)
+                    and float(v) != float(mg[k]) and float(v) == float(a)):
+                C.fields += 1
+                C.bad(f'{where}: TS {v!r} / Python {mg[k]!r} (the TS equals the Python sum taken pair by pair, {a!r}: '
+                      f'the order of the sum differs; the Python sums in the order rows would have: T0, the pairs\' '
+                      f'order, BUY before SELL)')
+                continue
+            C.num(where, mg[k], v, k in TG_NEAR)
+        for k in th:
+            if k not in TG_KEYS:
+                C.bad(f'summary-tp base.{g}.{k}: in summary-tp.json, not a number of G here')
+    known = set(BASE_GROUPS) | {p.replace('/', '_') for p in PAIRS}
+    for k in tb:
+        if k not in known:
+            C.bad(f'summary-tp base.{k}: in summary-tp.json, not a group here ({", ".join(BASE_GROUPS)})')
 
 
 def fmt(v):
     return '-' if v is None else js_str(v)
 
 
-def tp_group_line(dn, name, g):
-    return (f'  touch {dn} {name}: trades {g["trades"]}, tp {g["tp"]}, open {g["open"]}, pips sum {fmt(g["pipsSum"])} / '
+def tp_group_line(label, name, g):
+    """label: 'touch flow'・'touch fade'、または 'base'（合図なしの比べ）"""
+    return (f'  {label} {name}: trades {g["trades"]}, tp {g["tp"]}, open {g["open"]}, pips sum {fmt(g["pipsSum"])} / '
             f'mean {fmt(g["pipsMean"])} / median {fmt(g["pipsMedian"])}, tp minutes median {fmt(g["tpMinutesMedian"])} / '
             f'P90 {fmt(g["tpMinutesP90"])} / max {fmt(g["tpMinutesMax"])}, within 60 {g["within60"]} / 1440 '
             f'{g["within1440"]} / 10080 {g["within10080"]}, mae median {fmt(g["maeMedian"])} / P90 {fmt(g["maeP90"])} / '
@@ -1193,12 +1452,32 @@ def tp_group_line(dn, name, g):
             f'{fmt(g["openPipsWorst"])}, open mae max {fmt(g["openMaeMax"])}, open minutes max {fmt(g["openMinutesMax"])}')
 
 
-def tp_problems(chk, tsums):
+def print_tp_groups(tsumm):
+    """touch の flow・fade の組と、base（合図なしの比べ）の組を1行ずつ"""
+    for dn in TP_DIRS:
+        for name in TP_GROUPS:
+            print(tp_group_line('touch ' + dn, name, tsumm['dirs'][dn][name]))
+    for name in BASE_GROUPS:
+        print(tp_group_line('base', name, tsumm['base'][name]))
+
+
+def tp_problems(chk, tsums, bsums):
     return (['touch minute line: ' + m for m in chk['tMismatch']] +
             ['touch fast mark against the line and band: ' + m for m in chk['tFlag']] +
             ['touch entry price: ' + m for m in chk['tEntry']] +
             ['touch rows: ' + m for m in chk['tRows']] +
-            ['touch counts: ' + m for m in tsums])
+            ['touch counts: ' + m for m in tsums] +
+            ['the index against the plain walk: ' + m for m in chk['bWalkBad']] +
+            ['base against the touch at a bar\'s first minute: ' + m for m in chk['bTouchBad']] +
+            ['base counts: ' + m for m in bsums])
+
+
+def base_check_line(chk, bsums, ts):
+    return (f'  checks, base (no signal): {sum(p["baseEntries"] for p in ts["pairs"])} entries, '
+            f'{ts["base"]["all"]["trades"]} trades; the index against the plain walk (every touch trade and 1 base '
+            f'trade in {BASE_SAMPLE}: {chk["bWalk"]} trades): mismatches {len(chk["bWalkBad"])}; base trades at a touch '
+            f'entry\'s minute and side (a touch entry at a bar\'s first minute: {chk["bTouch"]}) not the touch trade\'s '
+            f'numbers {len(chk["bTouchBad"])}; counts not adding up {len(bsums)}')
 
 
 def tp_check_line(chk, tsums):
@@ -1231,9 +1510,9 @@ def main():
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument('--out', help='TypeScript の rows.csv と summary.json のフォルダ（読むだけ）')
     g.add_argument('--self', dest='self_out', help='比べずに、自分の rows.csv・summary.json・rows-tp.csv・'
-                                                   'summary-tp.json をここに書く')
-    g.add_argument('--touch-only', dest='touch_out', help='touch だけを数え、比べずに、自分の rows-tp.csv と '
-                                                          'summary-tp.json をここに書く')
+                                                   'summary-tp.json（base も）をここに書く')
+    g.add_argument('--touch-only', dest='touch_out', help='touch と base だけを数え、比べずに、自分の rows-tp.csv と '
+                                                          'summary-tp.json（base も）をここに書く')
     a = ap.parse_args()
     t_all = time.time()
     period = {k: (os.environ.get(k) or DEFAULTS[k]) for k in DEFAULTS}
@@ -1285,14 +1564,18 @@ def main():
     else:
         print('  the period is NOT the spec\'s (START, END or LOAD_FROM set)')
 
-    rows, pairs, ld, chk, trows, tpairs = compute(a.cache, start, end, load_from, print, a.touch_out is None)
-    tsumm = tp_summary_of(trows, tpairs, start, end, load_from)
+    rows, pairs, ld, chk, trows, tpairs, brows = compute(a.cache, start, end, load_from, print, a.touch_out is None)
+    tsumm = tp_summary_of(trows, tpairs, start, end, load_from, brows)
     tsums = tp_counts_add_up(tsumm)
-    tprob = tp_problems(chk, tsums)
+    bsums = base_counts_add_up(tsumm)
+    tprob = tp_problems(chk, tsums, bsums)
+    balt = base_alt_sums(brows)
+    del brows
     print(f'  files read {ld.files}, failed {ld.failed}' + (' (' + '; '.join(ld.failed_ex) + ')' if ld.failed else '') +
           f'; 1-min bars left out: one side {ld.one_side}, crossed {ld.crossed}, closure {ld.closure}, repeated '
           f'{ld.repeated}; 1-min bars in no 1-hour bar (not read) {chk["orphan"]}')
     print(tp_check_line(chk, tsums))
+    print(base_check_line(chk, bsums, tsumm))
     for m in chk['tBoth'][:5]:
         print('  note: a touch entry minute touching both open sides (read on the top side): ' + m)
 
@@ -1302,9 +1585,7 @@ def main():
               f'({chk["minutesChecked"]} sampled minute lines): mismatches {len(chk["mismatch"])}')
         tprob = ['minute/bar line: ' + m for m in chk['mismatch']] + tprob
         write_touch(a.touch_out, trows, tsumm)
-        for dn in TP_DIRS:
-            for name in TP_GROUPS:
-                print(tp_group_line(dn, name, tsumm['dirs'][dn][name]))
+        print_tp_groups(tsumm)
         for m in tprob[:MAX_DIFF_LINES]:
             print('CHECK ' + m)
         print(f'wrote {len(trows)} touch rows ({sum(p["entries"] for p in tpairs)} entries) and summary-tp.json to '
@@ -1333,9 +1614,7 @@ def main():
         for wi in WAYS_IN:
             for name in GROUPS:
                 print(group_line(wi, name, summ['ways'][wi][name]))
-        for dn in TP_DIRS:
-            for name in TP_GROUPS:
-                print(tp_group_line(dn, name, tsumm['dirs'][dn][name]))
+        print_tp_groups(tsumm)
         for m in (problems + tprob)[:MAX_DIFF_LINES]:
             print('CHECK ' + m)
         print(f'wrote {len(rows)} rows and summary.json, {len(trows)} touch rows and summary-tp.json to {a.self_out} '
@@ -1361,9 +1640,11 @@ def main():
         print(f'rows-tp.csv and summary-tp.json: NOT compared ({"; ".join(tp_missing)})')
     else:
         compare_tp_rows(C, trows, tp_head, ts_trows)
-        tskipped = compare_tp_summary(C, tsumm, TS_tp)
+        tskipped = compare_tp_summary(C, tsumm, TS_tp, balt)
         print(f'rows-tp.csv and summary-tp.json: compared {C.fields - f_old} fields ({len(trows)} Python rows, '
               f'{len(ts_trows)} TS rows): {C.near - near_old} equal only within {REL:g}, {C.n - n_old} different')
+        print(f'  of which summary-tp.json base and pairs[].baseEntries (the baseline with no signal): compared '
+              f'{C.base_fields} fields: {C.base_near} equal only within {REL:g}, {C.base_n} different')
         if tskipped:
             print('in summary-tp.json, not compared: ' + ', '.join(tskipped[:20]) + (' ...' if len(tskipped) > 20 else ''))
     print(f'compared {C.fields} fields in all: {C.near} equal only within {REL:g} (largest {C.near_max:.3g}), '
@@ -1375,9 +1656,7 @@ def main():
     for wi in WAYS_IN:
         for name in GROUPS:
             print(group_line(wi, name, summ['ways'][wi][name]))
-    for dn in TP_DIRS:
-        for name in TP_GROUPS:
-            print(tp_group_line(dn, name, tsumm['dirs'][dn][name]))
+    print_tp_groups(tsumm)
     print('PYTHON AGREES')
     sys.exit(0)
 
