@@ -1,0 +1,318 @@
+# The MACD fade on the 15-minute chart: one email at a closed 15-minute bar at 96%, measured as take profit 10, no stop
+
+Status: a study rule, written 2026-11-17 on branch `claude/app-confirmation-jvmk03` (f681256) before its code
+(research/macdfade15.ts, .github/workflows/macdfade15.yml). The Python written apart from the TypeScript, from this
+text alone (research/macdfade15-check.py; research/macdfade15.ts was not read for it), agrees with every row and
+number of walks 1 and 2 and of walk 1's untidy files (the files byte for byte); it has not yet been run on GMO's real
+files, and until it agrees there, no real number is printed. Revised after a review the same day: the noise of the
+gaps (driftless walks), the run with `END` a week earlier, the weekend gate by hand, the untidy walk files, the stop
+on GMO's minutes not lining up with its 15-minute bars, and the delay before an order listed as not measured. Nothing here changes an email: production stays on v9 until the release
+(research/macdfade96-spec.md and the production spec that follows it).
+
+## Why
+
+The owner (2026-11-17), after the 96% touch had been measured on 1-hour bars (research/macd90m-spec.md, its last
+sections) and an email for it written as a rule (research/macdfade96-spec.md): 「もうシンプル96%の足できたら逆張りのメールちょうだい」,
+then 「メールを1時間足から15分足に変更」. Asked further, the owner answered (in English here, not the owner's words):
+
+- the form is the same for the five pairs (USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD), gold (XAU/USD) and the
+  shares: at a closed 15-minute bar of the chart, on the 600 closed 15-minute closes ending at it, when the MACD line
+  (12/26/9) is at 96% of the pane's top (bottom) at the bar's close and was not at 96% at the bar before's close, one
+  email on the **fade** side: top → SELL, bottom → BUY;
+- the pane is the newest 120 15-minute bars (the chart's 15-minute pane), chosen over a 480-bar pane;
+- the shares are on 15-minute bars too (chosen knowing that Tokyo quotes come about 15 minutes late on Yahoo);
+- only the first bar at 96% (the bar before not at 96%) is an email, not every bar while the line stays there;
+- the email states only the price in: no take-profit level and no stop; the numbers are measured while it is built
+  and put in the email;
+- gold and the shares are released with the pairs but are not measured with this form (no bid and ask minutes in the
+  study's data): their emails say so and carry no numbers; the shares fade too (a SELL is a short sale); nothing is
+  sent at any target.
+
+## How it is measured (CLAUDE.md)
+
+The email states no target and no stop, but the trades are measured as the owner holds (CLAUDE.md, docs §8.102: take
+profit 10 pips, no stop; funds unlimited, every email taken). So every number here is "take profit 10, no stop", and
+every text that shows them says so. With no stop and the trades followed to the last minute loaded, the share of trades
+reaching the target is high by construction: it is never shown alone. With it go the mean pips a trade (open trades at
+their unrealized pips), the open trades' count and their unrealized pips (sum and worst), the largest loss on the way
+(`maeMax`), the holding time (`tpMinutes*`, `openMinutesMax`), the orders not filled (none: the entry is at a bar's
+close, not a limit order) and the same trade with no signal (the baseline below). A result that looks near 100% is first
+suspected of look-ahead (the checks below). Nothing here says that a price will come back.
+
+Both directions are measured: **fade** (the email's side) and **flow** (the other side, for comparison only: no email).
+
+**The share reaching the target says little by itself.** With no stop and trades held to the last minute loaded, it is
+near 100% for any entry: on random walks with no trend (where no signal can do better than none) fade, flow and the
+baseline all reach about 98% over the default period (MODE=null, seeds 1 to 10, run in the development container on
+2026-11-17: fade 97.91 to 99.02%, flow 98.15 to 99.00%, base 98.21 to 98.95%; fade − base −0.31 to +0.23 points and
+−0.80 to +2.24 pips a trade). So what is read is the
+**gap** between fade and the baseline (and fade and flow), and a gap is read only next to a measure of its noise:
+
+- **Driftless walks** (MODE=null, `NULL_SEEDS`, 1 to 10 in the workflow): ownerhold-data.ts `synthesize` with no trend,
+  over the run's own `LOAD_FROM`, `START`, `END`, through the same code as the real run (the walk's 15-minute bars cut
+  from its minutes, as the checks below). For each walk and each of `all`, each pair, `BUY` and `SELL`: the share of tp
+  and of open trades (% of the trades) and the mean pips a trade of fade, flow and base, and the gaps fade − base and
+  fade − flow (`null.json`, below). The print gives the real gaps next to the walks' lowest and highest. **A real gap
+  inside the walks' range is not evidence** that the email's side does better than no signal (or than the other side).
+  The walks' price moves are the generator's, not GMO's (not measured how far they differ), and ten walks give a range,
+  not a test: a gap with no edge at all still falls outside the range of `N` walks about 2 times in `N + 1` (18% with
+  10), so a gap outside it is not evidence by itself either.
+- **The mean a trade apart**: a tp trade's pips are `TP` exactly, so the mean a trade is set mostly by the open trades'
+  pips at the last minute; the print gives the open trades' mean (`openPipsSum / open`) next to the mean of all.
+- **END a week earlier**: the workflow runs the study again with `END` seven days earlier (the same files; the Python
+  run on it too) and prints both side by side: the open trades valued a week earlier and that week's entries left out.
+  It shows how much the mean a trade moves with the last minute's price (on the ten driftless walks above, fade's mean
+  over the default period went from −10.43 to +3.50 pips: seed 1's −10.43 is mostly its 137 open trades).
+
+## Data
+
+- **Pairs**: the five, in this order: USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD (research/macd90.ts `PAIRS`).
+- **Period**: `LOAD_FROM` 2023-12-01T00:00:00Z (15-minute bars before `START` that the first windows read: 600
+  15-minute bars are about six and a quarter trading days), `START` 2024-01-01T00:00:00Z, `END` 2026-11-10T21:00:00Z
+  (research/macd90m's `START` and `END`). Environment variables of both implementations, these the defaults.
+- **The 15-minute chart** (the bars the function judges, read as research/macd15.ts reads them): GMO's 15-minute day
+  files (interval `15min`, both sides) through research/trend-data.ts
+  `loadTf(src, pair, "15min", LOAD_FROM, END, st, weekendOutOf("inside"))`: the files oldest first; quotes.ts
+  `mergeSides` (one bar a time: the first bid row of a time, with the **last** ask row of that time, the newest
+  file's, since the asks are put in a map by time; a bar on one side only, or whose ask close is under that bid close,
+  left out, and then the time's next bid row, if any, tried the same way); bars opened at or after `LOAD_FROM` and
+  closed by `END`; a bar wholly inside the weekend
+  closure (market-hours.ts `barInsideClosure`) left out. Then trend-data.ts `quotesOf` and the chart's own
+  live-chart/logic.ts `historyRead(pair, "15min", quotes, END)`: the closed bars, each a mid candle (`(bid + ask) / 2`)
+  rounded as drawn (3 decimals on a yen pair, 5 on the others). Bar `n` (0-based, oldest first): `t[n]` its open,
+  `T(n) = t[n] + 15 minutes` its close, `c[n]` its mid close as drawn. Python: research/macd15-check.py (research/
+  flowz-check.py `load_tf`, `round_chart`).
+- **Prices in**: bar `n`'s **bid close `bc[n]` and ask close `ac[n]` are GMO's own 15-minute bar's**, the bid and ask
+  rows of the 15-minute file the chart bar was made from (the bid row and the ask row `mergeSides` paired above), as
+  GMO wrote them (not rounded by the chart, not a 1-minute bar's). Whether GMO's 15-minute close equals the close of the last 1-minute bar inside it is counted (`closeVsMinute`
+  below), not assumed: on the walks it does by construction (their 15-minute bars are cut from their minutes); on GMO's
+  real files it is what the real run says. **The real run stops** (nothing written) when, on any pair, the close
+  differs in more than 1% of the bars in range that have a minute (`differ > 0.01 × (same + differ)`), or no such bar
+  has one: it is the one check on the real files that the minutes are labelled as the 15-minute bars are (a minute
+  labelled a minute off would put bar `n`'s last minute, before the entry, into the follow). The print shows it per
+  pair next to the numbers. The untidy walk files (Checks) must trip it; the tidy walks never do.
+- **1-minute bars**: ownerhold-data.ts `loadM1(src, pair, START, END, st)` (Python: research/flowz-check.py `M1`),
+  both sides merged as there (a minute on one side only, an ask close under the bid close, a minute inside the weekend
+  closure and a repeated time left out), as research/macd90m-spec.md. A minute opened at `u` ends at `u + 1 minute`.
+- **Points**: `P(x) = round(x * 10^d)`, `d` = 3 on a yen pair, 5 on the others (research/macd90.ts `P`; 10 points =
+  1 pip). Every price is held against another in whole points.
+
+## The line at a bar's close
+
+- `W = 600` (macd-level.ts `LEVEL_WINDOW`), `ZONE_BARS = 120`, MACD 12/26/9 (_shared/macd.ts `macd`, Pine's EMAs).
+- **`Z(n)`** (bar `n`, `n >= 599`): `zoneAt(macd(c[n−599..n]), 599)` (macd-level.ts): `m` the MACD line at index 599;
+  `top` the highest of 0 and the MACD line, the signal line and the histogram over indices 480..599 (the pane: the
+  newest 120 bars, bar `n` among them); `bottom` the lowest of the same.
+- **`Zp(n)`**: `zoneAt(macd(c[n−599..n]), 598)`: the line at the bar before's close, on the same window, the pane over
+  indices 479..598 (bars `n−120..n−1`). The EMAs are causal, so these are the same numbers as `zoneAt` of the MACD of
+  the 599 closes ending at bar `n−1` read at its last index (598): the bar before read on its own 599 closes (the walks
+  check that it is so, bit for bit). This is research/macd90.ts `zonesOf`'s `zp`, and the email's own reading of the bar
+  before (macd-level.ts `zoneEntryAt`: index `k − 1` of the same window). It is not `Z(n−1)` (the window ending at
+  `n−1` starts a bar earlier, so its EMAs are seeded a bar earlier); how often the two disagree at an entry is counted
+  (`prevAt` below).
+- **At a share `s` on a side** (research/macd90.ts `atShare`): on the top side `top > 0 and m >= s * top`; on the
+  bottom side `bottom < 0 and m <= s * bottom`; equality in; the product `s * top` as it comes, unrounded.
+- **The share** `SHARE` (an environment variable of both implementations): a number above 0, at most 1; not given or
+  empty: 0.96.
+- **Both sides cannot hold at one bar**: with `s > 0`, the top side needs `m >= s * top > 0` and the bottom side
+  needs `m <= s * bottom < 0`, and `m` cannot be above and below 0 at once. (The TypeScript stops with an error if both
+  ever hold; the walks count the bars read: none.)
+- `share0` = `m / top` on the top side, `m / bottom` on the bottom side, at `Z(n)`.
+
+## The entries
+
+- **Bars in range**: bar `n` with `T(n)` in [`START`, `END`). One with `n < 599` is counted as `short` (not judged:
+  fewer than 600 bars up to it; the real run expects none and stops if there is one). One whose `Z(n)` or `Zp(n)` is
+  null (`zoneAt` null: a value not a finite number) is counted apart (`zoneless`; not expected). The rest are
+  **judged**.
+- **A signal** at bar `n` (judged), on side `S`: `Z(n)` at `SHARE` on `S` and `Zp(n)` not at `SHARE` on `S`. At most
+  one side (above).
+- **The function's reads** (the weekend gate, as research/macd15.ts): the function reads the 15-minute chart 0, 1 and
+  3 minutes after a close (signal-alerts/indicators.ts `gmoIntervalsDue`) and does not run while market-hours.ts
+  `isPossiblyClosed` holds. A signal is **mailed** when at least one of `isPossiblyClosed(T(n) + r minutes + 1 second)`,
+  `r` in 0, 1, 3, is false (the read a second into its minute, as research/macd15.ts `mailedAt`). On the 15-minute
+  grid all three reads fall in the close's own hour, so a bar is not read exactly when it closes at or after Friday
+  21:00 UTC and before Sunday 22:00 UTC (the week's last bars on Friday, and any bar GMO has on Sunday before 22:00
+  UTC). A signal not mailed is **not an entry**: counted apart as `notMailed`, no trade.
+- **An entry** is a mailed signal. `T0 = T(n)` (the bar's close); `zside` = `S` (`top` / `bottom`).
+- Every entry is taken (funds unlimited): no skipping, any number of trades of a pair and side open at once. There is no
+  limit order on the way in (in at the bar's close), so no entry is left unfilled.
+
+## Two trades an entry
+
+- **fade**: the top side a SELL, the bottom side a BUY (the email's side);
+- **flow**: the top side a BUY, the bottom side a SELL (for comparison only).
+- **The price in** (`entry`): bar `n`'s 15-minute **ask close `ac[n]` for a BUY, bid close `bc[n]` for a SELL** (Data,
+  "Prices in").
+
+## Following a trade
+
+As research/macd90m-spec.md "Following a trade" (the touch's), from the **first 1-minute bar at or after `T0`** (the
+lowest `u` with `u >= T0`; its index `kFrom`) through the last one loaded, the minutes in no 15-minute bar of the chart
+included (a minute is followed whether or not its 15-minute bar is on the chart):
+
+- the target: a BUY `P(entry) + 10 * TP`, a SELL `P(entry) − 10 * TP`, in whole points; `TP` the take profit in pips
+  (an environment variable of both implementations, a whole number >= 1; not given or empty: 10);
+- in each minute in time, first the worst against the trade (a BUY `P(entry) − P(bid low)`, a SELL
+  `P(ask high) − P(entry)`, kept when larger), then the target test;
+- **tp**: the first minute whose `P(bid high) >= target` (BUY) or `P(ask low) <= target` (SELL). Out at the target
+  exactly (a minute that opens beyond it is also taken at the target: the pips are `TP` exactly, never more); `T` that
+  minute's end;
+- **open**: no such minute through the last minute loaded; valued at the last minute's close (the bid close for a BUY,
+  the ask close for a SELL; unrealized); `T` the last minute's end;
+- no stop and no other way out;
+- an entry with no 1-minute bar at or after its `T0` is not valued: the run stops with an error (not expected: the
+  minutes are loaded to `END` and every `T0` is before `END`).
+
+Each trade's numbers: `target` = the target in points `/ 10^d` (a price); `exit` (the target, or the last close);
+`pips` (`TP` for tp; for open a BUY `(P(bid close) − P(entry)) / 10`, a SELL `(P(entry) − P(ask close)) / 10`);
+`mae` the worst against the trade over the minutes followed up to and including the minute out, `/ 10` (0 if never
+against); `minutes = (T − T0) / 1 minute`.
+
+## The same trade with no signal (the baseline)
+
+- **Entries**: every bar the entries may come from: judged (in range, at least 600 bars, `Z(n)` and `Zp(n)` read) and
+  mailed (the weekend gate above, at `T(n)`), whether or not it has a signal; at the bar's **first 1-minute bar** (the
+  lowest `u` in [`t[n]`, `t[n] + 15 minutes`); a bar with none has no baseline entry); `T0` that minute's end, and
+  the trade followed from the first minute at or after `T0` (the next minute loaded: GMO's minutes are whole). This is
+  research/macd90m-spec.md's baseline on 15-minute bars: it is entered at the bar's first minute, at a 1-minute close,
+  about 14 minutes before a signal at the same bar would be; it is the same holding with no signal, not the same entry.
+- Each is **two trades**: a BUY in at that minute's ask close and a SELL in at its bid close, followed exactly as above
+  from the next minute. An entry minute that is the last minute loaded (no minute after it) stops the run with an
+  error, as above (not expected: the last bar in range closes 15 minutes before `END`).
+- **Speed**: about 70,600 bars a pair, so about 706,000 baseline trades over the five pairs, some followed to the last
+  of about 1,060,000 minutes (the counts of a walk over the default period; GMO's real files have their own). Both implementations find a trade's tp minute and its `mae` without walking each trade
+  minute by minute (a segment tree or a sparse table over the minutes' `P(bid high)`, `P(ask low)`, `P(bid low)`,
+  `P(ask high)`: the first minute reaching the target, then the range's extreme), and must give the plain walk's
+  numbers (checked: every entry trade, and every 97th baseline trade, followed both ways).
+- No rows; `summary.json` has `base` and `pairs[].baseEntries`.
+
+## Files
+
+**rows.csv**, one row a trade, ordered by `T0`, then the pairs' order, then **fade before flow**:
+`dir, pair, open, T0, zside, side, entry, share0, target, result, T, exit, pips, mae, minutes` (`dir` fade / flow;
+`open` = `t[n]`, `T0` = `T(n)`, times as research/macd90.ts `iso` writes them (`2024-01-02T03:15:00Z`); `result` tp /
+open; numbers as JavaScript's `String()` writes a double, as research/macd90m-spec.md's rows-tp.csv). The header line
+first; every line, the last included, ends with `\n`.
+
+**summary.json** (`JSON.stringify(x, null, 1)`, nothing after the closing brace: no newline at the end):
+
+```
+{ meta: { start, end, loadFrom, share, tp },
+  pairs: [ { pair, bars, minutes, short, zoneless, judged, signals, entries, notMailed, prevAt, baseEntries,
+             closeVsMinute: { bars, same, differ, noMinute, entrySame, entryDiffer, entryNoMinute } } ],
+  dirs: { fade: GROUPS, flow: GROUPS },
+  base: { all, <each pair>, BUY, SELL } }
+```
+
+- `pairs[]`, in the pairs' order: `bars` the chart's 15-minute bars (all, from `LOAD_FROM`); `minutes` the 1-minute
+  bars loaded; `short`, `zoneless`, `judged` as above (bars in range); `signals` = `entries + notMailed`; `prevAt` the
+  entries whose `Z(n−1)` (the bar before on its own 600-bar window; `n − 1 >= 599` and not null) is at `SHARE` on the
+  entry's side; `baseEntries` the baseline's entries.
+- `closeVsMinute`: over the chart bars in range (`T(n)` in [`START`, `END`)): `bars` their count; the last 1-minute bar
+  loaded inside the bar (the highest `u` in [`t[n]`, `T(n)`)); `noMinute` when there is none; `same` when its bid close
+  equals `bc[n]` and its ask close equals `ac[n]` (as doubles), `differ` otherwise (`same + differ + noMinute = bars`);
+  `entrySame`, `entryDiffer`, `entryNoMinute` the same over the entries' bars.
+- `GROUPS` = `{ all, <each pair>, BUY, SELL, top, bottom }` (BUY and SELL by the trade's side, top and bottom by the
+  entry's side; a pair's key its name as `pairs[].pair` writes it, `"USD/JPY"`; the keys in this order, the pairs in
+  theirs); `base` the same without top and bottom; each the `G` of research/macd90m-spec.md, its keys in the order
+  below:
+
+```
+G = { "trades", "tp", "open",
+      "pipsSum", "pipsMean", "pipsMedian",               // over all trades, open ones at their unrealized pips
+      "tpMinutesMedian", "tpMinutesP90", "tpMinutesMax", // over tp
+      "within60", "within1440", "within10080",          // tp with minutes <= 60, <= 1440, <= 10080
+      "maeMedian", "maeP90", "maeMax",                  // over all trades
+      "tpMaeMax",                                       // over tp
+      "openPipsSum", "openPipsWorst", "openMaeMax", "openMinutesMax" }   // over open
+```
+
+Sums and means add the trades one by one from 0 in the rows' order (a group's trades in rows.csv's order; the
+baseline's in the order its rows would have: by `T0`, then the pairs' order, then the BUY before the SELL); a mean is
+that sum divided by the count. Medians: the middle value, or of the two middle ones `(a + b) / 2`. P90 of `n` values:
+the value at rank `(9 * n + 9) // 10` (1-based) in ascending order. Null where there is no value (a sum over no trade
+included); a count over no trade (`within…`) is 0.
+
+**null.json** (MODE=null; the TypeScript's only: the walks go through the code the Python checks on walks 1 and 2,
+the untidy walk and the real files, but the Python does not recompute these numbers):
+`{ meta: { start, end, loadFrom, share, tp, seeds }, walks: [ { seed, entries, gaps } ] }`; `gaps` has the keys `all`,
+each pair, `BUY`, `SELL`, each `{ fade, flow, base, fadeMinusBase, fadeMinusFlow }`; `fade`, `flow`, `base` each
+`{ trades, tpShare, pipsMean, openShare }` (the shares in % of the trades; null with no trade); a gap
+`{ tpShare, pipsMean, openShare }`, fade's less the other's (null when either is). The print shows it only when its
+`meta` (less `seeds`) equals summary.json's. The run with `END` a week earlier writes its own rows.csv and summary.json
+(research/out/macdfade15-end1w in the workflow), checked by the Python like the main run's.
+
+## Checks
+
+On two seeded walks (MODE=synthetic: ownerhold-data.ts `synthesize`, seeds 1 and 2), before any real run:
+
+1. The walk's 15-minute bars rebuilt from its minutes (research/macd90.ts `coarsen` on the 15-minute grid, bars
+   opened at or after `LOAD_FROM`, closed by `END`, not wholly inside the weekend closure) are the walk's own
+   (`synthesize`'s `q15`, the bars written as GMO's files).
+2. The line at the close: at every signal's bar, every entry's bar and every 29th bar in range, `Z(n)` equals `zoneAt`
+   on the 600 closes rebuilt, `Zp(n)` equals `zoneAt` at 598 of the MACD of the 599 closes ending at bar `n−1` (bit
+   for bit), and the bar's signal read again from them is the same (none, or the same side).
+3. No judged bar has `Z(n)` at `SHARE` on both sides.
+4. At the email's v8 share (0.95, macd-level.ts `ZONE_SHARE`) the signals' fade side equals the email's own code
+   `decideZoneOnWindow` (top SELL, bottom BUY) on every judged bar, whatever `SHARE` is.
+5. Each entry's two trades: fade then flow, the same `pair, open, T0, zside, share0`, opposite sides, fade top SELL /
+   bottom BUY; the entries bar `n`'s 15-minute ask close (BUY) and bid close (SELL); `T0 = t[n] + 15 minutes`;
+   followed from the first minute at or after `T0`; a tp trade's pips `TP`, its exit the target, `T0 < T <=` the last
+   minute's end; an open trade's pips below `TP` and `T` the last minute's end; `mae >= 0`; `minutes = (T − T0) / 1
+   minute`.
+6. Every entry trade followed again with the index (the baseline's segment trees) equals its plain walk; every 97th
+   baseline trade followed again minute by minute equals the index's.
+7. Look-ahead: for four entries a pair spread over the period (at 10%, 35%, 60% and 85% of its entries, in time),
+   every price at or after `T0` moved by ±300 pips: every entry with `T0` at or before the cut stays (bar, side,
+   `share0`, the first minute followed, the trades' sides and prices); every price at or after each of its tp trades'
+   `T` moved: every tp trade with `T` at or before the cut stays (result, `T`, exit, pips, mae). The same for the
+   baseline, on four of its entries spread over the period the same way.
+8. The counts add up: fade and flow have the same entries; `tp + open = trades` in every group; trades = entries in
+   `all` and in each pair; `BUY + SELL` and `top + bottom` are `all`; fade's `BUY` is flow's `SELL` count and the
+   reverse; `signals = entries + notMailed`; `judged + short + zoneless` = the bars in range; the baseline's trades
+   = 2 × its entries (all and each pair), its `BUY` and `SELL` one an entry each; the baseline's entries counted again
+   from the minutes.
+9. Hand-made minutes (research/macdfade15.ts `handCases`): a BUY whose tp minute also sets the worst against it (its
+   `mae` counts that minute's bid low), a BUY through a minute that opens beyond the target (out at the target, pips
+   `TP`), a SELL never reaching the target (open, valued at the last ask close); each followed both ways and held
+   against numbers worked out by hand. (The walks seldom have a minute that both reaches the target and sets the worst,
+   so the order "the worst first, then the target" is pinned here.) The Python has its own hand cases, worked out by
+   hand apart from these (research/macdfade15-check.py `hand_cases`: the same three, a BUY never against it, and a SELL
+   on a /USD pair whose target minute sets the worst). On walks 1 and 2 no minute both reaches the target and sets the
+   worst: a follow that tested the target first would give the same rows there, so the order is held between the two
+   implementations only by these hand cases and, later, by GMO's real minutes.
+10. The weekend gate by hand (research/macdfade15.ts `gateCases`): in the first week whose Friday 20:30 bar closes at
+    or after `START`, a signal at bars closing Friday 20:45, Friday 21:00, Friday 21:15, Saturday 12:15, Sunday 21:45,
+    Sunday 22:00 and Monday 00:15 UTC, held against a table written by hand from the gate above (mailed: Friday 20:45,
+    Sunday 22:00, Monday 00:15; the rest not): the entries and `notMailed` of the study and the baseline's entries.
+    And over the walks of a synthetic run, `notMailed` must be above 0 (walk 2 has signals the gate keeps on the syn
+    job's period): the gate is also tried on the walks' own bars.
+
+MODE=walkfiles writes a walk as GMO's files (1-minute and 15-minute day files, both sides), reads them back through the
+real run's loaders (`loadTf`, `loadM1`), writes rows.csv and summary.json, and stops unless they are byte for byte those
+of the same walk computed in memory. The Python (research/macdfade15-check.py, written apart from the TypeScript from
+this file) is run on the files of walks 1 and 2 and on the real run's, and must give every row and number. The real run
+also follows every entry trade and every 97th baseline trade both ways before it writes anything.
+
+The tidy walks have no minute outside a chart bar and no chart bar without a minute, and every 15-minute row has both
+sides. So MODE=walkfiles with MESS=1 makes walk 1's files untidy before they are read back (research/macdfade15.ts
+`messFiles`; with `q` = the row's open over 15 minutes and `u` over 1 minute, the first rule that holds): 15-minute rows
+on one side (`q % 37 == 0`), crossed (`q % 41 == 1`), a time repeated in the next day's file whose first bid row is
+then crossed with the last ask row, so the time's next bid row is taken (`q % 43 == 2`), a time repeated the same
+(`q % 47 == 3`), closes moved a point (`q % 53 == 4`); 1-minute rows removed for a whole quarter (`q % 59 == 5`), on
+one side (`u % 101 == 7`), crossed (`u % 211 == 8`), repeated in the next day's file 5 points apart (`u % 307 == 9`).
+The minutes stay where 15-minute rows go, so some minutes are in no chart bar. The TypeScript stops unless each kind of
+row reached the loaders on every pair, some minutes are in no chart bar, some chart bars come from a time's second bid
+row, `closeVsMinute` has `differ > 0` and `noMinute > 1`, and the alignment check (Data) trips; it is not held against
+the walk in memory (its chart is not the walk's), but the Python is run on the same files and must agree.
+
+## Not measured here
+
+Gold and the shares (no bid and ask minutes in the study's data); the function's own reading of the bar (GMO's answer
+at the time of the read, a bar GMO changes later, a read the function misses); the time between the bar's close and
+the owner's order (the function reads 0, 1 and 3 minutes after the close, the email is then sent, and the order is
+placed by hand) and the price then: every trade here is in at the bar's exact closing price and may reach its target
+from the first minute after the close; what a trade costs beyond the spread paid (GMO's bid and ask); a stop of any
+kind; whether the fade does better than no signal beyond chance on GMO's own prices (the driftless walks give a range
+on the generator's prices, not a test).
