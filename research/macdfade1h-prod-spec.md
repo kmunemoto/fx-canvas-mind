@@ -1,13 +1,19 @@
 # The MACD fade on 1-hour closes: one email when the line closes at 96%, no target, no stop
 
-Status: a production spec, written 2026-11-17 on branch `claude/app-confirmation-jvmk03` (9bcfd70). Nothing in it is
-built. Production still runs v9 (signal-alerts v39, 1-hour bars). For production it replaces
-research/macdfade15-prod-spec.md (the same rule on 15-minute closes, dropped by the owner's 「やっぱりメールの判断1時間足で」,
-never built), which stays as the record of that form, as research/macdride-spec.md (v9) and research/macdfade96-spec.md
-(the minute touch, never built) stay for theirs. **The measured numbers are not known yet:** every place that needs
-them holds a placeholder ⟨1h run: …⟩ naming the number, and they are filled from the study's real `TF=1h` run (4.5)
-before anything is built. An earlier, unreviewed 1-hour draft of this rule (scratchpad, never committed) was used only
-as a source of 1-hour facts, each checked again in the code.
+Status: a production spec, written 2026-11-17 on branch `claude/app-confirmation-jvmk03` on 53f7003 (the draft
+committed in 6cbee35), then revised the same day after three reviews (24 findings, each checked against the code and
+the sources; section 8 says what that revision read). Nothing in it is built. Production still runs v9 (signal-alerts
+v39, 1-hour bars). For production it replaces research/macdfade15-prod-spec.md (the same rule on 15-minute closes,
+dropped by the owner's 「やっぱりメールの判断1時間足で」, never built), which stays as the record of that form, as
+research/macdride-spec.md (v9) and research/macdfade96-spec.md (the minute touch, never built) stay for theirs (6.3
+step 1 marks the 15-minute spec as superseded and points macdfade96-spec.md's head to this file). **The measured numbers are not in this file yet.** The study's real `TF=1h` run has
+finished since the draft was written: research/macdfade15-spec.md's section "Result of the real 1-hour run" (commit
+d96bf56) records Actions run 44099401423 on 53f7003 (the Python agreed with every row and number; summary.json sha256
+`60edab22302e5fe755c70b38f87b8b28fa27389ccc1bb10c1a0c0c88c448a9e2`), its numbers copied from the job's printed lines,
+the artifact not downloaded. Every place here that needs a number still holds a placeholder ⟨1h run: …⟩ naming it; they
+are filled from that run by 4.5's route, and sections 4-5 read against them, before anything is built (6.3 step 1a). An
+earlier, unreviewed 1-hour draft of this rule (scratchpad, never committed) was used only as a source of 1-hour facts,
+each checked again in the code.
 
 **Paths.** Under the repository root. `index.ts`, `indicators.ts`, `stocks.ts`, `logic.ts` are in
 `supabase/functions/signal-alerts/`; `macd-level.ts`, `macd-ride.ts`, `macd.ts`, `market-hours.ts` in
@@ -18,9 +24,10 @@ v10 files.
 
 **The study it must equal.** research/macdfade15-spec.md, section "On 1-hour bars (TF=1h)" (:314-351), built in
 research/macdfade15.ts (`TF=1h`, commit 53f7003) and .github/workflows/macdfade15.yml (default `TF` `1h`, :52-54, :68),
-checked by research/macdfade15-check.py. Its real 1-hour run on GMO's prices is running in GitHub Actions; this writer
-has not seen its output. Its rule, files and numbers govern: where it reads differently from section 2, this file is
-corrected before anything is built.
+checked by research/macdfade15-check.py. Its real 1-hour run on GMO's prices is recorded in that spec's section
+"Result of the real 1-hour run" (d96bf56, run 44099401423; see Status); the job's log and its artifact were not read by
+this writer. Its rule, files and numbers govern: where it reads differently from section 2, this file is corrected
+before anything is built.
 
 ## 1. What the owner asked
 
@@ -39,6 +46,10 @@ Two readings of this writer, **not asked again**:
   on the 1-hour bars production already judges them on (`stockmacd`, v9: Yahoo's `60m` bars, stocks.ts:57,
   live-chart/stocks.ts:53). So nothing of the 15-minute share form (its closes, Yahoo `15m`, the Tokyo lunch fitting)
   is needed.
+- No mail, note or screen text calls either reading the owner's choice (4.3 item 10, 4.4 item 10): they state the pane
+  and the shares' 1-hour bars as facts of the rule. What the texts attribute to the owner is only what the owner said:
+  96%, judging when the bar is done (「足できたら」, read as its close), the email judged on 1-hour bars (for the pairs
+  and gold), the fade side (the shares too, research/macdfade96-spec.md 1.1 Q4(a)), and no take-profit or stop price.
 
 Earlier answers that still stand (research/macdfade96-spec.md 1.1): gold and the shares go out with the pairs, not
 measured with this form; their mails say so and carry no numbers. The shares fade too (a SELL is a short sale).
@@ -114,8 +125,10 @@ v33 to v38 mailed on these 1-hour charts, indicators.ts:140-145, docs §8.129.)
   :197-200): Yahoo's Tokyo prices come about 15 minutes late (stocks.ts:437, measured 2026-11-06), so a Tokyo share's
   bar is mailed about 15 minutes after its close. `CLOSES`, `stockBarEnd` (:141-146), `stockBarBreak` (:289-293) and
   the closing-point join (live-chart/stocks.ts:123-137, :158-162) are today's, unchanged.
-- So the mail comes some minutes after the close (pairs 0-5 minutes and the sending, gold 1 minute or more, Tokyo
-  shares about 15), at a price that may have moved since (not measured).
+- So the mail is judged and sent some minutes after the close (pairs at the reads 0, 3 or 5 minutes after it; gold
+  from 1 to 30 minutes after it; a share at a read after it, a bar more than 45 minutes past its close not mailed;
+  Tokyo shares about 15 minutes after it, measured 2026-11-06), at a price that may have moved since. How long the mail
+  takes to arrive, and the price's move, are not measured; the mails say so (4.3 item 8, 4.4 item 8).
 - **Never judged:** a pair's or gold's close whose reads all fall in the weekend gate, Friday 21:00 to Sunday 22:00 UTC
   (`isPossiblyClosed`, market-hours.ts:35-43; the sweep does not run, index.ts:833). The three reads (0, 3, 5 minutes)
   are all in the close's own hour, so a bar closing at or after Friday 21:00 and before Sunday 22:00 UTC is never
@@ -212,14 +225,31 @@ Nothing is read or written each minute for this rule; no state row is written.
 - stocks.ts: the ride ids (:66-69), `stockRidesReached` (:220-237), `stockRideClose` (:250-260, replaced),
   `stockRidePnl` (:299-304), the three ride mails (`renderStockMail` :326-488, rewritten). logic.ts: `rideHeldText`
   (:330, email 2 only).
-- **The tests of the removed code**, with it (they import it, so `npm test`, a release precondition, would fail):
-  src/test/macd-ride-alerts.test.ts whole (every block tests v9's ride; its imports :14-57; the checks of `ridePaidAt`,
-  which stays, in its :265 block move to the fade's tests); in src/test/stockmacd-alerts.test.tsx the #397 blocks
-  (:317-739 and :1045 to the end), the v9 lines of the #391 blocks (:86-91, :189-190, :763-766) and the v9 imports
-  (:22-58); in src/test/indicator-alerts.test.tsx the ride's helpers (`toldRide`, `rideMailAt`, :1238-1259;
-  `rideCloseSignal` imported at :53), the v9 tests of the #345 and #353 blocks that use them, and the ride's code-text
-  checks (:1164-1167, :1454). In their place, 7.1's fade tests. src/test/macd-ride.test.ts stays (it tests main's
-  macd-ride.ts, which stays).
+- **The tests of the removed code**, with it (they import it or read its text, so `npm test` or `npx tsc --noEmit`,
+  release preconditions, would fail). Line numbers read 2026-11-17:
+  - src/test/macd-ride-alerts.test.ts whole (every block tests v9's ride; its imports :14-57; the checks of
+    `ridePaidAt`, which stays, in its :265 block move to the fade's tests).
+  - src/test/stockmacd-alerts.test.tsx: the #397 describes (:317-739 and :1045 to the end) go. In the #391 describes:
+    the v9 ids (:84-98: `STOCKMACD_RIDE_VERSION` and the three ride ids, and `indicatorRuleId("stockmacd")` giving
+    email 1's) are rewritten to the fade's id (3.7), the interval pins (:83, :99-103) staying; :189 is re-pointed to
+    `stockFadeClose` and :190 (`stockRidesReached`) goes. The #397 `it` inside "#391 the shares' run and the database"
+    (:758-776): :762-766 (`reachRide`, `rideOutSignal`, `sendRide(rideCloseSignal(…))`, `stockRide(…)`) go; its general
+    lines are re-pointed to `stockFade` and kept (:767-768 the failure log without an address; :769-775 no state row,
+    no minute read, no `z95of120`, no `decideZoneOnWindow`). The v9 names among the imports (:22-72) go with the
+    blocks that used them (`_shared/macd-ride.ts` stays, so its names at :60-72 would still resolve; they go only as
+    unused).
+  - src/test/indicator-alerts.test.tsx: the imports `MACDH_AT_RULE_ID`, `MACDH_OUT_RULE_ID` (:21-22) and
+    `rideCloseSignal` (:53); the ride's helpers (`toldRide`, `rideMailAt`, :1238-1259) and the v9 tests of the #345
+    and #353 blocks that use them. Rewritten, not dropped: the id tests (:995-1004 pin v9's three ids and
+    `indicatorRuleId("macdx")`; they pin the fade's id, and the set of distinct ids at :1000-1014 keeps v9's three
+    as written strings, its size counted again); the ride's code-text lines (:1164-1167, `rideSubs` / `ridden` /
+    `rideEntryAt` / `rideCloseStep`) become the fade's (3.2), :1168's freshness line staying if `fadeAtClose` keeps it
+    word for word;
+    **the two order guards are re-pointed to `fadeAtClose` and kept**: the MACD rule in its own try / catch after the
+    other rules' mails (:1171-1173, 3.2) and the weekend return before it (:1185-1187, 2.4); :1454's check of
+    `rideCloseSignal`'s body (`sl: null, tps: null` twice) becomes `fadeSignal`'s (once). The v39 pin at :1190 is one
+    of 3.7's seven.
+  In their place, 7.1's fade tests. src/test/macd-ride.test.ts stays (it tests main's macd-ride.ts, which stays).
 - **The shelved v10 code:** already gone. 9bcfd70 put `_shared/macd-ride.ts`, `indicators.ts`, `stocks.ts`,
   `src/test/macd-ride.test.ts`, `research/macdride-replay.ts` and `.github/workflows/macdride.yml` back to origin/main's
   bytes and deleted `src/test/macd-ride-v10.test.ts` (the 15-minute spec's step 0). After the build no file under
@@ -309,9 +339,19 @@ uses them, index.ts:1393-1399 and on); `mailerFor`, `claimRow`, `mailRide` (2.5)
   variant, the notes, the plan line and the sales page texts, in both languages, and find nothing.
 - A count reaching +10 never appears without the fields of 4.5; a test checks them.
 - The name 「MACD の逆張り」 / "MACD fade". The pairs' and gold's mails' how-to-stop line (today's indicators.ts:1755 /
-  en :1692) and the econ digest's footer (econ-calendar/digest.ts:423, :452) name the tab 「MACD の逆張り」（画面が新しく
-  なる前は「MACD の流れ」） / "MACD fade (MACD ride until the screen is updated)" until the later small PR of 6.3 step 7.
-  The shares' mail keeps 「株の MACD」 / "Stock MACD" (stocks.ts:442 / en :379): that tab keeps its name.
+  en :1692) names the tab 「MACD の逆張り」（画面が新しくなる前は「MACD の流れ」） / "MACD fade (MACD ride until the screen
+  is updated)" until the later small PR of 6.3 step 7. The shares' mail keeps 「株の MACD」 / "Stock MACD" (stocks.ts:442
+  / en :379): that tab keeps its name.
+- **The econ digest's footer** (econ-calendar/digest.ts:423 / :452) names the rule twice; both change, word for word
+  (only the parts shown change; the rest of each line is today's):
+  - ja: 「このメールは、売買のメール（MACD の逆張り）を受け取っている方に、日本時間の平日の朝に1通送っています。」 and
+    「止めるには、アプリの「設定」→「メール通知」で「MACD の逆張り」（画面が新しくなる前は「MACD の流れ」）のチェックを
+    外してください（売買のメールも止まります）。」
+  - en: "This email goes to those who receive the trade emails (MACD fade), once each weekday morning in Japan." and
+    "There is no switch for this email alone yet: unticking \"MACD fade\" (\"MACD ride\" until the screen is updated)
+    under Settings → Email alerts stops it, and the trade emails too."
+  - src/test/econ-digest.test.ts:284-285 pin these instead of today's two, in the function's PR (6.3 step 3, which
+    changes the footer); its `not.toContain("1時間足")` stays.
 
 ### 4.2 Subjects
 
@@ -319,7 +359,8 @@ uses them, index.ts:1393-1399 and on); `mailerFor`, `claimRow`, `mailRide` (2.5)
   （BUY）: 青い線が下の端の96%で確定」); en "[Sextant] USD/JPY 1-hour SELL: the MACD line closed at 96% of the top (MACD
   fade)". The timeframe from `tfLabel` (logic.ts:316-322: 「1時間足」 / "1-hour").
 - Shares: 「【Sextant】〔name〕（〔code〕）1時間足 売り（SELL・空売り）: 青い線が上の端の96%で確定（株の MACD）」; en
-  "[Sextant] 〔name〕 (〔code〕) 1-hour SELL (short sale): the MACD line closed at 96% of the top (stock MACD)".
+  "[Sextant] 〔name〕 (〔code〕) 1-hour SELL (short sale): the MACD line closed at 96% of the top (Stock MACD)" (the
+  tab's name as today's share mails write it, stocks.ts:379, :411).
 
 ### 4.3 The pairs' and gold's email (`renderFadeMail`)
 
@@ -333,12 +374,18 @@ uses them, index.ts:1393-1399 and on); `mailerFor`, `claimRow`, `mailRide` (2.5)
 6. 「利確の値段も損切りの値段もありません。これはこの決まりの作りで、損切りをしないことを勧めるものではありません。」
 7. 「メールはこの1通だけです。このあと、この合図について知らせは送りません。同じチャート・同じ向きに前の合図があって
    も、次の合図は送ります。」
-8. 「このメールは足の確定から数分後に届きます。届いた時の値段は、上の終値と違うことがあります（その差は測っていません）。
-   週末の止まっている時間（日本時間 土曜6:00〜月曜7:00）に確定した足は判定しません。」
+8. A pair: 「このメールは、足の確定の直後・3分後・5分後の読み込みで判定して送ります（実際に何分で届くかは測っていませ
+   ん）。」 Gold: 「このメールは、足の確定の1分後から30分後までの間に判定して送ります（実際に何分で届くかは測っていませ
+   ん）。」 Then both: 「届いた時の値段は、上の終値と違うことがあります（その差は測っていません）。週末の止まっている時間
+   （日本時間 土曜6:00〜月曜7:00）に確定した足は判定しません。」 (The reads: `gmoIntervalsDue`, indicators.ts:1212;
+   gold's window: `twelveCloseDue`, :1289-1296. Neither says how long the mail takes; today's note says the same,
+   ja:2138 「実際に何秒で届くかは、まだ確かめていません」.)
 9. Pairs: the measured paragraph (4.5). Gold instead: 「金では測っていません（足は Twelve Data のもので、売値・買値の別は
    ありません）。5ペアで測った数字は、アプリの設定の注にあります。」 No number.
-10. 「この決まりは Sextant 独自のもの（96%・1時間足の確定で判定すること・新しい120本の枠・逆張りの向き・利確と損切りの
-    値段を書かないことは、アプリのオーナーが決めたものです）で、公開されているインジケーターではありません。」
+10. 「この決まりは Sextant 独自のもので、公開されているインジケーターではありません。96%・足の確定で判定すること・メール
+    を1時間足で判定すること・逆張りの向き・利確と損切りの値段を書かないことは、アプリのオーナーが決めたものです。MACD の
+    枠（新しい120本）は、アプリの1時間足のチャートの枠と同じです。」 (Only what the owner said is the owner's; the pane is
+    stated as a fact of the rule, not as the owner's choice: section 1.)
 11. As today: the source line, the app link, how to stop (4.1), the disclaimer. A pair's source line changes, as
     today's (indicators.ts:1754, 「価格は GMOコインの公開レート（買値と売値の中間）で…」) would call item 5's bid or ask
     the mid: 「足は GMOコインの公開レート（買値と売値の中間）で、アプリのチャートと同じです。上の値段は、同じ1時間足の
@@ -358,13 +405,16 @@ en, item by item:
    stop."
 7. "This is the only email: nothing more is sent about this signal. A later signal on the same chart and side is sent
    too, whatever came before it."
-8. "This email arrives a few minutes after the bar closes. The price when it arrives may differ from the close above
-   (the difference has not been measured). Bars that close in the weekend pause (Friday 21:00 to Sunday 22:00 UTC) are
-   not judged."
+8. A pair: "This email is judged and sent at the reads right after the bar closes and 3 and 5 minutes after (how long
+   it takes to arrive has not been measured)." Gold: "This email is judged and sent between 1 and 30 minutes after the
+   bar closes (how long it takes to arrive has not been measured)." Then both: "The price when it arrives may differ
+   from the close above (the difference has not been measured). Bars that close in the weekend pause (Friday 21:00 to
+   Sunday 22:00 UTC) are not judged."
 9. Pairs: the measured paragraph (4.5, en). Gold instead: "Not measured on gold (its bars are Twelve Data's, with no
    separate bid and ask). The numbers measured on the five pairs are in the app's settings notes." No number.
-10. "This rule is Sextant's own (96%, judging at the 1-hour close, the pane of the newest 120 bars, the fade side and
-    stating no take-profit or stop price are the app owner's choices), not a published indicator."
+10. "This rule is Sextant's own, not a published indicator. 96%, judging at the bar's close, judging the email on
+    1-hour bars, the fade side and stating no take-profit or stop price are the app owner's choices. The MACD pane (the
+    newest 120 bars) is the same as the app's 1-hour chart's."
 11. As today's en: the source line, the app link, how to stop (4.1), the disclaimer. A pair's source line: "The bars
     are the mid of GMO Coin's public bid and ask, as the app's chart draws them; the price above is the same 1-hour bar's
     bid or ask close." (today's :1691). Gold's stays (indicators.ts:1690).
@@ -382,34 +432,60 @@ In this order, ja / en (〔market〕 as today's share mail names it: 東証 / �
    (`stockBarBreak`), then: 「この足の終値では、次に市場が開くまで売買できません。」 / "At this bar's close nothing can be
    traded until the market opens again."
 6. and 7. As 4.3 items 6 and 7, ja and en.
-8. The timing, a share's own (not 4.3 item 8, whose 「数分後」 is wrong for Tokyo and whose weekend sentence is about the
-   pairs): a US share 「このメールは足の確定から数分後に届きます。」 / "This email arrives a few minutes after the bar
-   closes."; a Tokyo share only today's delay sentence (stocks.ts:437 / en :374: 「東証の値段は Yahoo では約15分遅れて届く
+8. The timing, a share's own (not 4.3 item 8, whose reads are the pairs' and gold's and whose weekend sentence is about
+   them): a US share 「このメールは、足の確定の後の読み込みで判定して送ります（確定から45分を過ぎた足は送りません。実際に
+   何分で届くかは測っていません）。」 / "This email is judged and sent at a read after the bar closes (a bar more than 45
+   minutes past its close is not sent; how long it takes to arrive has not been measured)." (`stockCloseDue`,
+   `STOCK_FRESH_MS`, stocks.ts:121-136; today's share mail states no delay for a US share); a Tokyo share only today's
+   delay sentence (stocks.ts:437 / en :374: 「東証の値段は Yahoo では約15分遅れて届く
    ため、このメールは足が確定してから約15分後に送っています（2026-11-06 に測りました）。」 / "Yahoo's Tokyo prices come
    about 15 minutes late, so this email is sent about 15 minutes after the bar closed (measured on 2026-11-06)."); then,
    every share, 「届いた時の値段は、上の終値と違うことがあります（その差は測っていません）。」 / "The price when it
    arrives may differ from the close above (the difference has not been measured)."
 9. 「株では測っていません。」 / "Not measured on shares." No numbers.
-10. 「この決まりは Sextant 独自のもの（96%・1時間足の確定で判定すること・新しい120本の枠・逆張りの向き・利確と損切りの
-    値段を書かないことは、アプリのオーナーが決めたもので、逆張りの向きは株にも当てはめました）で、公開されている
-    インジケーターではありません。」 / "This rule is Sextant's own (96%, judging at the 1-hour close, the pane of the
-    newest 120 bars, the fade side and stating no take-profit or stop price are the app owner's choices, the fade side
-    applied to shares too), not a published indicator."
+10. 「この決まりは Sextant 独自のもので、公開されているインジケーターではありません。96%・足の確定で判定すること・逆張り
+    の向き（株にも当てはめること）・利確と損切りの値段を書かないことは、アプリのオーナーが決めたものです。株は1時間足で
+    判定し、MACD の枠（新しい120本）は、アプリの1時間足のチャートの枠と同じです。」 / "This rule is Sextant's own, not a
+    published indicator. 96%, judging at the bar's close, the fade side (shares included) and stating no take-profit or
+    stop price are the app owner's choices. Shares are judged on 1-hour bars, and the MACD pane (the newest 120 bars) is
+    the same as the app's 1-hour chart's." (The shares' 1-hour bars and the pane are stated as facts of the rule, not as
+    the owner's choices: section 1.)
 11. As today's share mail: the Yahoo source line (stocks.ts:431 / en :368), the app link, how to stop under 「株の MACD」 /
     "Stock MACD" and the disclaimer (stocks.ts:442 / en :379).
 
 ### 4.5 The measured paragraph (pairs only; `FADE_MEASURED`, `fadeMeasuredLine`)
 
-The numbers are the study's real `TF=1h` run, from its summary.json (research/out/macdfade1h, research/macdfade15-spec.md
-"Files" and "On 1-hour bars"; a copy committed as research/ledger/macdfade1h-summary.json; a test pins `FADE_MEASURED`
-to it, `meta.tf` `"1h"`, `meta.share` 0.96 and `meta.tp` 10 included; docs §8 records the run id and the file's
-sha256). **None is known yet, and the build waits for them**; the study prints no real number until its Python agrees.
-The run must also pass the study's own stop on `closeVsMinute` (the 1-hour closes against the minutes) before its
-numbers are used. Do not take the 15-minute run's numbers (research/macdfade15-spec.md, run 44077464383) for these.
+The numbers are the study's real `TF=1h` run: Actions run 44099401423 on 53f7003, recorded in research/macdfade15-spec.md
+"Result of the real 1-hour run" (d96bf56): the Python agreed with every row and number, `closeVsMinute` differs in no
+bar on any pair (the study's own stop passed), summary.json sha256 `60edab22302e5fe755c70b38f87b8b28fa27389ccc1bb10c1a0c0c88c448a9e2`
+(research/macdfade15-spec.md "Files" and "On 1-hour bars" give its form). **They are not in this file yet** (every
+⟨1h run: …⟩ below); the build waits for them. Do not take the 15-minute run's numbers (research/macdfade15-spec.md, run
+44077464383) for these.
+
+**How the numbers get into the code (one route, chosen at 6.3 step 1a and written in this file then).** The artifact of
+that run was not downloaded (the development container's proxy refused the artifact host on the 15-minute run, and the
+1-hour run's numbers were copied from the job's printed lines), and the workflow prints summary.json only as a sha256
+(.github/workflows/macdfade15.yml:254-260). So:
+1. **The file.** A step is added to the real job of .github/workflows/macdfade15.yml after "The numbers (the Python
+   agreed)": `cat $OUT/summary.json; echo` (the file has no newline at its end; the `echo` only ends the log line).
+   Pushed to the research branch without `[skip ci]`, it runs the study again (TF `1h`, the defaults: the same END,
+   GMO's day files from the caches); its printed summary.json sha256 must be `60edab22…a9e2` above, else nothing is
+   filled and the difference is looked into. The printed file is copied from that job's log into
+   research/ledger/macdfade1h-summary.json (the log's timestamps taken off, no newline at its end), and its sha256,
+   computed again in the development container, must be the same `60edab22…a9e2`, else the copy is not used.
+   `FADE_MEASURED` is written from that copy, and a test reads the copy and pins every value of `FADE_MEASURED` to it,
+   `meta.tf` `"1h"`, `meta.share` 0.96 and `meta.tp` 10 included.
+2. **Only if the file cannot be obtained that way:** `FADE_MEASURED` is pinned to the printed lines of run 44099401423,
+   copied whole from its job log into research/ledger/macdfade1h-print.txt and checked against
+   research/macdfade15-spec.md's 1-hour result section; the values are then as printed (a mean to 2 decimals, a sum,
+   the worst and the largest loss on the way to 1, minutes whole: `fmt`, research/macdfade15.ts:550-561), and the test
+   pins `FADE_MEASURED` to that file. The printed lines carry every slot below (`meta`, each `pair` line, each group's
+   lines and the side-by-side lines, :566-591).
+Either way docs §8 records the run id(s), the summary.json sha256, and which route was taken.
 
 | slot | summary.json | value |
 |---|---|---|
-| 〔from〕, 〔to〕 | `meta.start`, `meta.end` (the entries' closes in [start, end); open trades valued at the last minute loaded) | ⟨1h run: meta.start⟩, ⟨1h run: meta.end⟩ (the workflow's defaults are 2024-01-01T00:00:00Z and 2026-11-10T21:00:00Z, research/macdfade15.ts:56-57; read from the run, not assumed) |
+| 〔from〕, 〔to〕 | `meta.start`, `meta.end` (the entries' closes in [start, end): `from` included, `to` not; open trades valued at the last minute loaded), each written in UTC: ja 「2024年1月1日 0:00（UTC）」, en "1 January 2024, 00:00 UTC" (the minutes always written) | ⟨1h run: meta.start⟩, ⟨1h run: meta.end⟩ (the workflow's defaults are 2024-01-01T00:00:00Z and 2026-11-10T21:00:00Z, research/macdfade15.ts:56-57; read from the run, not assumed) |
 | 〔trades〕, 〔tp〕, 〔open〕 | `dirs.fade.all.trades`, `.tp`, `.open` | ⟨1h run: fade trades⟩, ⟨1h run: fade tp⟩, ⟨1h run: fade open⟩ |
 | 〔mean〕 | `dirs.fade.all.pipsMean` (open trades at their unrealised pips) | ⟨1h run: fade pipsMean⟩ |
 | 〔maeMedian〕, 〔maeMax〕 | `dirs.fade.all.maeMedian`, `.maeMax` | ⟨1h run: fade maeMedian⟩, ⟨1h run: fade maeMax⟩ |
@@ -418,19 +494,33 @@ numbers are used. Do not take the 15-minute run's numbers (research/macdfade15-s
 | 〔flowMean〕 | `dirs.flow.all.pipsMean` | ⟨1h run: flow pipsMean⟩ |
 | 〔baseMean〕 | `base.all.pipsMean` | ⟨1h run: base pipsMean⟩ |
 | 〔pairMean〕, 〔pairBaseMean〕 | `dirs.fade.<pair>.pipsMean`, `base.<pair>.pipsMean`, each of the five | ⟨1h run: fade pipsMean, each pair⟩, ⟨1h run: base pipsMean, each pair⟩ |
-| 〔negPairs〕 | every pair whose fade mean is below zero, with its mean, or 「ありません」 / "none" | ⟨1h run: the pairs with fade pipsMean < 0⟩ |
+| 〔negPairs〕 | every pair whose fade mean is below zero, in the pairs' order, each with its mean: ja 「ドル/円（〔its mean〕 pips）」 joined by 「・」, en "USD/JPY (〔its mean〕 pips)" joined by ", "; with none, ja 「ありません」, en "none" | ⟨1h run: the pairs with fade pipsMean < 0⟩ |
 | 〔notMailed〕 | the sum of `pairs[].notMailed` | ⟨1h run: notMailed, summed⟩ |
 | 〔sec〕 | the docs §8 section that records the run | ⟨docs §: the section of the 1h run⟩ |
 
-- Durations written in minutes under 2 hours, hours under 2 days, days beyond. 〔openPipsSum〕 is the open trades' net
-  unrealised result (an open trade is only short of +10, so it can be in profit) and 〔openPipsWorst〕 their lowest; both
-  are written with their sign, and the text says a minus is a loss.
-- 〔baseWhat〕 「1時間足ごとの最初の1分に（買いと売りを1回ずつ）」 / "at every 1-hour bar's first minute (a BUY and a
-  SELL)": about 59 minutes before a signal at the same bar would be (research/macdfade15-spec.md:331-332), so the same
-  holding with no signal, not the same entry; the parenthesis after 〔baseMean〕 says so.
+- Durations written in minutes under 2 hours, hours under 2 days, days beyond, to the nearest whole unit, with 「約」 /
+  "about" before one that was rounded. Pips as the study prints them (a mean to 2 decimals; a sum, the worst and the
+  largest loss on the way to 1; research/macdfade15.ts:550-561), a mean, a sum and the worst with their sign.
+  〔openPipsSum〕 is the open trades' net unrealised result (an open trade is only short of +10, so it can be in profit)
+  and 〔openPipsWorst〕 their lowest; the text says a minus is a loss.
+- 〔baseWhat〕 「このメールが判定する1時間足ごとの最初の1分に（買いと売りを1回ずつ）」 / "at the first minute of every
+  1-hour bar this email judges (a BUY and a SELL)": the study's baseline takes only the bars that are judged and mailed
+  (in range, 600 bars, `Z` and `Zp` read, outside the weekend gate: `baseBar`, research/macdfade15.ts:342-345;
+  research/macdfade15-spec.md "The same trade with no signal" and :331-332), about 59 minutes before a signal at the
+  same bar would be, so the same holding with no signal, not the same entry; the parenthesis after 〔baseMean〕 says so.
+- **Variants fixed here, so the text never prints a null or a vacuous clause** (the study writes `openPipsSum` null and
+  `openPipsWorst` / `openMinutesMax` null with no open trade, research/macdfade15.ts:507-510, and the tp times null with
+  no tp trade):
+  - 〔open〕 = 0: ja 「〔open〕回は〔to〕の時点でまだ届いておらず、…持ったままでした（その後は追っていません）。」 becomes
+    「〔to〕の時点でまだ届いていないものはありませんでした。」 and 「（届いていないものは、その時の含み損益で数えました）」
+    goes; en "〔open〕 had not reached it by 〔to〕; … (not followed after that)." becomes "None was still short of it by
+    〔to〕." and "(those not reached counted at their unrealised result then)" goes.
+  - 〔tp〕 = 0: ja 「+10 pips に届くまでの時間は…でした。」 becomes 「+10 pips に届いたものはありませんでした。」; en "Time to
+    +10 pips: … longest 〔tpMax〕." becomes "None reached +10 pips."
+  - 〔trades〕 = 0: the paragraph is not built; the build stops (a run with no fade trade is not used).
 
-ja: 「測った数字（5ペア、〔from〕〜〔to〕に確定した1時間足、スプレッド込み、docs §〔sec〕）。過去の GMO の足を読み直して
-測ったもので、メールの読み込みが失敗した時などは入っていません（その回数は測っていません）。このメールの決まりで足の
+ja: 「測った数字（5ペア、〔from〕以後、〔to〕より前に確定した1時間足、スプレッド込み、docs §〔sec〕）。過去の GMO の
+足を読み直して測ったもので、メールの読み込みが失敗した時などは入っていません（その回数は測っていません）。このメールの決まりで足の
 終値で入り、+10 pips で利確・損切りなしで持ったとして測りました（オーナーの持ち方です。メールには利確の値段を書いていま
 せん）: 合図は〔trades〕回、うち〔tp〕回が+10 pips に届きました。〔open〕回は〔to〕の時点でまだ届いておらず、その含み損益は
 合わせて〔openPipsSum〕 pips（マイナスが損）、いちばん悪いもので〔openPipsWorst〕 pips、いちばん長いもので〔openLongest〕
@@ -444,8 +534,8 @@ ja: 「測った数字（5ペア、〔from〕〜〔to〕に確定した1時間�
 〔pairBaseMean〕 pips）です。平均がマイナスだったペア: 〔negPairs〕。ほかに〔notMailed〕回、週末の止まっている時間に確定
 した足に合図がありましたが、このメールでは判定しないので、上の数字に入れていません。」
 
-en: "Measured (five pairs, 1-hour bars that closed from 〔from〕 to 〔to〕, spread paid, docs §〔sec〕). It re-reads GMO's
-past bars; times this email's reads failed and the like are not in it (how often: not measured). Entered by this
+en: "Measured (five pairs, 1-hour bars that closed from 〔from〕 up to, not including, 〔to〕, spread paid, docs
+§〔sec〕). It re-reads GMO's past bars; times this email's reads failed and the like are not in it (how often: not measured). Entered by this
 email's rule at the bar's close and held with a take profit of +10 pips and no stop (the owner's way of holding; this
 email states no take-profit price): 〔trades〕 signals, of which 〔tp〕 reached +10 pips. 〔open〕 had not reached it by
 〔to〕; their unrealised result was 〔openPipsSum〕 pips in all (a minus is a loss), the worst 〔openPipsWorst〕 pips, the
@@ -457,12 +547,28 @@ reaching +10 pips comes out high by construction. Entering the other way on the 
 at the bottom) gave 〔flowMean〕 pips a trade, and entering with no signal 〔baseWhat〕 gave 〔baseMean〕 pips (held the
 same way, +10 pips and no stop, but entered at the 1-hour bar's first minute, not at its close, so not the same entry).
 Whether these differences are beyond chance has not been measured. On 〔pair〕 alone the mean was 〔pairMean〕 pips (with
-no signal, 〔pairBaseMean〕 pips). Pairs whose mean was below zero: 〔negPairs〕 (or "none"). Besides these, 〔notMailed〕
+no signal, 〔pairBaseMean〕 pips). Pairs whose mean was below zero: 〔negPairs〕. Besides these, 〔notMailed〕
 signals fell on bars that closed in the weekend pause; this email does not judge those bars, so they are not in the
 numbers above."
 
+**The notes' version** (section 5, `macdxNotes`; one paragraph shared by the five pairs and gold, so no 〔pair〕 and no
+「このメール」). The paragraph above, ja and en, with these changes only (the 〔open〕 / 〔tp〕 variants as above):
+- ja 「このメールの決まりで」 → 「メールの決まりで」; 「このメールでは判定しないので」 → 「メールでは判定しないので」
+  (「メールの読み込みが失敗した時」 and 「メールには利確の値段を書いていません」 stay as they are).
+- en "times this email's reads failed" → "times the email's reads failed"; "Entered by this email's rule" → "Entered by
+  the email's rule"; "this email states no take-profit price" → "the email states no take-profit price"; "this email
+  does not judge those bars" → "the email does not judge those bars".
+- The 〔pair〕 sentence (ja 「〔pair〕だけでは平均〔pairMean〕 pips（合図なしでは〔pairBaseMean〕 pips）です。」, en "On 〔pair〕
+  alone the mean was 〔pairMean〕 pips (with no signal, 〔pairBaseMean〕 pips).") becomes all five, in the pairs' order:
+  ja 「ペアごとの1回あたりの平均は、ドル/円〔USD/JPY's pairMean〕 pips（合図なしでは〔its pairBaseMean〕 pips）・ユーロ/円
+  〔…〕 pips（〔…〕 pips）・豪ドル/円〔…〕 pips（〔…〕 pips）・ユーロ/ドル〔…〕 pips（〔…〕 pips）・豪ドル/ドル〔…〕 pips
+  （〔…〕 pips）でした。」; en "The mean a trade by pair: USD/JPY 〔USD/JPY's pairMean〕 pips (with no signal, 〔its
+  pairBaseMean〕 pips), EUR/JPY 〔…〕 pips (〔…〕 pips), AUD/JPY 〔…〕 pips (〔…〕 pips), EUR/USD 〔…〕 pips (〔…〕 pips),
+  AUD/USD 〔…〕 pips (〔…〕 pips)." (⟨1h run: fade pipsMean, each pair⟩, ⟨1h run: base pipsMean, each pair⟩.)
+A test pins the notes' version word for word, apart from the mails' version.
+
 Once the numbers are in, every sentence of sections 4 and 5 is read against them before anything is built; one that no
-longer holds is corrected here first.
+longer holds is corrected here first, and the sales page's clauses chosen by the numbers (section 5) are chosen then.
 
 ## 5. The screen and the sales page
 
@@ -471,7 +577,9 @@ longer holds is corrected here first.
   null`. `RIDE_ID` stays: v9 rows read as today, v8 and older as 「前の決まり」.
 - **Tag** (`rowLabel`, SignalAlertSettings.tsx:110-127; a fade branch before the earlier-rule one at :125): the side
   in side colour; a pair's or gold's fade row 「（MACD の逆張り）」 / " (MACD fade)" (new `ruleTagFade.macdx`); a share's
-  「（株の MACD）」 (`ruleTag.stockmacd`, ja:2110). `ruleTag.macdx` 「（MACD の流れ）」 stays for v9 rows.
+  fade row 「（株の MACD・逆張り）」 / " (Stock MACD fade)" (new `ruleTagFade.stockmacd`), so it does not read like a v9
+  share email-1 row, which falls to `ruleTag.stockmacd` 「（株の MACD）」 (ja:2110 / en:2005; :124-126) with the side the
+  other way round. `ruleTag.macdx` 「（MACD の流れ）」 and `ruleTag.stockmacd` stay for v9 rows.
 - **Plan line** of a fade row: 「入り 〔entry〕 / 利確・損切りなし」 / "In 〔entry〕 / no take profit, no stop" (new `fadePlan`;
   today's `plan` shows only with a stop, :411-413). The time column shows `closed_at`, the bar's close. The row's
   timeframe reads 「1時間足」 from its `interval`.
@@ -483,50 +591,70 @@ longer holds is corrected here first.
   list (ja:2035 / en:1932) and 「メールはいつ届きますか？」 (ja:2037 / en:1934; v9's email-2 parenthesis goes, 「MACD の
   流れ」 becomes 「MACD の逆張り」). They say: 96% at a 1-hour close with the bar before not at 96% (one email a bar; none
   more while the line stays); the 120-bar pane of the 1-hour chart; the fade side; the price; no take-profit and no stop
-  price (how the rule is built, not advice), whose choices these are (4.3 item 10); one email, no skip; when closes are
-  judged and that the mail comes minutes after the close (Tokyo shares about 15); the weekend gate; that whether a trade
-  reached +10 is not recorded or shown; the measured paragraph (4.5) in the pairs' notes; 「金では測っていません」 /
-  「株では測っていません」 with no numbers. Every sentence on 90%, email 2, the notice, the minute check and v9's numbers
+  price (how the rule is built, not advice), whose choices these are, attributed as 4.3 item 10 does (the pane and the
+  shares' 1-hour bars as facts, not as the owner's); one email, no skip; when closes are judged (pairs at the reads 0, 3
+  and 5 minutes after the hour, gold from 1 to 30 minutes after, a share at a read after its close, Tokyo's about 15
+  minutes after) and that how long the mail takes to arrive is not measured; the weekend gate; that whether a trade
+  reached +10 is not recorded or shown; the measured paragraph's notes' version (4.5) in the pairs' notes;
+  「金では測っていません」 / 「株では測っていません」 with no numbers. Every sentence on 90%, email 2, the notice, the minute check and v9's numbers
   goes. `rideOut`, `rideAt`, `ridePrices` stay for v9 rows.
   `macdxNotes` item by item (ja:2138-2153 / en:2033-2048, the same order):
-  - **Stay** (already on 1-hour bars; changed only where said): gold's Twelve Data notes (ja:2139, 2140; ja:2139's 「確定から30分」
-    is `freshFor("1h")`); the zoom note (ja:2146); the pane-margin note (ja:2147) and the unrounded note (ja:2148),
-    naming 96% only (the pane-margin note's last sentence, on email 2's forming pane and email 1's closed one, becomes
+  - **Stay** (already on 1-hour bars; changed only where said): gold's Twelve Data notes (ja:2139, 2140; ja:2139's
+    「確定から30分」 is `freshFor("1h")`); the zoom note (ja:2146); the pane-margin note (ja:2147) and the unrounded
+    note (ja:2148), naming 96% only (the pane-margin note's last sentence, on email 2's forming pane and email 1's closed one, becomes
     「メールは、確定した足までの新しい120本で決めます。」); the ULTRA note (ja:2150); the weekend note (ja:2152, its bar
     counts already the 1-hour ones) and gold's break note (ja:2153).
   - **Rewritten**: ja:2138 (the charts, and when closes are judged: pairs 0, 3 and 5 minutes after the hour, gold from a
     minute after the close; its 「2通目は毎分見ています」 goes), ja:2141 (the rule of 2.1-2.2 and the fade side), ja:2151
     (no take-profit and no stop price, how the rule is built and not advice; nothing recorded).
   - **Go**: ja:2142-2145 (the notice, email 2, the catch-up, the band) and ja:2149 (v9's numbers), in their place the
-    measured paragraph (4.5) and 「金では測っていません」 (the array keeps ja and en the same length).
+    measured paragraph's notes' version (4.5) and 「金では測っていません」 (the array keeps ja and en the same length).
 - **Sales page** (no percent and no measured number, src/test/landing.test.tsx:51-58; the FAQ's forbidden pattern,
-  signal-alert-settings.test.tsx:492). Word for word below, ja and en; none depends on the numbers (no test of chance is
-  run, so 「…良いとは示せていません」 always holds; the MACD fade is always outside the break-even comparison, with the
-  reason, because with no stop it has no break-even win rate). A test pins each.
-  - `lp.faqs` 「勝率はどのくらいですか？」 (ja:2033): 「過去のチャート（スプレッド込み）で測ったサインは、MACD の逆張りを
-    除き、どれも損益ゼロに必要な勝率に届いていません。MACD の逆張りを除くのは、損切りをしない決まりで、損益ゼロに必要な
-    勝率というものがなく、勝率では比べられないためです（届いたという意味ではありません）。数字はアプリ内の説明に載せて
-    います。MACD の逆張り（1時間足）は、5ペアで測った数字が設定の注にあります。損切りをしないので、含み損のまま残る取引が
-    出ることがあり、合図なしで入った時より良いとは示せていません。損切りをしないのはこの決まりの作りで、損切りをしない
-    ことを勧めるものではありません。金・株と、流動性狩り＋EMAクロスは、まだ測っていません。勝てる根拠として使わないで
-    ください。」 en (:1930): "On past charts (spread paid), none of the signals measured reached the win rate needed to
-    break even, except the MACD fade. The MACD fade is left out because it has no stop by design, so there is no
-    break-even win rate to compare it by (it does not mean it reached one). The numbers are in the app's notes. The MACD
-    fade (1-hour) has its own numbers, measured on the five pairs only, in the settings' notes. With no stop, some trades
-    can stay open at an unrealised loss, and it has not been shown to do better than entering with no signal. Having no
-    stop is how this rule is built; it is not advice to hold without a stop. Gold, stocks and the liquidity sweep + EMA
-    cross have not been measured. Please do not take them as a reason to expect to win."
-  - `lp.honestBody` (ja:2028): 「過去のチャート（11通貨ペア・スプレッド込み）での検証では、MACD の逆張りを除き、アプリの
-    どのサインも損益ゼロに必要な勝率に届いていません。MACD の逆張り（5ペアで測定）を除くのは、損切りをしない決まりで、
-    勝率では比べられないためです（届いたという意味ではありません）。損切りをしないので、含み損のまま残る取引が出ることが
-    あり、合図なしで入った時より良いとは示せていません。サインは注文の指示ではなく、判断の材料です。通知したサインの実際の
+  signal-alert-settings.test.tsx:492). Word for word below, ja and en. The MACD fade is named first, with the reason it is
+  left out of the break-even comparison (with no stop it has no break-even win rate), before the sentence on the other
+  signals, so no clause can be read as the fade having reached it. 「…良いとは示せていません」 holds whatever the numbers
+  (no test of chance is run). Today's FAQ states one adverse measured fact of the MACD rule (ja:2033 「届いた取引は、
+  損失で終わったものの方が、利益で終わったものより多くありました」, pinned at signal-alert-settings.test.tsx:489-490);
+  the fade's texts keep that practice through 〔adverse〕, chosen once the numbers are in (below). A test pins each text
+  with the 〔adverse〕 chosen.
+  - `lp.faqs` 「勝率はどのくらいですか？」 (ja:2033): 「MACD の逆張りは、損切りをしない決まりで、損益ゼロに必要な勝率という
+    ものがないため、勝率では比べません。それ以外の、過去のチャート（スプレッド込み）で測ったサインは、どれも損益ゼロに
+    必要な勝率に届いていません。数字はアプリ内の説明に載せています。MACD の逆張り（1時間足）は、5ペアで測った数字が設定の
+    注にあります。損切りをしないので、含み損のまま残る取引が出ることがあり、合図なしで入った時より良いとは示せていません。
+    〔adverse〕損切りをしないのはこの決まりの作りで、損切りをしないことを勧めるものではありません。金・株と、流動性狩り＋
+    EMAクロスは、まだ測っていません。勝てる根拠として使わないでください。」 en (:1930): "The MACD fade has no stop by
+    design, so it has no break-even win rate and is not compared by one. Of the other signals measured on past charts
+    (spread paid), none reached the win rate needed to break even. The numbers are in the app's notes. The MACD fade
+    (1-hour) has its own numbers, measured on the five pairs only, in the settings' notes. With no stop, some trades can
+    stay open at an unrealised loss, and it has not been shown to do better than entering with no signal. 〔adverse〕Having
+    no stop is how this rule is built; it is not advice to hold without a stop. Gold, stocks and the liquidity sweep +
+    EMA cross have not been measured. Please do not take them as a reason to expect to win."
+  - `lp.honestBody` (ja:2028): 「MACD の逆張り（5ペアで測定）は、損切りをしない決まりで、損益ゼロに必要な勝率がないため、
+    勝率では比べません。それ以外のアプリのサインは、過去のチャート（11通貨ペア・スプレッド込み）での検証で、どれも損益
+    ゼロに必要な勝率に届いていません。MACD の逆張りは、損切りをしないので、含み損のまま残る取引が出ることがあり、合図
+    なしで入った時より良いとは示せていません。〔adverse〕サインは注文の指示ではなく、判断の材料です。通知したサインの実際の
     成績は、成績を記録している決まりについて、件数とともにアプリ内にそのまま表示します。MACD の逆張りの成績は、記録も表示
-    もしていません。」 en (:1925): "On past charts (11 pairs, spread paid), none of the app's signals reached the win rate
-    needed to break even, except the MACD fade. The MACD fade (measured on five pairs) is left out because it has no stop
-    by design, so it cannot be compared by win rate (it does not mean it reached one). With no stop, some trades can stay
-    open at an unrealised loss, and it has not been shown to do better than entering with no signal. A signal is not an
-    order to trade; it is something to weigh. For the rules whose results are recorded, the real record of the signals
-    emailed is shown in the app, with how many there were. The MACD fade's results are not recorded or shown."
+    もしていません。」 en (:1925): "The MACD fade (measured on five pairs) has no stop by design, so it has no break-even
+    win rate and is not compared by one. Of the app's other signals, none reached the win rate needed to break even on
+    past charts (11 pairs, spread paid). With no stop, some MACD fade trades can stay open at an unrealised loss, and it
+    has not been shown to do better than entering with no signal. 〔adverse〕A signal is not an order to trade; it is
+    something to weigh. For the rules whose results are recorded, the real record of the signals emailed is shown in the
+    app, with how many there were. The MACD fade's results are not recorded or shown."
+  - **〔adverse〕**: every clause below whose condition the filled numbers meet, in this order, each ending its sentence;
+    none met, 〔adverse〕 is empty. No measured number and no percent in any (the page quotes none). The conditions read
+    the same values as 4.5's slots:
+    - ⟨1h run: fade pipsMean⟩ < 0: 「測った期間では、1回あたりの平均はマイナスでした。」 / "Over the period measured, its
+      mean a trade was below zero."
+    - ⟨1h run: fade pipsMean⟩ < ⟨1h run: base pipsMean⟩: 「合図なしで入った時より、1回あたりの平均が低くありました。」 /
+      "Its mean a trade was below entering with no signal."
+    - ⟨1h run: fade pipsMean⟩ < ⟨1h run: flow pipsMean⟩: 「同じ合図で逆向きに入った時より、1回あたりの平均が低くありま
+      した。」 / "Its mean a trade was below entering the other way on the same signals."
+    - some pair's fade pipsMean < 0 (⟨1h run: the pairs with fade pipsMean < 0⟩ not empty): 「5ペアのうち、1回あたりの
+      平均がマイナスのペアがありました。」 / "On some of the five pairs its mean a trade was below zero."
+    - ⟨1h run: fade open⟩ > 0 and ⟨1h run: fade openPipsWorst⟩ < 0: 「測った期間の終わりに、含み損のまま残っていた取引
+      がありました。」 / "At the end of the period measured, some trades were still open at an unrealised loss."
+    The choice and its reason (the values compared) are written in this file when the numbers are filled (4.5), and the
+    clauses are run through 4.1's guards like every other text.
   - 「他のツールと何が違いますか？」 (ja:2032): 「サインの成績を隠さない点です。過去のチャートでの検証結果と、成績を記録して
     いる決まりについては、通知したサインが実際に損切りと利確のどちらに先に届いたかを、勝てていない場合もそのまま表示し
     ます。MACD の逆張りは、利確と損切りの値段を書かない決まりで、その成績は記録も表示もしていません。売買のサインは確定
@@ -544,10 +672,18 @@ longer holds is corrected here first.
   measured paragraph of 4.5; the plan line's 「利確・損切りなし」 / "no take profit, no stop"; the sales page's fade
   sentences above), then find none; 「利確の目安」 and "take-profit level" are forbidden outright. The lists in
   macd-ride-alerts.test.ts (:376, :408) and stockmacd-alerts.test.tsx (:550, :583, :716) go with their blocks (3.5);
-  the fade mails' tests carry the same guard. The v10 rows' test (signal-alert-settings:736-771) becomes the fade
-  rows'; v9 and older rows' tests (:655-734) stay; the tab name, intros, notes and FAQ pins (:397-567, :773-860;
-  econ-digest.test.ts:284-285) follow the new texts. The tests pinning `'1h'` for `macdx` / `stockmacd` (e.g.
-  stockmacd-alerts.test.tsx:83, :99-103) stay as they are.
+  the fade mails' tests carry the same guard. Each change goes in the PR that changes what it tests (6.3), so `npm
+  test` passes on every PR:
+  - **Step 2's PR** (id parse, tag, plan line): the v10 rows' test (signal-alert-settings.test.tsx:739-771, its
+    comment :736-738) becomes the fade rows' test (a pair's, gold's and a share's fade row: the tags 「（MACD の逆張り）」
+    and 「（株の MACD・逆張り）」 and their en, the plan line, ja and en); the v9 and older rows' tests (:655-734) stay.
+  - **Step 3's PR** (the function): 3.5's removals and 7.1's fade tests; the forbid lists of the mails
+    (indicator-alerts.test.tsx:1506, 2139); econ-digest.test.ts:284-285 (the footer, 4.1); the seven v39 pins (3.7).
+  - **Step 6's PR** (the screen's texts): the tab name, intros, notes and FAQ pins (signal-alert-settings.test.tsx
+    :397-567, :773-868, with its forbid lists :417, 565, 853); the stock tab's intro and notes pinned in v9's words in
+    stockmacd-alerts.test.tsx:805-819 (「FX と同じ「MACD の流れ」のメール（2通）を送ります」, :807; 「…2通目は「96%に
+    届いた」という知らせで…」, :817); the landing and FAQ tests of the sales texts with the 〔adverse〕 chosen.
+  The tests pinning `'1h'` for `macdx` / `stockmacd` (e.g. stockmacd-alerts.test.tsx:83, :99-103) stay as they are.
 
 ## 6. Release
 
@@ -560,13 +696,16 @@ longer holds is corrected here first.
   answers, v39 still judges 1-hour closes and opens a ride at a fresh entry (index.ts:1075-1130, `openRide` at :1108;
   a share's at :1897), and v40 never sends that ride's email 2.
 - **A merge alone ships it.** A push to main touching `supabase/functions/**` deploys the default eight functions one
-  after another, signal-alerts seventh and live-chart last (.github/workflows/deploy-functions.yml:22-25, :76-85); a
-  deploy already queued runs first (`cancel-in-progress: false`, :35-39). No workflow runs the tests on a pull request.
+  after another, signal-alerts seventh and live-chart last (.github/workflows/deploy-functions.yml:22-27, :76-85). The
+  deploys share one concurrency group with `cancel-in-progress: false` (:35-39): a deploy already running finishes
+  first; a pending one in the group is replaced by this one, which deploys main's head (GitHub's documented rule for
+  concurrency groups; not seen in this repository's runs). No workflow runs the tests on a pull request.
   So every PR before the function's has `git diff --stat origin/main...<head> -- supabase/functions` empty (true today:
   this branch differs from origin/main only under `research/` and in three study workflows, none of them among the
   deploy's paths, :24-27).
-- The tests and static checks of 7.1 pass, 7.2 passed on the real 1-hour run, `FADE_MEASURED` holds the 1-hour run's
-  numbers (4.5).
+- The tests and static checks of 7.1 pass on the function's branch; `FADE_MEASURED` holds the 1-hour run's numbers by
+  4.5's route (6.3 step 1a); 7.2 passed on the function's branch, on the walk files and on the real 1-hour run, with
+  the re-run's summary.json sha256 equal to run 44099401423's (6.3 step 2a), its run id recorded in the function's PR.
 - (The 15-minute form's precondition "the owner has confirmed the subscription statement" goes: there is none, 3.6.)
 
 ### 6.2 Timing
@@ -576,8 +715,11 @@ judging windows:
 - v39 reads a pair's 1-hour close at :00, :03 and :05 (indicators.ts:1212) and looks at gold's from :01 until it is 30
   minutes old (indicators.ts:1295, `freshFor("1h")` :330-331; in practice to :29, index.ts:1178). From :30 to :59 no
   pair's or gold's 1-hour close is being judged by either version.
-- A share's close is read in the 30 minutes after it and mailed up to 45 minutes after it (stocks.ts:116-123). New York
-  closes on the half hour, so within its session every :31-:59 falls in a share's window.
+- A share's close is read in the 30 minutes after it and mailed up to 45 minutes after it (stocks.ts:116-123). New
+  York's 1-hour closes are 10:30, 11:30, 12:30, 13:30, 14:30, 15:30 and 16:00 New York time, Tokyo's 10:00, 11:00,
+  11:30, 13:00, 14:00, 15:00 and 15:30 JST, so many minutes :31-:50 inside either session fall within 45 minutes of
+  some share's close, though not all (New York's 09:31-09:59, before its first close, and Tokyo's 12:31-12:50, in its
+  lunch break, do not). The rule below is written against the closes themselves, not against "every :31".
 
 So: **merge the function's PR in minutes 31-50 of an hour, outside the 45 minutes after any 1-hour share close (in
 practice outside the Tokyo and New York sessions and the 45 minutes after each one's last close), with no v9 ride open.**
@@ -585,9 +727,9 @@ When v40 first answers in :31-:59, v39 has judged that hour's close and v40 judg
 both versions, and none by neither (no subscription moves, so nothing waits for a move). v39's own deploy ran from
 07:33:15 to 07:33:36 UTC after a merge at about 07:33:05, and v39 answered from the 07:34:00 call
 (scripts/morning-check/README.md:33-34), so a merge at :31-:50 normally lands well before :00; but signal-alerts is the
-seventh of eight in the deploy (deploy-functions.yml:76) and a queued deploy runs first, so it can run past :00 or into
-a share's window. The time of v40's first answer is noted from the run's record (`net._http_response`). If it is at or
-after the next :00, or inside a share's window, that close may be judged by both: v39's ride email 1 or notice (and a
+seventh of eight in the deploy (deploy-functions.yml:76) and a deploy already running finishes first (6.1), so it can
+run past :00 or into a share's window. The time of v40's first answer is noted from the run's record
+(`net._http_response`). If it is at or after the next :00, or inside a share's window, that close may be judged by both: v39's ride email 1 or notice (and a
 ride opened) and v40's fade, for one bar. The second `macd_rides` read (6.3 step 4) catches the ride; the rows of that
 hour's bars under v9's ids and the new id are counted (`select rule, pair, bar_time, count(*) from
 public.signal_alerts where kind = 'signal' and interval = '1h' and (rule like 'macdx%' or rule like 'stockmacd%') and
@@ -598,9 +740,27 @@ bar_time >= <that hour's bars' open> group by 1, 2, 3`: no user ids), and the ow
 ### 6.3 Order
 
 0. Done: the shelved v10 files are main's bytes again (9bcfd70, 3.5).
-1. This spec and the study's files: a PR with nothing under `supabase/functions/**`.
+1. This spec and the study's files: a PR with nothing under `supabase/functions/**`. In it, the specs this one replaces
+   are marked so no builder starts from them: research/macdfade15-prod-spec.md gets, under its title, the line
+   "**Superseded (2026-11-17) by research/macdfade1h-prod-spec.md, not to be built.** The owner then said
+   「やっぱりメールの判断1時間足で」; its line numbers were read on the shelved v10 files, which 9bcfd70 put back to
+   main's."; research/macdfade96-spec.md:3-4, which send the reader to the 15-minute spec as "the production spec", name
+   this file instead.
+1a. The numbers, before any of the function's code is written: 4.5's route (the summary.json re-run and its copy, or
+   the printed lines), every ⟨1h run: …⟩ filled, sections 4-5 read against them and this file corrected, the sales
+   page's 〔adverse〕 chosen (section 5): one commit of this file and the research/ledger copy, merged as step 1 is
+   (nothing under `supabase/functions/**`).
 2. The app's id parse, tag and plan line (section 5's first three items only), cut from origin/main; merged and
    published. Lovable's state is reported as given (e.g. `pending`).
+2a. The study check (7.2) on the function's branch, before the function's PR is merged (merging deploys at once,
+   6.1). The branch carries `_shared/macd-fade.ts`, research/macdfade-prod-check.ts and the workflow's new steps (7.2),
+   with `research/macdfade-prod-check.ts`, `supabase/functions/_shared/macd-fade.ts` and
+   `supabase/functions/signal-alerts/indicators.ts` (where `ridePaidAt` is) added to the workflow's push `paths`. The
+   workflow runs there by `workflow_dispatch` with `tf` `1h` (GitHub offers a dispatch only for a workflow on the
+   default branch, so after step 1's merge) or, in that PR, by adding the branch to its push `branches`
+   (.github/workflows/macdfade15.yml:25-28 list only the research branch today). The real job takes up to 180 minutes
+   (:151). Its run id is recorded in the function's PR; a failure, or a summary.json sha256 other than run 44099401423's,
+   stops the release.
 3. The function's PR (sections 3-4, logic.ts's `RULE_LABEL` (:506-509) and test-mail lists, the econ footer), merged per
    6.1-6.2.
 4. Once v40 is seen answering (its `FUNCTION_VERSION` in the run's record): the `macd_rides` read of 6.1 again, with
@@ -620,12 +780,17 @@ bar_time >= <that hour's bars' open> group by 1, 2, 3`: no user ids), and the ow
 
 ### 6.4 Rollback
 
-Revert the function's merge in minutes 31-50 of an hour, outside the shares' windows (6.2, the same reasoning the other
-way): v39 is deployed again and reads the same `'1h'` subscriptions; nothing to move back, no schema to undo. Deploy
-econ-calendar by name; revert and publish the screen's text PR; put the Routine's v9 prompt back (a copy kept before
-step 7). v39 starts with no ride open when the second read of 6.3 step 4 returned no row (v40 opens none); when it
-returned one, the owner's answer then decides. Fade rows and mails stay; the app keeps reading both ids. A rollback
-restores a form the owner left: only for a failure, and the owner is told.
+Revert the function's merge in minutes 31-50 of an hour, outside the 45 minutes after any share's close (6.2, the
+same reasoning the other way): v39 is deployed again and reads the same `'1h'` subscriptions; nothing to move back, no
+schema to undo. **Except** when v40 judges nothing (its runs fail every time, so no close is judged by it): then the
+revert is made at once, whatever the minute, since there is no judging of v40's for v39's to overlap and every minute
+of waiting costs every rule's mails. Deploy econ-calendar by name; revert and publish the screen's text PR; put the
+Routine's v9 prompt back (a copy kept before step 7). v39 starts with no ride open when the second read of 6.3 step 4
+returned no row (v40 opens none); when it returned one, the owner's answer then decides. Fade rows and mails stay; the
+app keeps reading both ids. **The v40 window** (from v40's first answer to v39's first answer again, both read from the
+run's record) is written down, and the restored Routine's prompt reads every bar opened in it as not v9's (v40 wrote no
+v9 entry and no `macd_ride_state` row there, so v9's check would otherwise expect what was never written), as the
+switch day does (7.3). A rollback restores a form the owner left: only for a failure, and the owner is told.
 
 ## 7. Checks
 
@@ -633,34 +798,52 @@ restores a form the owner left: only for a failure, and the owner is told.
 
 `npm test`, `npm run lint`, `npx tsc --noEmit`, `deno check` of signal-alerts, live-chart and econ-calendar, and `deno
 check scripts/morning-check/bench/sim.ts` (the v9 bench, on main's macd-ride.ts). No import of `macd-ride.ts` under
-`supabase/functions/` (grep). Function tests over fake tables: a pair's close judged at minutes 0, 3 and 5 (fresh
-instances): one email a follower, the same price (the 1-hour ask / bid close of the bar, from `hourQuotes`); a follower
+`supabase/functions/` (grep). 3.2's "nothing read or written each minute, no state row" is held two ways: a code-text
+check that no `rest(` or `readRows(` call in index.ts names `macd_rides` or `macd_ride_state` (today :695, :719,
+:750, :1025, :1040, :1641; comments may still name the tables, so the check reads calls, not every line), and, in the
+fake-table tests below, a pairs run, a gold run and a shares run each make no request to either table. Function tests
+over fake tables: a pair's close judged at minutes 0, 3 and 5 (fresh instances): one email a follower, the same price (the 1-hour ask / bid close of the bar, from `hourQuotes`); a follower
 whose lookup failed, mailed at the next judging; a row of the other side: nothing, `other_side`; not fresh (31
 minutes): nothing; a missing quote: `no_price`, judged again; gold judged a minute after a close and again up to :29;
 a share read again in its window: one email a follower; a Tokyo bar arriving 15 minutes late: judged and mailed (fresh
 at 45); the row's `interval` `1h`, `entry`, null `stop` and `target`, `closed_at`, `rule`; each mail variant in ja and
 en (a pair's BUY and SELL, gold's, a US and a Tokyo share's, a session's last bar), each pinned to the words of
-4.3-4.5: among them the share mails' timing and arrival-price sentences (4.4 item 8: a Tokyo share's without
-「数分後」) and their Yahoo source line, app link, 「株の MACD」 / "Stock MACD" how-to-stop line and disclaimer (4.4 item
-11), and the measured paragraph's re-read clause, 「（マイナスが損）」 / "(a minus is a loss)", 「入らなかった注文はありま
-せん」 / "no order went unfilled" and the baseline's parenthesis after 〔baseMean〕 (4.5); 4.1's guards; the sales page's
-three texts of section 5, ja and en; the record's `fade` and tags; the econ digest's recipients unchanged (`1h`). The
-shares' bar functions (`stockBarEnd`, `CLOSES`, `stockBarBreak`) are unchanged and keep their #391 tests.
+4.3-4.5: among them each kind's timing sentence of item 8 (a pair's reads, gold's 1 to 30 minutes, a US share's
+45-minute sentence, a Tokyo share's measured delay; none says 「数分後」 / "a few minutes"), each with 「実際に何分で届く
+かは測っていません」 / "how long it takes to arrive has not been measured" where 4.3-4.4 give it, and the arrival-price
+sentence; item 10 of the pairs' and gold's mails and of the shares' (the owner named only for what 4.3 / 4.4 item 10
+list; the pane, and the shares' 1-hour bars, as facts); the share mails' Yahoo source line, app link, 「株の MACD」 /
+"Stock MACD" how-to-stop line and disclaimer (4.4 item 11); the measured paragraph's re-read clause, 「（マイナスが
+損）」 / "(a minus is a loss)", 「入らなかった注文はありません」 / "no order went unfilled", the baseline's 〔baseWhat〕
+and its parenthesis after 〔baseMean〕, and the 〔open〕 = 0 and 〔tp〕 = 0 variants built from summaries made for the
+test (4.5); the econ footer's two sentences (4.1) and the econ digest's recipients unchanged (`1h`); 4.1's guards;
+the record's `fade` and tags. In the PRs of 6.3 steps 2 and 6 (section 5's tests): the fade rows' tags, the shares'
+「（株の MACD・逆張り）」 / " (Stock MACD fade)" among them; the notes' version of the measured paragraph (4.5) word for
+word; the sales page's three texts of section 5, ja and en, with the 〔adverse〕 chosen. The two order guards of
+indicator-alerts.test.tsx, re-pointed to `fadeAtClose` (3.5), stay. The shares' bar functions (`stockBarEnd`,
+`CLOSES`, `stockBarBreak`) are unchanged and keep their #391 tests.
 
 ### 7.2 The study check: the shared function gives the study's entries
 
-`research/macdfade-prod-check.ts` (new; reads `TF` as the study does; run with `TF=1h` in
-.github/workflows/macdfade15.yml after the study, on the walk files of `MODE=walkfiles` and on the real run). It loads
-the five pairs' 1-hour bars exactly as the study does (research/macdfade15.ts:1057-1066: `loadTf(src, pair, "1h",
-LOAD_FROM, END, st, weekendOutOf("inside"))` → `quotesOf` → `chartOf`'s `historyRead(pair, "1h", qs, END)`, :85-95; the
-study's `LOAD_FROM` 2023-10-01T00:00:00Z, `START`, `END`, :56-58), and for every bar `n` with its close in `[START,
-END)` and 600 bars up to it calls `fadeCloseEntryAt` on the 600 closes ending at `n`, with the price from the bar's own
-quote through `ridePaidAt`. A bar whose three reads (`T` + 0, 3, 5 minutes + 1 second; :78-79) all fall in
-`isPossiblyClosed` is counted as not mailed. Against the study's rows.csv (research/out/macdfade1h, `dir = fade`),
-keyed by pair|open: the mailed entries are the same set of bars, each with the same `zside`, `side`, entry and
-`share0`; per pair, the not-mailed ones equal `notMailed` and all of them `signals`. Any difference: the first 20
-printed and the job fails. The study is written apart from the shared code and checked by its own Python; this check
-ties the shipped function to it.
+`research/macdfade-prod-check.ts` (new). **What it reads:** `TF` (must be `1h`), `MODE`, `OUT`, `START`, `END` and
+`LOAD_FROM` from the environment as the study does (research/macdfade15.ts:50-59), and the files from the same place:
+with `MODE=walkfiles` the walk's files under `$OUT/gmo`, never fetched; with `MODE=real` research/.cache (:1227). It
+loads the five pairs' 1-hour bars exactly as the study does (:1057-1069: `loadTf(src, pair, TF, LOAD_FROM, END, st,
+weekendOutOf("inside"))` → `quotesOf` → `chartOf`'s `historyRead(pair, TF, qs, END)`, :85-95), and for every bar `n`
+with its close in `[START, END)` and 600 bars up to it calls `fadeCloseEntryAt` on the 600 closes ending at `n`, with
+the price from the bar's own quote through `ridePaidAt`. A bar whose three reads (`T` + 0, 3, 5 minutes + 1 second;
+:78-79) all fall in `isPossiblyClosed` is counted as not mailed. Against the study's `$OUT/rows.csv` (`dir = fade`) and
+`$OUT/summary.json`, keyed by pair|open: the mailed entries are the same set of bars, each with the same `zside`,
+`side`, entry and `share0`; per pair, the not-mailed ones equal `notMailed` and all of them `signals`. Any difference:
+the first 20 printed and the job fails.
+
+**Where it runs:** in .github/workflows/macdfade15.yml, as steps added on the function's branch (6.3 step 2a): in the
+syn job after each `walkfiles` step (walks 1 and 2, and the untidy walk 1, each with that step's `OUT` and the syn
+job's 1-hour period, :81-83, :97-137), and in the real job after "The Python on the same files and rows" (:217-218),
+with the real job's `OUT` (research/out/macdfade1h, :153) and the workflow's defaults (:68-74). The real job's step
+also stops unless that run's summary.json sha256 is run 44099401423's (`60edab22…a9e2`, 4.5): the study and its files
+are then those whose numbers fill `FADE_MEASURED`. The study is written apart from the shared code and checked by its
+own Python; this check ties the shipped function to it.
 
 ### 7.3 The morning check of the new form (statements `pairs-v11` / `gold-v11`; README section)
 
@@ -688,16 +871,23 @@ ties the shipped function to it.
 
 ## 8. Not measured, not checked
 
-- **Not measured:** this form's numbers (the study's `TF=1h` real run is in Actions; every ⟨1h run: …⟩ of 4.5 waits
-  for it); gold and the shares with this form; the minutes between a close and the mail and the price's move in them;
-  how often a close is not judged; the Twelve Data reads a day (up to two a gold close, 24 closes a day); whether the
-  fade's mean differs from the baseline's beyond chance.
+- **Measured, not yet in this file:** the five pairs' numbers of this form (the study's `TF=1h` real run, run
+  44099401423, recorded in research/macdfade15-spec.md by d96bf56); every ⟨1h run: …⟩ of 4.5 and section 5 waits for
+  4.5's route (6.3 step 1a). The run's summary.json itself is not in the repository (its artifact was not downloaded).
+- **Not measured:** gold and the shares with this form; the minutes between a close and the mail (pairs, gold, US
+  shares; Tokyo's delay was measured 2026-11-06) and the price's move in them; how often a close is not judged; the
+  Twelve Data reads a day (up to two a gold close, 24 closes a day); whether the fade's mean differs from the
+  baseline's beyond chance (the study sets its gaps beside ten driftless walks' and calls that not a test).
 - **Not checked:** whether production's GMO 1-hour bars (`fetchLiveQuotes`) equal the study's loader's (`mergeSides`);
   whether a feed revises a closed bar between judgings (`other_side`); who follows which chart and how many `macdx` /
   `stockmacd` rows there are on which interval (3.6's "no DML" rests on the code); how many v9 rides are open; whether
   every 1-hour day file since v33 is stored; the Routine's prompt; Lovable's live state; how long v40's deploy will take
   (6.2: the second `macd_rides` read and the count decide); the size of the v11 statements; the claims kept from today's
-  sales texts (section 5, the sales page's last sub-item); a real concurrent run of v39 and v40 during the switch.
+  sales texts (section 5, the sales page's last sub-item); a real concurrent run of v39 and v40 during the switch;
+  GitHub's concurrency and `workflow_dispatch` behaviour in this repository's runs (6.1, 6.3 step 2a: from GitHub's
+  documented rules only); whether a re-run of the real 1-hour job prints the same summary.json (6.3 steps 1a and 2a
+  stop if not); whether the job log's copy of summary.json keeps its bytes (4.5 checks its sha256); whether
+  research/macdfade-prod-check.ts can import `ridePaidAt` from signal-alerts/indicators.ts as a research script.
 - **Writer's readings, not asked again (section 1):** the pane on 1-hour bars (the newest 120 1-hour bars on 600
   closes); the shares staying on their 1-hour bars.
 - **Read:** the 15-minute production spec whole; the study spec whole; the earlier 1-hour draft whole (its facts checked
@@ -710,8 +900,21 @@ ties the shipped function to it.
   cited lines and describe heads; morning-check README :1-40, :123-140, pairs-v8.sql's head and its 0.95 / id / entry
   lines, gold-v8.sql's head and 0.95 lines, pairs-v9.sql's FRONT and price lines; research/macdfade15.ts :26-95 and
   :1057-1066 and the workflow's `TF` lines).
-  **Not read:** production (by rule); logic.ts's admin list; the rest of research/macdfade15.ts, macdfade15-check.py
-  and the workflow; the study's 1-hour output; docs §8.
+  **Read by the revision after the three reviews** (2026-11-17, on 6cbee35): research/macdfade15-spec.md :176-440
+  (its 1-hour section and both results, d96bf56); .github/workflows/macdfade15.yml whole; research/macdfade15.ts
+  :50-100, :336-348, :495-515, :548-600, :1040-1080, :1195-1240; deploy-functions.yml :18-40, :60-90; indicators.ts
+  :325-333, :1284-1345; index.ts :1170-1190 and the lines naming `macd_rides` / `macd_ride_state`; stocks.ts :110-147,
+  :368-380, :430-445 and its `Stock MACD` lines; src/test/indicator-alerts.test.tsx :14-60, :990-1022, :1160-1192,
+  :1236-1262, :1450-1457, :1506, :2139; src/test/stockmacd-alerts.test.tsx :1-104, :180-200, :755-822 and its describe
+  and it heads; src/test/signal-alert-settings.test.tsx :410-420, :484-495, :565, :736-774, :853, :862-872 and its it
+  heads; src/test/econ-digest.test.ts :275-290; src/test/landing.test.tsx :45-60; econ-calendar/digest.ts :418-456;
+  SignalAlertSettings.tsx :105-130; ja.ts :2106-2114, :2135-2155; en.ts :2005-2007 and its date lines;
+  research/macdfade15-prod-spec.md :1-60 and its item 10; research/macdfade96-spec.md :1-80.
+  **Not read:** production (by rule); logic.ts's admin list; the run's job log and its artifact; research/
+  macdfade15-check.py; docs §8.
 - **Run by this writer:** `git diff --stat origin/main` (empty under `supabase/`, `src/`, `scripts/`); `git grep` of
   the ids and of `fade` under `supabase/` and `src/`; one node check of the two ids against copies of the app's regexes
-  and of `fadeRuleId`. Nothing else: no test, no app, no function, no study, no production.
+  and of `fadeRuleId`. The revision ran only `git log`, `git show --stat`, `git diff --stat origin/main`, `git grep`
+  of the ids and of `fade`, `git log -S fade96of120` under `supabase/` and `src/` (empty), 4.1's two guard patterns
+  over sections 4-5 (node), and file reads. Nothing else: no test, no app, no function, no study, no workflow, no
+  production.
