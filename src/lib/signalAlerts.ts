@@ -59,6 +59,21 @@ const rideOutPctOfId = (v: unknown): number | null => {
   return m ? Number(m[2]) : null;
 };
 
+// The MACD fade (research/macdfade1h-prod-spec.md section 5): one email when the blue line closes at 96% of the newest
+// 120 1-hour bars' pane with the bar before not at 96%, the fade side, no take-profit and no stop price. Its ids say
+// "fade96of120_in" (the pairs' and gold's "macdx_12_26_9_w600_1h_fade96of120_in_v11", the shares'
+// "stockmacd_12_26_9_w600_1h_fade96of120_in_v4"); the level is read from the id. RIDE_ID never matches them and this
+// never matches a ride's id, so a v9 row reads as before and a v8 or older row as an earlier rule's
+export interface FadeOf {
+  pct: number;
+}
+const FADE_ID = /^(?:macdx|stockmacd)_.*_fade(\d+)(?:tp[0-9a-z]+)?of120_in_/;
+const fadeOfId = (v: unknown): FadeOf | null => {
+  if (typeof v !== "string") return null;
+  const m = FADE_ID.exec(v);
+  return m ? { pct: Number(m[1]) } : null;
+};
+
 // #108: what a recorded signal did after it fired
 export type SignalOutcome = "win" | "loss" | "ambiguous" | "expired" | "no_data";
 
@@ -106,6 +121,9 @@ export interface AlertRow {
   // v10: the exit level of that ride in percent, from the row's id (v9 96, v10 95);
   // null for every other row
   rideOutPct: number | null;
+  // the MACD fade's email (its one mail: an entry with no take-profit or stop price), with its level in percent from
+  // the row's id (96); null for every other row, a ride's included
+  fade: FadeOf | null;
   pair: string | null;
   interval: string | null;
   side: "BUY" | "SELL" | null;
@@ -233,6 +251,7 @@ const alertRow = (v: unknown): AlertRow | null => {
     rule: ruleOfId(r.rule),
     ride: rideOfId(r.rule),
     rideOutPct: rideOutPctOfId(r.rule),
+    fade: fadeOfId(r.rule),
     pair: str(r.pair),
     interval: str(r.interval),
     side: r.side === "BUY" || r.side === "SELL" ? r.side : null,

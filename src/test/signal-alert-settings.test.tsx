@@ -733,41 +733,105 @@ describe("#275 the MACD ride (once the peak-and-valley rule) in the email-alert 
     expect(withMacdx({ alerts: stockRows }).alerts.map((r) => [r.rule, r.ride])).toEqual([["stockmacd", "in"], ["stockmacd", "at"], ["stockmacd", "out"]]);
   });
 
-  // v10 (research/macdride10-spec.md sections 2 and 8): the pairs' and gold's ids say "touch90to95of120", the shares'
-  // "ride90to95of120" from their v3; the level of email 2 and the notice is each row's own, read from its id, so a v9
-  // row still says 96% beside a v10 row's 95%, and no v10 row is shown as an earlier rule's
-  it("v10 reads the touch ids and the shares' v3 ids, each row at its own level (v9 96%, v10 95%), in Japanese and English", async () => {
-    const v10Rows = [
-      { id: "t-in", kind: "signal", rule: "macdx_12_26_9_w600_1h_touch90to95of120_in_v10", pair: "USD/JPY", interval: "1h", side: "BUY", closed_at: "2026-11-17T01:23:00.000Z", entry: 158.4, stop: null, target: null, status: "sent", created_at: "2026-11-17T01:23:10.000Z" },
-      { id: "t-at", kind: "signal", rule: "macdx_12_26_9_w600_1h_touch90to95of120_at_v10", pair: "USD/JPY", interval: "1h", side: "SELL", closed_at: "2026-11-17T02:07:00.000Z", entry: 158.2, stop: null, target: null, status: "sent", created_at: "2026-11-17T02:07:10.000Z" },
-      { id: "t-out", kind: "signal", rule: "macdx_12_26_9_w600_1h_touch90to95of120_out_v10", pair: "USD/JPY", interval: "1h", side: "BUY", closed_at: "2026-11-17T03:10:00.000Z", entry: 158.4, stop: null, target: 158.9, status: "sent", created_at: "2026-11-17T03:10:05.000Z" },
-      { id: "v9-out", kind: "signal", rule: "macdx_12_26_9_w600_1h_ride90to96of120_out_v9", pair: "EUR/JPY", interval: "1h", side: "SELL", closed_at: "2026-11-12T03:11:00.000Z", entry: 171.2, stop: null, target: 171.5, status: "sent", created_at: "2026-11-12T03:11:05.000Z" },
-      { id: "s3-at", kind: "signal", rule: "stockmacd_12_26_9_w600_1h_ride90to95of120_at_v3", pair: "NVDA", interval: "1h", side: "BUY", closed_at: "2026-11-17T16:30:00.000Z", entry: 181, stop: null, target: null, status: "sent", created_at: "2026-11-17T16:30:40.000Z" },
-      { id: "s3-out", kind: "signal", rule: "stockmacd_12_26_9_w600_1h_ride90to95of120_out_v3", pair: "NVDA", interval: "1h", side: "SELL", closed_at: "2026-11-17T17:30:00.000Z", entry: 180.12, stop: null, target: 178.5, status: "sent", created_at: "2026-11-17T17:30:40.000Z" },
-    ];
-    const read = withMacdx({ alerts: v10Rows }).alerts;
-    expect(read.map((r) => [r.rule, r.ride, r.rideOutPct])).toEqual([
-      ["macdx", "in", 95], ["macdx", "at", 95], ["macdx", "out", 95], ["macdx", "out", 96], ["stockmacd", "at", 95], ["stockmacd", "out", 95],
+  // the MACD fade (research/macdfade1h-prod-spec.md section 5): one email a bar, an entry with the price in only (no
+  // take-profit or stop price), its id "…_1h_fade96of120_in_v11" (the shares' "…_v4", 3.7); tagged as the fade, a share's
+  // as the stock MACD's fade (not as a v9 share email 1, whose side was the other way round), its side in its colour,
+  // and the plan line 「入り 〔entry〕 / 利確・損切りなし」. v9's and older rows read as before (the tests above)
+  const fadeRows = [
+    { id: "f-pair", kind: "signal", rule: "macdx_12_26_9_w600_1h_fade96of120_in_v11", pair: "USD/JPY", interval: "1h", side: "SELL", closed_at: "2026-11-18T02:00:00.000Z", entry: 158.412, stop: null, target: null, status: "sent", created_at: "2026-11-18T02:05:02.000Z" },
+    { id: "f-gold", kind: "signal", rule: "macdx_12_26_9_w600_1h_fade96of120_in_v11", pair: "XAU/USD", interval: "1h", side: "BUY", closed_at: "2026-11-18T03:00:00.000Z", entry: 4139.89, stop: null, target: null, status: "sent", created_at: "2026-11-18T03:01:20.000Z" },
+    { id: "f-share", kind: "signal", rule: "stockmacd_12_26_9_w600_1h_fade96of120_in_v4", pair: "NVDA", interval: "1h", side: "SELL", closed_at: "2026-11-18T15:30:00.000Z", entry: 180.12, stop: null, target: null, status: "sent", created_at: "2026-11-18T15:30:40.000Z" },
+    { id: "v9-share-in", kind: "signal", rule: "stockmacd_12_26_9_w600_1h_ride90to96of120_in_v2", pair: "NVDA", interval: "1h", side: "BUY", closed_at: "2026-11-12T15:30:00.000Z", entry: 181, stop: null, target: null, status: "sent", created_at: "2026-11-12T15:30:40.000Z" },
+    { id: "v9-in", kind: "signal", rule: "macdx_12_26_9_w600_1h_ride90to96of120_in_v9", pair: "USD/JPY", interval: "1h", side: "BUY", closed_at: "2026-11-12T01:00:00.000Z", entry: 158.4, stop: null, target: null, status: "sent", created_at: "2026-11-12T01:00:20.000Z" },
+    { id: "v8", kind: "signal", rule: "macdx_12_26_9_w600_1h_z95of120_v8", pair: "USD/JPY", interval: "1h", side: "SELL", closed_at: "2026-11-11T01:00:00.000Z", entry: 158.0, stop: 158.13, target: 157.96, status: "sent", created_at: "2026-11-11T01:00:20.000Z" },
+  ];
+  // research/macdfade96-spec.md 6.1's two patterns (no text says a price will come back), as 4.1 runs them
+  const BACK_JA = /(必ず|いずれ|きっと|そのうち|やがて)[^。]{0,8}戻|戻ってく|戻ってき|戻るはず|戻ります/;
+  const BACK_EN =
+    /\b(always|will|surely|certainly|eventually)\s+(come|comes|go|goes)\s+back\b|\b(always|will|surely|certainly|eventually)\s+(return|returns|recover|recovers)\b|\bcomes?\s+back\s+(eventually|in\s+the\s+end)\b/i;
+
+  it("the MACD fade's rows: a pair's, gold's and a share's, each an entry in its side's colour, tagged as the fade, with the price in and no take-profit or stop, in Japanese and English", async () => {
+    const read = withMacdx({ alerts: fadeRows }).alerts;
+    // the fade is read from the id (its level 96); a ride's and an older row's are not the fade's, and a fade row is no ride's
+    expect(read.map((r) => [r.rule, r.ride, r.rideOutPct, r.fade])).toEqual([
+      ["macdx", null, null, { pct: 96 }],
+      ["macdx", null, null, { pct: 96 }],
+      ["stockmacd", null, null, { pct: 96 }],
+      ["stockmacd", "in", 96, null],
+      ["macdx", "in", 96, null],
+      ["macdx", null, null, null],
     ]);
-    // a row that is not a ride's has no level
-    expect(withMacdx({ alerts: rideRows }).alerts.map((r) => r.rideOutPct)).toEqual([96, 96, 96, 96, null]);
-    const { unmount } = render(<SignalAlertSettings call={async () => withMacdx({ alerts: v10Rows })} />);
+    expect(read.map((r) => [r.interval, r.closedAt, r.entry, r.stop, r.target])).toEqual([
+      ["1h", "2026-11-18T02:00:00.000Z", 158.412, null, null],
+      ["1h", "2026-11-18T03:00:00.000Z", 4139.89, null, null],
+      ["1h", "2026-11-18T15:30:00.000Z", 180.12, null, null],
+      ["1h", "2026-11-12T15:30:00.000Z", 181, null, null],
+      ["1h", "2026-11-12T01:00:00.000Z", 158.4, null, null],
+      ["1h", "2026-11-11T01:00:00.000Z", 158.0, 158.13, 157.96],
+    ]);
+    // the v9 rows' and the earlier rule's tests above hold for every other id
+    for (const r of [...rideRows, { ...rideRows[0], rule: "macdx_12_26_9_w600_1h_touch90to95of120_in_v10" }, { ...rideRows[0], rule: "stockmacd_12_26_9_w600_1h_z95of120_v1" }]) {
+      expect(withMacdx({ alerts: [r] }).alerts[0].fade, r.rule).toBeNull();
+    }
+    const { unmount } = render(<SignalAlertSettings call={async () => withMacdx({ alerts: fadeRows })} />);
     let rows = await screen.findAllByTestId("signal-alert-row");
     expect(rows).toHaveLength(6);
-    expect(rows[0].textContent).toContain("USD/JPY 1時間 買い（MACD の流れ）");
-    expect(rows[0].textContent).not.toContain("前の決まり");
-    expect(rows[1].textContent).toContain("USD/JPY 1時間 知らせ（もう95%）（MACD の流れ）");
-    expect(rows[2].textContent).toContain("USD/JPY 1時間 95%に届いた（買いの分）（MACD の流れ）");
-    expect(rows[3].textContent).toContain("EUR/JPY 1時間 96%に届いた（売りの分）（MACD の流れ）");
-    expect(rows[4].textContent).toContain("NVDA 1時間 知らせ（もう95%）（株の MACD）");
-    expect(rows[5].textContent).toContain("NVDA 1時間 95%に届いた（売りの分）（株の MACD）");
+    const label = (i: number) => rows[i].querySelector("span:not(.font-mono)") as HTMLElement;
+    const time = (i: number) => rows[i].querySelector("span.font-mono") as HTMLElement;
+    const plan = (i: number) => rows[i].querySelector("[data-testid='signal-alert-fade-plan']");
+    // a pair's: SELL in red, the bar's close as the time (JST), the 1-hour timeframe from its interval
+    expect(label(0).textContent).toBe("USD/JPY 1時間 売り（MACD の逆張り）");
+    expect(label(0).className).toContain("text-destructive");
+    expect(time(0).textContent).toBe("11-18 11:00");
+    expect(plan(0)!.textContent).toBe("入り 158.412 / 利確・損切りなし");
+    // gold's: BUY in green
+    expect(label(1).textContent).toBe("XAU/USD 1時間 買い（MACD の逆張り）");
+    expect(label(1).className).toContain("text-success");
+    expect(time(1).textContent).toBe("11-18 12:00");
+    expect(plan(1)!.textContent).toBe("入り 4139.89 / 利確・損切りなし");
+    // a share's: tagged as the stock MACD's fade, not as a v9 share email 1
+    expect(label(2).textContent).toBe("NVDA 1時間 売り（株の MACD・逆張り）");
+    expect(label(2).className).toContain("text-destructive");
+    expect(time(2).textContent).toBe("11-19 00:30");
+    expect(plan(2)!.textContent).toBe("入り 180.12 / 利確・損切りなし");
+    // v9's rows keep their tags, and no fade plan line; the earlier rule's row its own plan line
+    expect(label(3).textContent).toBe("NVDA 1時間 買い（株の MACD）");
+    expect(label(4).textContent).toBe("USD/JPY 1時間 買い（MACD の流れ）");
+    expect(label(5).textContent).toBe("USD/JPY 1時間 売り（MACD・前の決まり）");
+    expect(rows[5].textContent).toContain("目安 158.000 / 損切り 158.130 / 利確 157.960");
+    for (const i of [3, 4, 5]) expect(plan(i), String(i)).toBeNull();
+    for (const i of [0, 1, 2]) {
+      const t = rows[i].textContent!;
+      // no price is labelled a take-profit or a stop: 「利確」 and 「損切り」 only in the plan line's 「利確・損切りなし」
+      expect(t.replace("利確・損切りなし", ""), String(i)).not.toMatch(/利確|損切り|目安/);
+      expect(t, String(i)).not.toContain("MACD の流れ");
+      expect(t, String(i)).not.toContain("前の決まり");
+      expect(rows[i].querySelector("[data-testid='signal-alert-ride-prices']"), String(i)).toBeNull();
+      expect(BACK_JA.test(t), String(i)).toBe(false);
+    }
     unmount();
-    render(<SignalAlertSettings call={async () => withMacdx({ alerts: v10Rows })} />, "en");
+    render(<SignalAlertSettings call={async () => withMacdx({ alerts: fadeRows })} />, "en");
     rows = await screen.findAllByTestId("signal-alert-row");
-    expect(rows[1].textContent).toContain("Notice (already at 95%)");
-    expect(rows[2].textContent).toContain("Reached 95% (the BUY side)");
-    expect(rows[3].textContent).toContain("Reached 96% (the SELL side)");
-    expect(rows[5].textContent).toContain("Reached 95% (the SELL side)");
+    expect(label(0).textContent).toBe("USD/JPY 1h Sell (MACD fade)");
+    expect(plan(0)!.textContent).toBe("In 158.412 / no take profit, no stop");
+    expect(label(1).textContent).toBe("XAU/USD 1h Buy (MACD fade)");
+    expect(plan(1)!.textContent).toBe("In 4139.89 / no take profit, no stop");
+    expect(label(2).textContent).toBe("NVDA 1h Sell (Stock MACD fade)");
+    expect(plan(2)!.textContent).toBe("In 180.12 / no take profit, no stop");
+    expect(label(3).textContent).toBe("NVDA 1h Buy (Stock MACD)");
+    expect(label(4).textContent).toBe("USD/JPY 1h Buy (MACD ride)");
+    for (const i of [0, 1, 2]) {
+      const t = rows[i].textContent!;
+      expect(t.replace("no take profit, no stop", "").toLowerCase(), String(i)).not.toMatch(/take.profit|stop|target/);
+      expect(t, String(i)).not.toContain("MACD ride");
+      expect(BACK_EN.test(t), String(i)).toBe(false);
+    }
+    // the two new texts themselves
+    for (const [d, tag] of [[ja, "（MACD の逆張り）"], [en, " (MACD fade)"]] as const) expect(d.alerts.ruleTagFade.macdx).toBe(tag);
+    expect(ja.alerts.ruleTagFade.stockmacd).toBe("（株の MACD・逆張り）");
+    expect(en.alerts.ruleTagFade.stockmacd).toBe(" (Stock MACD fade)");
+    expect(ja.alerts.fadePlan("1")).not.toContain("利確の目安");
+    expect(en.alerts.fadePlan("1").toLowerCase()).not.toContain("take-profit level");
   });
 
   it("is in English too", async () => {
