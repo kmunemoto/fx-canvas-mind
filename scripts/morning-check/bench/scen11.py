@@ -42,10 +42,18 @@ def day_of(ms):
     return s, s + 86400000
 
 
+# production's go-live constant (README v11.1, set 2026-11-18): the bench puts its own go-live instants in its place; `raw`
+# puts the marker of the form before the release back in its place (p23 / g10: a statement with the marker in does not run)
+PROD_LIVE = "1795003200000::bigint"
+
+
 def run(kind, change, s, e, live_p=LIVE_P, live_g=LIVE_G, raw=False):
     text = TEXT[kind].replace("{{START_MS}}", str(s)).replace("{{END_MS}}", str(e))
-    if not raw:
+    if raw:
+        text = text.replace(PROD_LIVE, "{{GO_LIVE_MS_PAIRS}}::bigint" if kind == "pairs" else "{{GO_LIVE_MS_GOLD}}::bigint")
+    else:
         text = text.replace("{{GO_LIVE_MS_PAIRS}}", str(live_p)).replace("{{GO_LIVE_MS_GOLD}}", str(live_g))
+        text = text.replace(PROD_LIVE, f"{live_p if kind == 'pairs' else live_g}::bigint")
     r = subprocess.run(BASE + ["-d", DB[kind], "-q", "-v", "ON_ERROR_STOP=1", "-At", "-F", "\x1f"], input="begin;\n" + change + "\n" + text + ";\nrollback;\n",
                        capture_output=True, text=True)
     if r.returncode:

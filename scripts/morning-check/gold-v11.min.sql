@@ -8,7 +8,7 @@ to_char((to_timestamp((start_ms + 10800000) / 1000.0) at time zone 'UTC')::date 
 (end_ms - start_ms = 86400000 and start_ms % 86400000 = 75600000) as range_ok
 from p
 ),
-syms as (select 'XAU_USD'::text as symbol, 'XAU/USD'::text as pair, 1 as ord, {{GO_LIVE_MS_GOLD}}::bigint as live_ms, 2 as d),
+syms as (select 'XAU_USD'::text as symbol, 'XAU/USD'::text as pair, 1 as ord, 1795003200000::bigint as live_ms, 2 as d),
 grow0 as (
 select f.bars, f.fetched_at, floor(extract(epoch from f.fetched_at) * 1000)::bigint as fetched_ms
 from public.live_chart_fallback f where f.pair = 'XAU/USD' and f.interval = '1h'

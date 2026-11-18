@@ -28,11 +28,11 @@ pp as (
 -- ===== FRONT (gold): public.live_chart_fallback (XAU/USD, 1h) -> us(symbol, ot, seq, m8, d), the closed 1-hour bars production judges on =====
 -- instrument table (gold): the live_chart_fallback pair, the app's pair name, display order, the instant from which the v11 rule (signal-alerts v40, the MACD fade) was live
 -- for gold, and the decimals of the chart's rounding for gold (decimalsOf: 2).
--- live_ms = GO_LIVE_MS_GOLD, A PLACEHOLDER TO BE SET AT THE RELEASE (README.md v11.1): the open (epoch ms) of the first 1-hour bar v40 judged for gold, read from the run's
--- record in net._http_response (research/macdfade1h-prod-spec.md 6.2). Gold's close is looked at from minute 1 to minute 29 after it, the pairs' at minutes 0, 3 and 5, so
--- when v40 first answered between minute 5 and minute 29 of an hour, gold's first judged bar is one bar earlier than the pairs' (that hour's close was v39's for the pairs
--- and v40's for gold). Until the marker is replaced by that number (here, then bash build.sh), the statement does not run: the marker is not SQL.
-syms as (select 'XAU_USD'::text as symbol, 'XAU/USD'::text as pair, 1 as ord, {{GO_LIVE_MS_GOLD}}::bigint as live_ms, 2 as d),
+-- live_ms = 1795003200000 (2026-11-18 12:00 UTC), set at the release (README.md v11.1): the open of the first 1-hour bar v40 judged for gold, read from the run's record
+-- in net._http_response (research/macdfade1h-prod-spec.md 6.2): v40 first answered at 12:40:00 UTC and first judged gold's bar opened at 12:00 UTC (13:01 to 13:28 UTC),
+-- the same bar as the pairs'. (Gold's close is looked at from minute 1 to minute 29 after it, the pairs' at minutes 0, 3 and 5: had v40 first answered between minute 5
+-- and minute 29 of an hour, gold's first judged bar would have been one bar earlier than the pairs'.)
+syms as (select 'XAU_USD'::text as symbol, 'XAU/USD'::text as pair, 1 as ord, 1795003200000::bigint as live_ms, 2 as d),
 -- gold has ONE stored row (the latest read of Twelve Data); the sweep replaces it at every read, so older versions of the row do not exist
 grow0 as (
   select f.bars, f.fetched_at, floor(extract(epoch from f.fetched_at) * 1000)::bigint as fetched_ms
