@@ -420,7 +420,9 @@ export const renderDigestMail = (d: Digest, lang: Lang, nowMs: number): Mail => 
       n > 0 ? [soonHead, ...byDay(d.soon, "ja")].join("\n") : `${soonHead}\n大きな予定はありません。`,
       d.later.length > 0 ? [laterHead, ...byDay(d.later, "ja")].join("\n") : `${laterHead}\nありません。`,
       notes,
-      `このメールは、売買のメール（MACD の流れ）を受け取っている方に、日本時間の平日の朝に1通送っています。選び方: 物価（CPI など）・中央銀行（政策金利・声明・会見・議事要旨・発言）・GDP・中国の景気の数字・Forex Factory の重要度が「高」のもの。このメールだけを止める画面のスイッチはまだありません。止めるには、アプリの「設定」→「メール通知」で「MACD の流れ」のチェックを外してください（売買のメールも止まります）。\n${APP_URL}`,
+      // (signal-alerts v40, research/macdfade1h-prod-spec.md 4.1: the rule is named 「MACD の逆張り」; the tab keeps
+      // 「MACD の流れ」 until the screen's texts are out, so both are named)
+      `このメールは、売買のメール（MACD の逆張り）を受け取っている方に、日本時間の平日の朝に1通送っています。選び方: 物価（CPI など）・中央銀行（政策金利・声明・会見・議事要旨・発言）・GDP・中国の景気の数字・Forex Factory の重要度が「高」のもの。このメールだけを止める画面のスイッチはまだありません。止めるには、アプリの「設定」→「メール通知」で「MACD の逆張り」（画面が新しくなる前は「MACD の流れ」）のチェックを外してください（売買のメールも止まります）。\n${APP_URL}`,
       "本メールは参考情報であり、投資助言ではありません。取引の最終判断はご自身の責任で行ってください。",
     ]);
   }
@@ -449,7 +451,8 @@ export const renderDigestMail = (d: Digest, lang: Lang, nowMs: number): Mail => 
     n > 0 ? [soonHead, ...byDay(d.soon, "en")].join("\n") : `${soonHead}\nNo big events.`,
     d.later.length > 0 ? [laterHead, ...byDay(d.later, "en")].join("\n") : `${laterHead}\nNone.`,
     notes,
-    `This email goes to those who receive the trade emails (MACD ride), once each weekday morning in Japan. Listed: prices (CPI and the like), central banks (rates, statements, press conferences, minutes, speeches), GDP, China's activity numbers, and what Forex Factory calls high impact. There is no switch for this email alone yet: unticking "MACD ride" under Settings → Email alerts stops it, and the trade emails too.\n${APP_URL}`,
+    // (signal-alerts v40: the rule named "MACD fade", the tab both ways until the screen's texts are out)
+    `This email goes to those who receive the trade emails (MACD fade), once each weekday morning in Japan. Listed: prices (CPI and the like), central banks (rates, statements, press conferences, minutes, speeches), GDP, China's activity numbers, and what Forex Factory calls high impact. There is no switch for this email alone yet: unticking "MACD fade" ("MACD ride" until the screen is updated) under Settings → Email alerts stops it, and the trade emails too.\n${APP_URL}`,
     "This email is for information only and is not investment advice. Every trading decision is your own.",
   ]);
 };

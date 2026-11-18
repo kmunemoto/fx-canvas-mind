@@ -1,15 +1,18 @@
 // #391 (docs §8.134): the MACD email on shares (signal-alerts v35) — the 22 shares' hourly bars from Yahoo, each
 // session's bar closes (Tokyo's lunch break and closing auction, New York's 16:00, daylight saving), when a bar is in,
 // the run's steps — and its tab in the settings.
-// #397 (docs §8.150; research/macdride-spec.md sections 2, 6, 7 and 8): from v39 that email is the ride of the pairs'
-// MACD email, judged at 1-hour closes: the three rule ids, what a read of a share's bars does (the rides reached by a
-// CLOSE, late or not; the close step at the newest closed bar), the three mails' texts, and the "stocks" run of the
-// REAL supabase/functions/signal-alerts/index.ts replayed over fake tables (Yahoo, Supabase's REST, the auth lookup
-// and Resend faked, the clock and the sleeps too: nothing waits and nothing reaches the network), each import of the
-// module one fresh instance. The rule itself (rideEntryAt, rideCloseStep, rideCatchUpByClose) is checked in
-// src/test/macd-ride.test.ts, the pairs' and gold's run in src/test/macd-ride-alerts.test.ts.
+// #397 (docs §8.150): from v39 to v40 that email was the ride of the pairs' MACD email (its tests went with it).
+// v40 (docs §8.155; research/macdfade1h-prod-spec.md sections 2, 3.3, 3.4, 3.5, 3.7, 4.1, 4.2, 4.4 and 7.1): the email
+// is the fade, judged at the share's 1-hour closes as the pairs' is: the rule id, what a read of a share's bars gives
+// (stockFadeClose: fresh for 45 minutes, the entry at the newest closed bar's close), the signal and its row, the
+// share's mail word for word (a US BUY, a US SELL — a short sale — at a session's last bar, a Tokyo share's, ja and en),
+// and the "stocks" run of the REAL supabase/functions/signal-alerts/index.ts replayed over fake tables (Yahoo,
+// Supabase's REST, the auth lookup and Resend faked, the clock and the sleeps too: nothing waits and nothing reaches
+// the network), each import of the module one fresh instance. The rule itself (fadeCloseEntryAt) is checked in
+// src/test/macd-fade.test.ts and against the study by research/macdfade-prod-check.ts; the pairs' and gold's fade in
+// src/test/macd-fade-alerts.test.ts.
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { render as rtlRender, screen, fireEvent, waitFor, type RenderResult } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { LocaleProvider } from "@/lib/i18n";
@@ -20,11 +23,9 @@ vi.mock("@/lib/supabase", () => ({ supabase: {} }));
 import SignalAlertSettings from "../components/SignalAlertSettings";
 import { normalizeAlertSettings } from "../lib/signalAlerts";
 import {
-  STOCKMACD_AT_RULE_ID,
+  STOCKMACD_FADE_VERSION,
   STOCKMACD_INTERVALS,
-  STOCKMACD_OUT_RULE_ID,
   STOCKMACD_PAIRS,
-  STOCKMACD_RIDE_VERSION,
   STOCKMACD_RULE_ID,
   STOCK_FRESH_MS,
   type StockBar,
@@ -35,41 +36,24 @@ import {
   stockBarFresh,
   stockBarsOf,
   stockCloseDue,
-  stockRideClose,
-  stockRidePnl,
-  stockRidesReached,
+  stockFadeClose,
   stockSweepOf,
 } from "../../supabase/functions/signal-alerts/stocks";
 import {
   INDICATOR_INTERVALS,
   INDICATOR_PAIRS,
   INDICATOR_RULES,
-  MACD_RIDE_COLUMNS,
+  fadeSignal,
   indicatorRuleId,
   isIndicatorChartFor,
   isIndicatorRule,
-  macdRideOf,
   renderIndicatorMail,
-  rideCloseSignal,
-  rideOutSignal,
   rideSignalTag,
   signalRow,
   type IndicatorSignal,
 } from "../../supabase/functions/signal-alerts/indicators";
 import { renderTestMail } from "../../supabase/functions/signal-alerts/logic";
-import {
-  RIDE_CATCHUP_BARS,
-  RIDE_IN_SHARE,
-  RIDE_OUT_SHARE,
-  atShare,
-  rideCatchUp,
-  rideEntryAt,
-  rideRuleId,
-  rideZoneAt,
-  shareOf,
-  type RideEntry,
-  type RideRow,
-} from "../../supabase/functions/_shared/macd-ride";
+import { FADE_SHARE, fadeCloseEntryAt, fadeRuleId, type FadeEntry } from "../../supabase/functions/_shared/macd-fade";
 import { JP_STOCKS, US_STOCKS } from "../lib/stocks";
 
 const render = (ui: ReactElement): RenderResult => rtlRender(<LocaleProvider initial="ja">{ui}</LocaleProvider>);
@@ -77,24 +61,36 @@ const MIN = 60_000;
 const H = 60 * MIN;
 const at = (iso: string) => Date.parse(iso);
 
+// the app's regexes: RIDE_ID as src/lib/signalAlerts.ts has it (v9's rows), FADE_ID as research/macdfade1h-prod-spec.md
+// section 5 writes it (src/test/macd-fade.test.ts holds both against their files)
+const RIDE_ID = /^(?:macdx|stockmacd)_.*_(?:touch|ride)(\d+)to(\d+)of120_(in|at|out)_/;
+const FADE_ID = /^(?:macdx|stockmacd)_.*_fade(\d+)(?:tp[0-9a-z]+)?of120_in_/;
+
 describe("#391 when a share's hourly bar closes (signal-alerts/stocks.ts)", () => {
-  it("is the chart's list of shares, on the 1-hour chart, under its own ids: one a mail of the ride, built from its constants", () => {
+  it("is the chart's list of shares, on the 1-hour chart, under its own id: the fade's one, built from its constants", () => {
     expect([...STOCKMACD_PAIRS]).toEqual([...US_STOCKS, ...JP_STOCKS].map((s) => s.symbol));
     expect([...STOCKMACD_INTERVALS]).toEqual(["1h"]);
-    // #397: the ride's three ids (email 1, the notice, email 2). They start as the app reads the rule back from them,
-    // and the 95% email's (…_z95of120_v1) is not among them
-    expect(STOCKMACD_RIDE_VERSION).toBe(2);
-    expect(STOCKMACD_RULE_ID).toBe("stockmacd_12_26_9_w600_1h_ride90to96of120_in_v2");
-    expect(STOCKMACD_AT_RULE_ID).toBe("stockmacd_12_26_9_w600_1h_ride90to96of120_at_v2");
-    expect(STOCKMACD_OUT_RULE_ID).toBe("stockmacd_12_26_9_w600_1h_ride90to96of120_out_v2");
-    expect([STOCKMACD_RULE_ID, STOCKMACD_AT_RULE_ID, STOCKMACD_OUT_RULE_ID]).toEqual((["in", "at", "out"] as const).map((m) => rideRuleId("stockmacd", m, 2)));
-    for (const id of [STOCKMACD_RULE_ID, STOCKMACD_AT_RULE_ID, STOCKMACD_OUT_RULE_ID]) {
-      expect(id.startsWith("stockmacd")).toBe(true);
-      expect(id).not.toContain("z95of120");
+    // v40 (spec 3.7): the fade's one id, every part from a constant. It starts as the app reads the rule back from it,
+    // the app reads it as a fade at 96% (FADE_ID), not as v9's ride (RIDE_ID), and it is none of the earlier ids
+    expect(STOCKMACD_FADE_VERSION).toBe(4);
+    expect(STOCKMACD_RULE_ID).toBe("stockmacd_12_26_9_w600_1h_fade96of120_in_v4");
+    expect(STOCKMACD_RULE_ID).toBe(fadeRuleId("stockmacd", STOCKMACD_INTERVALS[0], STOCKMACD_FADE_VERSION));
+    expect(STOCKMACD_RULE_ID.startsWith("stockmacd")).toBe(true);
+    expect(FADE_ID.exec(STOCKMACD_RULE_ID)?.[1]).toBe("96");
+    expect(RIDE_ID.test(STOCKMACD_RULE_ID)).toBe(false);
+    for (const old of [
+      "stockmacd_12_26_9_w600_1h_z95of120_v1",
+      "stockmacd_12_26_9_w600_1h_ride90to96of120_in_v2",
+      "stockmacd_12_26_9_w600_1h_ride90to96of120_at_v2",
+      "stockmacd_12_26_9_w600_1h_ride90to96of120_out_v2",
+      "stockmacd_12_26_9_w600_1h_ride90to95of120_in_v3",
+      "stockmacd_12_26_9_w600_15min_fade96of120_in_v4",
+    ]) {
+      expect(STOCKMACD_RULE_ID).not.toBe(old);
     }
     expect(INDICATOR_RULES).toContain("stockmacd");
     expect(isIndicatorRule("stockmacd")).toBe(true);
-    // indicatorRuleId gives email 1's; each mail's row is written under its own (signalRow, below)
+    // indicatorRuleId gives it, and a share's row is written under it (signalRow, below)
     expect(indicatorRuleId("stockmacd")).toBe(STOCKMACD_RULE_ID);
     expect(isIndicatorChartFor("stockmacd", "AAPL", "1h")).toBe(true);
     expect(isIndicatorChartFor("stockmacd", "7203.T", "1h")).toBe(true);
@@ -186,8 +182,7 @@ describe("#391 when a share's hourly bar closes (signal-alerts/stocks.ts)", () =
     // the closed bars are handed on; with fewer than 600 of them there is no entry to mail
     expect(first.closed).toHaveLength(7);
     expect(first.fresh).toBe(true);
-    expect(stockRideClose("INTC", first.closed, [], at("2026-10-30T20:01:00Z"))).toMatchObject({ fresh: true, entry: null, step: { step: null } });
-    expect(stockRidesReached("INTC", first.closed, [{ side: "BUY", entryBar: first.closed[0].open_ms, status: "open", reachedBar: null }], at("2026-10-30T20:01:00Z"))).toEqual([]);
+    expect(stockFadeClose("INTC", first.closed, at("2026-10-30T20:01:00Z"))).toEqual({ fresh: true, entry: null });
     const again = stockSweepOf("INTC", bars, due, first.newest!.open_ms, at("2026-10-30T20:02:00Z"));
     expect(again.judge).toBe(false);
     // the bar due (16:00) not in yet: judged what is, not done
@@ -262,12 +257,14 @@ describe("docs §8.140: a bar forming while the session trades is not closed", (
   });
 });
 
-// ---- #397: the bars the ride's tests stand on ------------------------------------------------------------------------
+// ---- v40: the bars the fade's tests stand on -------------------------------------------------------------------------
 //
 // 2,200 hourly bars of a US share on New York's sessions (9:30 … 15:30 local, seven a weekday, daylight saving kept:
 // the first opens 13:30 UTC in summer and 14:30 in winter), a slow wave, quicker ones and a drift, rounded to the cent
-// as the chart draws a US share. A bar opens at the close before it and has no wick unless a test gives it one. Under
-// the ride's rule they hold 25 entry bars, 13 of them a notice (already at 96%), found below with the shared code
+// as the chart draws a US share. A bar opens at the close before it and has no wick. A Tokyo share's bars are the
+// same wave in yen (a tenth of a yen, as the chart draws a Tokyo share), seven a weekday stamped 9:00 … 15:00 JST
+// (00:00 … 06:00 UTC; the 11:00 bar ends at the lunch break, the 15:00 one at 15:30). Under the fade's rule each holds
+// 24 entries, found below with the shared code
 const SYM = "AAPL";
 const N = 2200;
 const times: number[] = [];
@@ -283,464 +280,450 @@ const closes = Array.from({ length: N }, (_, i) => Number((200 + 10 * wave(i)).t
 const openOf = (k: number) => (k > 0 ? closes[k - 1] : closes[k]);
 const iso = (ms: number) => new Date(ms).toISOString();
 const dt = (ms: number) => iso(ms).slice(0, 19).replace("T", " ");
-// a timestamptz as PostgREST writes it
-const pg = (ms: number) => iso(ms).replace(".000Z", "+00:00");
 const closeOf = (k: number) => ends[k];
 const shareBar = (k: number, over: Partial<StockBar> = {}): StockBar => ({
   datetime: dt(times[k]), open: openOf(k), high: Math.max(openOf(k), closes[k]), low: Math.min(openOf(k), closes[k]), close: closes[k],
   open_ms: times[k], end: ends[k], closed: true, ...over,
 });
 // the closed bars up to bar n, as a read brings them
-const closedTo = (n: number, over: Record<number, Partial<StockBar>> = {}): StockBar[] => Array.from({ length: n + 1 }, (_, k) => shareBar(k, over[k]));
-const entryAt = (i: number): RideEntry | null => rideEntryAt(closes.slice(i - 599, i + 1));
-const zAt = (i: number) => rideZoneAt(closes.slice(i - 599, i + 1))!;
-const at96 = (k: number, zside: "top" | "bottom") => atShare(zAt(k), zside, RIDE_OUT_SHARE);
-// a ride of the chart as the pure functions read it, held from a bar
-const heldFrom = (side: "BUY" | "SELL", entryIndex: number): RideRow => ({ side, entryBar: times[entryIndex], status: "open", reachedBar: null });
+const closedTo = (n: number): StockBar[] => Array.from({ length: n + 1 }, (_, k) => shareBar(k));
+const entryAt = (i: number): FadeEntry | null => fadeCloseEntryAt(closes.slice(i - 599, i + 1));
+const TOKYO = (() => {
+  const sym = "7203.T";
+  const t: number[] = [];
+  for (let day = Date.UTC(2025, 5, 2); t.length < N; day += 24 * H) {
+    const wd = new Date(day).getUTCDay();
+    if (wd === 0 || wd === 6) continue;
+    for (let h = 0; h < 7 && t.length < N; h++) t.push(day + h * H);
+  }
+  return { sym, times: t, ends: t.map((x) => stockBarEnd(sym, x)), closes: Array.from({ length: N }, (_, i) => Number((3000 + 100 * wave(i)).toFixed(1))) };
+})();
+const tEntryAt = (i: number): FadeEntry | null => fadeCloseEntryAt(TOKYO.closes.slice(i - 599, i + 1));
 
-// the bars the scenarios stand on (each checked where it is used)
-const I_BUY = 1761; // a BUY entry (not already): the line is at 96% of the top at no close before J_BUY, three bars on
-const J_BUY = 1764;
-const I_SELL = 2100; // a SELL entry (not already): at 96% of the bottom at the close of J_SELL, two bars on
-const J_SELL = 2102;
-const I_HELD = 1229; // a SELL entry (not already): at 96% at no close before J_HELD, 24 bars on — itself an already entry of the SELL side
-const J_HELD = 1253;
-const I_NOTICE = 1822; // an entry bar already at 96% (a SELL's side)
-const I_LAST = 951; // a SELL entry at a session's last bar (15:30 New York)
-const OLD_BUY = 2040; // a BUY held from here: no close at 96% of the top from here to J_SELL
-const OLD_SELL = 1950; // a SELL held from here: no close at 96% of the bottom in the newest 100 bars up to I_SELL + 1; J_SELL is one
-const LATE_BUY = 1620; // a BUY held from here (a bar that has left the newest 100 closed bars by I_BUY): first at 96% at the close of J_LATE, long before I_BUY
-const J_LATE = 1723;
-// a high on bar I_BUY + 1 that touches 96% of the top while that bar's close does not
-const WICK = 217.6;
+// the bars the scenarios stand on (each checked below)
+const I_BUY = 1222; // a BUY (the pane's bottom) inside New York's session: the bar of 2026-01-30 13:30 New York
+const I_SELL = 1012; // a SELL (the top) inside the session: 2025-12-19 13:30 New York
+const I_LAST = 1329; // a SELL at a session's last bar: 2026-02-20 15:30 New York, ending at 16:00
+const T_LUNCH = 1353; // Tokyo: a BUY at the 11:00 JST bar (the lunch break follows), 2026-02-26
+const T_LAST = 1329; // Tokyo: a SELL at the 15:00 JST bar (the session's last, ending at 15:30), 2026-02-20
+const T_TEN = 1149; // Tokyo: a SELL at the 10:00 JST bar (ending 11:00; the 11:30 close is due half an hour on), 2026-01-16
 
-describe("#397 the share bars the ride's tests stand on (found with the shared code)", () => {
-  it("are New York's seven bars a weekday, and hold entries on both sides, notices, and rides reached bars later", () => {
+describe("v40 the share bars the fade's tests stand on (found with the shared code)", () => {
+  it("are New York's seven bars a weekday and Tokyo's, and hold SELLs and BUYs inside a session, at a session's last bar and before Tokyo's lunch", () => {
     expect(times.every((t) => {
       const l = localOf(SYM, t);
       return l.wd >= 1 && l.wd <= 5 && l.min >= 9 * 60 + 30 && l.min <= 15 * 60 + 30 && (l.min - 30) % 60 === 0;
     })).toBe(true);
-    const found: string[] = [];
-    for (let i = 620; i < N - 3; i++) {
-      const e = entryAt(i);
-      if (e) found.push(`${i}:${e.side}${e.already ? ":at" : ""}`);
+    const found = (cl: number[]) => {
+      const out: string[] = [];
+      for (let i = 599; i < N; i++) {
+        const e = fadeCloseEntryAt(cl.slice(i - 599, i + 1));
+        if (e) out.push(`${i}:${e.side}`);
+      }
+      return out;
+    };
+    const us = found(closes);
+    expect(us).toHaveLength(24);
+    expect(us.filter((x) => x.endsWith(":SELL"))).toHaveLength(11);
+    // the yen wave is the dollar wave scaled: the same entries
+    expect(found(TOKYO.closes)).toEqual(us);
+    for (const [i, side, zside] of [[I_BUY, "BUY", "bottom"], [I_SELL, "SELL", "top"], [I_LAST, "SELL", "top"]] as const) {
+      expect(entryAt(i), `bar ${i}`).toMatchObject({ side, zside });
+      // the bar before is not at 96% on that side, the bar after no entry (no entry while the line stays at 96%)
+      expect(entryAt(i - 1), `bar ${i - 1}`).toBeNull();
+      expect(entryAt(i + 1), `bar ${i + 1}`).toBeNull();
     }
-    expect(found).toHaveLength(25);
-    expect(found.filter((x) => x.endsWith(":at"))).toHaveLength(13);
-    for (const [i, side, already] of [[I_BUY, "BUY", false], [I_SELL, "SELL", false], [I_HELD, "SELL", false], [I_LAST, "SELL", false], [I_NOTICE, "SELL", true], [J_HELD, "SELL", true]] as const) {
-      expect(entryAt(i), `bar ${i}`).toMatchObject({ side, already });
-    }
-    // the BUY from I_BUY: the next two closes (the day's last two bars) are not at 96%, the next day's first is
-    expect([I_BUY + 1, I_BUY + 2, J_BUY].map((k) => at96(k, "top"))).toEqual([false, false, true]);
-    expect([I_BUY, I_BUY + 2, J_BUY].map((k) => dt(times[k]))).toEqual(["2026-05-19 17:30:00", "2026-05-19 19:30:00", "2026-05-20 13:30:00"]);
-    expect([I_BUY + 1, J_BUY, J_BUY + 1].map((k) => entryAt(k))).toEqual([null, null, null]);
-    // the SELL from I_SELL: at J_SELL; the one from I_HELD: at no close before J_HELD
-    expect([I_SELL + 1, J_SELL].map((k) => at96(k, "bottom"))).toEqual([false, true]);
-    expect(Array.from({ length: J_HELD - I_HELD - 1 }, (_, n) => at96(I_HELD + 1 + n, "bottom")).some(Boolean)).toBe(false);
-    expect(at96(J_HELD, "bottom")).toBe(true);
-    // the older rides: OLD_BUY is at 96% of the top at no close up to J_SELL; OLD_SELL at none of the newest 100 up to
-    // I_SELL + 1; LATE_BUY first at J_LATE, and its entry bar is older than the newest 100 closed bars at I_BUY
-    expect(LATE_BUY).toBeLessThan(I_BUY - RIDE_CATCHUP_BARS);
-    expect(Array.from({ length: J_SELL - OLD_BUY }, (_, n) => at96(OLD_BUY + 1 + n, "top")).some(Boolean)).toBe(false);
-    expect(Array.from({ length: RIDE_CATCHUP_BARS }, (_, n) => at96(I_SELL + 1 - n, "bottom")).some(Boolean)).toBe(false);
-    expect(Array.from({ length: J_LATE - LATE_BUY }, (_, n) => at96(LATE_BUY + 1 + n, "top"))).toEqual([...Array(J_LATE - LATE_BUY - 1).fill(false), true]);
-    // I_LAST is a session's last bar (15:30 New York, half an hour long)
-    expect(localOf(SYM, times[I_LAST]).min).toBe(15 * 60 + 30);
+    for (const [i, side] of [[T_LUNCH, "BUY"], [T_LAST, "SELL"], [T_TEN, "SELL"]] as const) expect(tEntryAt(i), `Tokyo bar ${i}`).toMatchObject({ side });
+    // where they are in the session: inside it, a session's last bar (half an hour long), Tokyo's
+    expect([I_BUY, I_SELL, I_LAST].map((k) => dt(times[k]))).toEqual(["2026-01-30 18:30:00", "2025-12-19 18:30:00", "2026-02-20 20:30:00"]);
+    expect([I_BUY, I_SELL, I_LAST].map((k) => stockBarBreak(SYM, times[k]))).toEqual([null, null, "close"]);
     expect(closeOf(I_LAST) - times[I_LAST]).toBe(30 * MIN);
+    expect(closeOf(I_BUY) - times[I_BUY]).toBe(H);
+    expect([T_LUNCH, T_LAST, T_TEN].map((k) => dt(TOKYO.times[k]))).toEqual(["2026-02-26 02:00:00", "2026-02-20 06:00:00", "2026-01-16 01:00:00"]);
+    expect([T_LUNCH, T_LAST, T_TEN].map((k) => stockBarBreak(TOKYO.sym, TOKYO.times[k]))).toEqual(["lunch", "close", null]);
+    expect([T_LUNCH, T_LAST, T_TEN].map((k) => TOKYO.ends[k] - TOKYO.times[k])).toEqual([30 * MIN, 30 * MIN, H]);
   });
 });
 
-describe("#397 the ride on a share, judged at closes (stocks.ts stockRidesReached, stockRideClose; spec section 6)", () => {
-  it("the close step at the newest closed bar while it ended at most 45 minutes ago: email 1, the notice, or nothing", () => {
-    const closed = closedTo(I_BUY);
-    const now = closeOf(I_BUY) + MIN;
-    const c = stockRideClose(SYM, closed, [], now);
-    expect(c.fresh).toBe(true);
-    expect(c.entry).toEqual(entryAt(I_BUY));
-    expect(c.step).toEqual({ step: "in", side: "BUY", zside: "top", own: null, by: null });
-    // the pane side is the top for a BUY, and the line is in the 90% band but not at 96%
-    expect(shareOf(c.entry!.z, "top")).toBeGreaterThanOrEqual(RIDE_IN_SHARE);
-    expect(shareOf(c.entry!.z, "top")).toBeLessThan(RIDE_OUT_SHARE);
-    // 45 minutes after the close still, 46 not, nor before its end
+describe("v40 the fade on a share, judged at closes (stocks.ts stockFadeClose; spec 3.3)", () => {
+  it("the entry at the newest closed bar's close while the bar ended at most 45 minutes ago; an older bar, or one not ended, is not judged", () => {
     expect(STOCK_FRESH_MS).toBe(45 * MIN);
-    expect(stockRideClose(SYM, closed, [], closeOf(I_BUY) + 45 * MIN).step.step).toBe("in");
-    expect(stockRideClose(SYM, closed, [], closeOf(I_BUY) + 46 * MIN)).toEqual({ fresh: false, entry: null, step: { step: null, side: null, zside: null, own: null, by: null } });
-    expect(stockBarFresh(closed[closed.length - 1], closeOf(I_BUY) - 1)).toBe(false);
-    // another share, too few bars, a bar that is no entry: nothing
-    expect(stockRideClose("IBM", closed, [], now)).toMatchObject({ fresh: false, entry: null });
-    expect(stockRideClose(SYM, closed.slice(-599), [], now)).toMatchObject({ fresh: true, entry: null, step: { step: null } });
-    expect(stockRideClose(SYM, closedTo(I_BUY + 1), [], closeOf(I_BUY + 1) + MIN)).toMatchObject({ fresh: true, entry: null, step: { step: null } });
-    // already at 96% at the close: the notice, on the side an entry would have been
-    expect(stockRideClose(SYM, closedTo(I_NOTICE), [], closeOf(I_NOTICE) + MIN).step).toMatchObject({ step: "at", side: "SELL", zside: "bottom" });
-    // judging the bar again with its own ride there (open, or reached since): still email 1, nothing new to open
-    const own = heldFrom("BUY", I_BUY);
-    expect(stockRideClose(SYM, closed, [own], now).step).toMatchObject({ step: "in", own, by: null });
-    expect(stockRideClose(SYM, closed, [{ ...own, status: "reached", reachedBar: times[J_BUY] }], now).step).toMatchObject({ step: "in", by: null });
-    // the run takes the closed bars in, and says whether an entry there would still be mailed
-    const sweep = stockSweepOf(SYM, closed, closeOf(I_BUY), undefined, now);
-    expect(sweep).toMatchObject({ judge: true, fresh: true, done: true, noSession: false });
-    expect(sweep.closed).toHaveLength(I_BUY + 1);
-    expect(sweep.newest).toBe(closed[I_BUY]);
-    expect(stockSweepOf(SYM, closed, closeOf(I_BUY), undefined, closeOf(I_BUY) + 46 * MIN).fresh).toBe(false);
-    // a bar still forming (not closed) is no part of them
-    const forming = [...closed, shareBar(I_BUY + 1, { closed: false })];
-    expect(stockSweepOf(SYM, forming, closeOf(I_BUY), undefined, now).newest).toBe(closed[I_BUY]);
-  });
-
-  it("a ride is reached by a CLOSE, not by a high: the first closed bar after the entry whose line, on its own 600 closed bars, is at 96% of its side", () => {
-    const ride = heldFrom("BUY", I_BUY);
-    const wick = { [I_BUY + 1]: { high: WICK } };
-    expect(WICK).toBeGreaterThan(closes[I_BUY + 1]);
-    // the pairs' way (by the bar's high) would be reached in bar I_BUY + 1
-    const asPairs = closedTo(I_BUY + 1, wick).map((b) => ({ t: b.open_ms, high: b.high, low: b.low, close: b.close }));
-    expect(rideCatchUp(asPairs, "top", times[I_BUY])).toMatchObject({ bar: times[I_BUY + 1], x: WICK });
-    // a share's is not: neither at that close nor at the next
-    for (const n of [I_BUY, I_BUY + 1, I_BUY + 2]) expect(stockRidesReached(SYM, closedTo(n, wick), [ride], closeOf(n) + MIN), `bar ${n}`).toEqual([]);
-    // at J_BUY's close it is: the bar's open, the newest closed bar's close as the price, not late, the line's share there
-    const got = stockRidesReached(SYM, closedTo(J_BUY, wick), [ride], closeOf(J_BUY) + MIN);
-    const z = zAt(J_BUY);
-    expect(got).toEqual([{ ride, bar: times[J_BUY], price: closes[J_BUY], late: false, share: z.m / z.top }]);
-    expect(got[0].ride).toBe(ride);
-    expect(z.m).toBeGreaterThanOrEqual(RIDE_OUT_SHARE * z.top);
-    // a low under everything changes nothing either (a BUY rides the top), nor does a ride of the other side find it
-    expect(stockRidesReached(SYM, closedTo(J_BUY, { [I_BUY + 1]: { low: 1 } }), [ride], closeOf(J_BUY) + MIN)).toHaveLength(1);
-    expect(stockRidesReached(SYM, closedTo(J_BUY), [heldFrom("SELL", I_BUY)], closeOf(J_BUY) + MIN)).toEqual([]);
-    // a ride that is not open is passed over; nothing on another chart or with no closed bar
-    expect(stockRidesReached(SYM, closedTo(J_BUY), [{ ...ride, status: "reached", reachedBar: times[J_BUY] }], closeOf(J_BUY) + MIN)).toEqual([]);
-    expect(stockRidesReached("IBM", closedTo(J_BUY), [ride], closeOf(J_BUY) + MIN)).toEqual([]);
-    expect(stockRidesReached(SYM, [], [ride], closeOf(J_BUY) + MIN)).toEqual([]);
-    // the entry bar itself is never the bar it is reached in
-    expect(stockRidesReached(SYM, closedTo(J_BUY), [heldFrom("BUY", J_BUY)], closeOf(J_BUY) + MIN)).toEqual([]);
-  });
-
-  it("late or not: late when the bar is not the newest closed one, or the newest ended more than 45 minutes ago; the price is the newest closed bar's close", () => {
-    const ride = heldFrom("BUY", I_BUY);
-    const seenAt = (n: number, after: number) => stockRidesReached(SYM, closedTo(n), [ride], closeOf(n) + after)[0];
-    expect(seenAt(J_BUY, 1_000)).toMatchObject({ bar: times[J_BUY], late: false, price: closes[J_BUY] });
-    expect(seenAt(J_BUY, 45 * MIN)).toMatchObject({ bar: times[J_BUY], late: false });
-    // the same bar, the newest, read 46 minutes after it ended (a feed that lagged, a window missed)
-    expect(seenAt(J_BUY, 46 * MIN)).toMatchObject({ bar: times[J_BUY], late: true, price: closes[J_BUY] });
-    // found at the next close: the bar it was reached in stays, the price is the newest bar's
-    expect(seenAt(J_BUY + 1, 1_000)).toMatchObject({ bar: times[J_BUY], late: true, price: closes[J_BUY + 1] });
-    expect(closes[J_BUY + 1]).not.toBe(closes[J_BUY]);
-    // among the newest RIDE_CATCHUP_BARS closed bars only: a bar that has left them is never seen
-    const n = J_BUY + RIDE_CATCHUP_BARS;
-    let first = -1;
-    for (let k = n - RIDE_CATCHUP_BARS + 1; k <= n && first < 0; k++) if (at96(k, "top")) first = k;
-    expect(first).toBeGreaterThan(J_BUY);
-    expect(seenAt(n, 1_000)).toMatchObject({ bar: times[first], late: first !== n });
-  });
-
-  it("both sides can be open at once: a ride of one side skips nothing of the other, and each is reached on its own side", () => {
-    const buy = heldFrom("BUY", OLD_BUY);
-    const now = closeOf(I_SELL) + MIN;
-    expect(stockRidesReached(SYM, closedTo(I_SELL), [buy], now)).toEqual([]);
-    expect(stockRideClose(SYM, closedTo(I_SELL), [buy], now).step).toMatchObject({ step: "in", side: "SELL", zside: "bottom", own: null, by: null });
-    // both open: at J_SELL the SELL is reached, the BUY is not
-    const sell = heldFrom("SELL", I_SELL);
-    const got = stockRidesReached(SYM, closedTo(J_SELL), [buy, sell], closeOf(J_SELL) + MIN);
-    expect(got.map((g) => [g.ride.side, g.bar, g.late, g.price])).toEqual([["SELL", times[J_SELL], false, closes[J_SELL]]]);
-    expect(got[0].share).toBe(zAt(J_SELL).m / zAt(J_SELL).bottom);
-  });
-
-  it("an entry while an older ride of that side is open is skipped; reached in a later bar, still; reached in this bar or before, not", () => {
-    const old = heldFrom("SELL", OLD_SELL);
-    const closed = closedTo(I_SELL);
-    const now = closeOf(I_SELL) + MIN;
-    expect(stockRidesReached(SYM, closed, [old], now)).toEqual([]);
-    expect(stockRideClose(SYM, closed, [old], now).step).toEqual({ step: "skip", side: "SELL", zside: "bottom", own: null, by: old });
-    const reachedIn = (k: number): RideRow => ({ ...old, status: "reached", reachedBar: times[k] });
-    expect(stockRideClose(SYM, closed, [reachedIn(J_SELL)], now).step).toMatchObject({ step: "skip" });
-    expect(stockRideClose(SYM, closed, [reachedIn(I_SELL)], now).step).toMatchObject({ step: "in", by: null });
-    expect(stockRideClose(SYM, closed, [reachedIn(I_SELL - 1)], now).step).toMatchObject({ step: "in", by: null });
-    // the old ride is reached at J_SELL's close, as the new one would have been
-    expect(stockRidesReached(SYM, closedTo(J_SELL), [old], closeOf(J_SELL) + MIN)).toMatchObject([{ ride: old, bar: times[J_SELL], late: false }]);
-  });
-
-  it("a ride reached at a bar that is also an already entry of its side: the reach, and no notice (quiet)", () => {
-    const held = heldFrom("SELL", I_HELD);
-    const closed = closedTo(J_HELD);
-    const now = closeOf(J_HELD) + MIN;
-    // not reached at the close before
-    expect(stockRidesReached(SYM, closedTo(J_HELD - 1), [held], closeOf(J_HELD - 1) + MIN)).toEqual([]);
-    const reached = stockRidesReached(SYM, closed, [held], now);
-    expect(reached).toMatchObject([{ ride: held, bar: times[J_HELD], late: false, price: closes[J_HELD] }]);
-    // the rows as they stand once the reach is written: quiet
-    const after: RideRow = { ...held, status: "reached", reachedBar: reached[0].bar };
-    expect(stockRideClose(SYM, closed, [after], now).step).toEqual({ step: "quiet", side: "SELL", zside: "bottom", own: null, by: after });
-    // with no ride of the side (or one of the other side) the same close is a notice
-    expect(stockRideClose(SYM, closed, [], now).step.step).toBe("at");
-    expect(stockRideClose(SYM, closed, [{ ...after, side: "BUY" }], now).step.step).toBe("at");
+    const closed = closedTo(I_BUY);
+    const e = entryAt(I_BUY)!;
+    expect(e).toMatchObject({ side: "BUY", zside: "bottom" });
+    // a minute after it ended: the shared code's entry on the 600 closed bars ending at the bar (older bars not read)
+    expect(stockFadeClose(SYM, closed, closeOf(I_BUY) + MIN)).toEqual({ fresh: true, entry: e });
+    expect(stockFadeClose(SYM, closed.slice(-600), closeOf(I_BUY) + MIN)).toEqual({ fresh: true, entry: e });
+    // 45 minutes after it ended still; a millisecond later not, and not before it ended
+    expect(stockFadeClose(SYM, closed, closeOf(I_BUY) + 45 * MIN)).toEqual({ fresh: true, entry: e });
+    expect(stockFadeClose(SYM, closed, closeOf(I_BUY) + 45 * MIN + 1)).toEqual({ fresh: false, entry: null });
+    expect(stockFadeClose(SYM, closed, closeOf(I_BUY) - 1)).toEqual({ fresh: false, entry: null });
+    expect(stockBarFresh(shareBar(I_BUY), closeOf(I_BUY))).toBe(true);
+    expect(stockBarFresh(shareBar(I_BUY), closeOf(I_BUY) + 45 * MIN + 1)).toBe(false);
+    // a close with no entry; a SELL at the top
+    expect(stockFadeClose(SYM, closedTo(I_BUY + 1), closeOf(I_BUY + 1) + MIN)).toEqual({ fresh: true, entry: null });
+    expect(stockFadeClose(SYM, closedTo(I_SELL), closeOf(I_SELL) + MIN)).toEqual({ fresh: true, entry: entryAt(I_SELL) });
+    // fewer than 600 closed bars: no entry
+    expect(stockFadeClose(SYM, closed.slice(-599), closeOf(I_BUY) + MIN)).toEqual({ fresh: true, entry: null });
+    // a share the rule is not offered on, or no closed bar: nothing
+    expect(stockFadeClose("IBM", closed, closeOf(I_BUY) + MIN)).toEqual({ fresh: false, entry: null });
+    expect(stockFadeClose(SYM, [], closeOf(I_BUY) + MIN)).toEqual({ fresh: false, entry: null });
+    // a session's last bar is judged by its own end (16:00 New York), not an hour after it opened
+    expect(stockFadeClose(SYM, closedTo(I_LAST), times[I_LAST] + 30 * MIN + MIN)).toEqual({ fresh: true, entry: entryAt(I_LAST) });
+    expect(stockFadeClose(SYM, closedTo(I_LAST), times[I_LAST] + 30 * MIN + 45 * MIN + 1).fresh).toBe(false);
   });
 });
 
-// ---- #397: the three mails (spec section 8) -------------------------------------------------------------------------
+// ---- v40: the signal, its row, the mail (spec 3.4, 4.1, 4.2 and 4.4) ------------------------------------------------
 
-type Row = Record<string, unknown>;
-const barAt = (i: number) => ({ openMs: times[i], closeMs: closeOf(i), mid: closes[i], paid: closes[i] });
-const inSig = (i: number) => rideCloseSignal("stockmacd", SYM, "1h", "in", entryAt(i)!, barAt(i));
-const atSig = (i: number) => rideCloseSignal("stockmacd", SYM, "1h", "at", entryAt(i)!, barAt(i));
-// a ride of the share as its row in public.macd_rides
-const rowOf = (side: "BUY" | "SELL", entryIndex: number, over: Row = {}): Row => ({
-  pair: SYM, side, entry_bar: pg(times[entryIndex]), entry_closed_at: pg(closeOf(entryIndex)), entry_price: closes[entryIndex], entry_mid: closes[entryIndex],
-  share0: 0.93, status: "open", reached_at: null, reached_bar: null, seen_price: null, late: null, share1: null, ...over,
-});
-// email 2 of the BUY from I_BUY, reached at J_BUY's close and seen a second after it
-const outSig = (over: Row = {}) => rideOutSignal("stockmacd", "1h", macdRideOf(rowOf("BUY", I_BUY, {
-  status: "reached", reached_at: pg(closeOf(J_BUY) + 1_000), reached_bar: pg(times[J_BUY]), seen_price: closes[J_BUY], late: false, share1: 0.9717, ...over,
-}))!)!;
-// a Tokyo share's bar: 11:00 JST (the lunch break follows), 15:00 JST (the session's last), 10:00 JST (neither)
-const TOYOTA_LUNCH = { openMs: at("2026-11-02T02:00:00Z"), closeMs: at("2026-11-02T02:30:00Z"), mid: 3070, paid: 3070 };
-const toyotaIn = () => rideCloseSignal("stockmacd", "7203.T", "1h", "in", entryAt(I_LAST)!, TOYOTA_LUNCH);
-const toyotaOut = (over: Row = {}) => rideOutSignal("stockmacd", "1h", macdRideOf(rowOf("SELL", I_LAST, {
-  pair: "7203.T", entry_bar: "2026-11-02T02:00:00+00:00", entry_closed_at: "2026-11-02T02:30:00+00:00", entry_price: 3070, entry_mid: 3070,
-  status: "reached", reached_at: "2026-11-02T06:45:04+00:00", reached_bar: "2026-11-02T06:00:00+00:00", seen_price: 3102.5, late: false, share1: 0.97, ...over,
-}))!)!;
-const allText = (s: IndicatorSignal) => (["ja", "en"] as const).map((l) => renderIndicatorMail(s, l)).map((m) => `${m.subject}\n${m.text}\n${m.html}`).join("\n");
+// a share's fade signal as the run makes it (index.ts stockFade): the bar's open and end, its close, the price in its
+// close
+const usSig = (i: number): IndicatorSignal =>
+  fadeSignal("stockmacd", SYM, "1h", entryAt(i)!, { openMs: times[i], closeMs: closeOf(i), close: closes[i], price: closes[i] });
+const tokyoSig = (i: number): IndicatorSignal =>
+  fadeSignal("stockmacd", TOKYO.sym, "1h", tEntryAt(i)!, { openMs: TOKYO.times[i], closeMs: TOKYO.ends[i], close: TOKYO.closes[i], price: TOKYO.closes[i] });
 
-describe("#397 the three rule ids of the shares' ride, and the row of each mail (spec section 2)", () => {
-  it("each mail's row: its own id, the entry bar, the price paid (a share's close), no stop, and on email 2 the price when seen", () => {
-    expect(signalRow(inSig(I_BUY))).toEqual({
+describe("v40 the share's signal and its row (spec 3.4)", () => {
+  it("the signal: the bar's open and end, its close, the line and the pane's edges unrounded, the price in its close, no stop, no target", () => {
+    const e = entryAt(I_BUY)!;
+    const s = usSig(I_BUY);
+    expect(s).toMatchObject({
+      rule: "stockmacd", pair: SYM, interval: "1h", side: "BUY", barTime: iso(times[I_BUY]), closedAt: iso(closeOf(I_BUY)), close: closes[I_BUY], sl: null, tps: null,
+    });
+    expect(s.fade).toEqual({ zside: "bottom", m: e.z.m, top: e.z.top, bottom: e.z.bottom, share0: e.share0, price: closes[I_BUY] });
+    expect(s.fade!.share0).toBeGreaterThanOrEqual(FADE_SHARE);
+    expect(usSig(I_SELL).fade).toMatchObject({ zside: "top", price: closes[I_SELL] });
+  });
+
+  it("the row: the bar's open, its end, the side, the price in (the bar's close), no stop and no target, the fade's id; the record's tag", () => {
+    expect(signalRow(usSig(I_BUY))).toEqual({
       bar_time: iso(times[I_BUY]), closed_at: iso(closeOf(I_BUY)), side: "BUY", entry: closes[I_BUY], stop: null, target: null, rule: STOCKMACD_RULE_ID,
     });
-    expect(signalRow(atSig(I_NOTICE))).toEqual({
-      bar_time: iso(times[I_NOTICE]), closed_at: iso(closeOf(I_NOTICE)), side: "SELL", entry: closes[I_NOTICE], stop: null, target: null, rule: STOCKMACD_AT_RULE_ID,
-    });
-    // email 2: under the ride's ENTRY bar, closed_at when it was seen
-    expect(signalRow(outSig())).toEqual({
-      bar_time: iso(times[I_BUY]), closed_at: iso(closeOf(J_BUY) + 1_000), side: "BUY", entry: closes[I_BUY], stop: null, target: closes[J_BUY], rule: STOCKMACD_OUT_RULE_ID,
-    });
-    expect([inSig(I_BUY), atSig(I_NOTICE), outSig()].map(rideSignalTag)).toEqual(["stockmacd:BUY", "stockmacd-at:SELL", "stockmacd-out:BUY"]);
     // a session's last bar closes half an hour after it opens: the row's closed_at is the bar's own end
-    expect(signalRow(inSig(I_LAST)).closed_at).toBe(iso(times[I_LAST] + 30 * MIN));
-    for (const s of [inSig(I_BUY), atSig(I_NOTICE), outSig()]) expect(s).toMatchObject({ rule: "stockmacd", pair: SYM, interval: "1h", sl: null, tps: null });
+    expect(signalRow(usSig(I_LAST))).toEqual({
+      bar_time: iso(times[I_LAST]), closed_at: iso(times[I_LAST] + 30 * MIN), side: "SELL", entry: closes[I_LAST], stop: null, target: null, rule: STOCKMACD_RULE_ID,
+    });
+    expect(signalRow(tokyoSig(T_LUNCH))).toEqual({
+      bar_time: iso(TOKYO.times[T_LUNCH]), closed_at: iso(TOKYO.times[T_LUNCH] + 30 * MIN), side: "BUY", entry: TOKYO.closes[T_LUNCH], stop: null, target: null, rule: STOCKMACD_RULE_ID,
+    });
+    expect([usSig(I_BUY), usSig(I_SELL)].map(rideSignalTag)).toEqual(["stockmacd:BUY", "stockmacd:SELL"]);
   });
 });
 
-describe("#397 the three mails on a share (stocks.ts renderStockMail; spec section 8)", () => {
-  it("email 1 in Japanese: the share's name, the bar, into the 90% band of the pane's TOP for a BUY, the numbers, the close, what follows, and that shares are not measured", () => {
-    const s = inSig(I_BUY);
-    const f = s.ride!;
+// The spec's sentences (research/macdfade1h-prod-spec.md 4.4), as written there
+const ITEM6_JA = "利確の値段も損切りの値段もありません。これはこの決まりの作りで、損切りをしないことを勧めるものではありません。";
+const ITEM6_EN = "There is no take-profit price and no stop price. That is how this rule is built; it is not advice to hold without a stop.";
+const ITEM7_JA = "メールはこの1通だけです。このあと、この合図について知らせは送りません。同じチャート・同じ向きに前の合図があっても、次の合図は送ります。";
+const ITEM7_EN = "This is the only email: nothing more is sent about this signal. A later signal on the same chart and side is sent too, whatever came before it.";
+const ITEM8_US_JA = "このメールは、足の確定の後の読み込みで判定して送ります（確定から45分を過ぎた足は送りません。実際に何分で届くかは測っていません）。";
+const ITEM8_US_EN = "This email is judged and sent at a read after the bar closes (a bar more than 45 minutes past its close is not sent; how long it takes to arrive has not been measured).";
+const ITEM8_TOKYO_JA = "東証の値段は Yahoo では約15分遅れて届くため、このメールは足が確定してから約15分後に送っています（2026-11-06 に測りました）。";
+const ITEM8_TOKYO_EN = "Yahoo's Tokyo prices come about 15 minutes late, so this email is sent about 15 minutes after the bar closed (measured on 2026-11-06).";
+const ITEM8_ARRIVE_JA = "届いた時の値段は、上の終値と違うことがあります（その差は測っていません）。";
+const ITEM8_ARRIVE_EN = "The price when it arrives may differ from the close above (the difference has not been measured).";
+const ITEM9_JA = "株では測っていません。";
+const ITEM9_EN = "Not measured on shares.";
+const ITEM10_JA =
+  "この決まりは Sextant 独自のもので、公開されているインジケーターではありません。96%・足の確定で判定すること・逆張りの向き（株にも当てはめること）・利確と損切りの値段を書かないことは、アプリのオーナーが決めたものです。株は1時間足で判定し、MACD の枠（新しい120本）は、アプリの1時間足のチャートの枠と同じです。";
+const ITEM10_EN =
+  "This rule is Sextant's own, not a published indicator. 96%, judging at the bar's close, the fade side (shares included) and stating no take-profit or stop price are the app owner's choices. Shares are judged on 1-hour bars, and the MACD pane (the newest 120 bars) is the same as the app's 1-hour chart's.";
+const BREAK_JA = "この足の終値では、次に市場が開くまで売買できません。";
+const BREAK_EN = "At this bar's close nothing can be traded until the market opens again.";
+// item 11, as today's share mail (stocks.ts's Yahoo source line, the app link, how to stop, the disclaimer)
+const ITEM11_JA = "足と値段は Yahoo Finance の公開データ（公式の配信ではないため、止まることがあります）で、アプリの株のチャートと同じです。取引時間の最後の足は、引けの値段で判定します。注文の前にアプリで最新の状態を確認してください。\nhttps://fx-tactical.jp/";
+const ITEM11_EN = "The bars and the price are Yahoo Finance's public data (not an official feed; it may stop), the same as the app's stock chart; a session's last bar is judged on its closing price. Check the latest state in the app before you place an order:\nhttps://fx-tactical.jp/";
+const STOP_JA = "この通知を止めるには、アプリの「設定」→「メール通知」の「株の MACD」でチェックを外してください。\n本メールは参考情報であり、投資助言ではありません。取引の最終判断はご自身の責任で行ってください。";
+const STOP_EN = "To stop these emails, open Settings → Email alerts in the app and untick the share under Stock MACD.\nThis is reference information, not investment advice. Every trading decision is your own.";
+// research/macdfade96-spec.md 6.1's two patterns: no text asserts that a price recovers (spec 4.1)
+const COME_BACK_JA = /(必ず|いずれ|きっと|そのうち|やがて)[^。]{0,8}戻|戻ってく|戻ってき|戻るはず|戻ります/;
+const COME_BACK_EN =
+  /\b(always|will|surely|certainly|eventually)\s+(come|comes|go|goes)\s+back\b|\b(always|will|surely|certainly|eventually)\s+(return|returns|recover|recovers)\b|\bcomes?\s+back\s+(eventually|in\s+the\s+end)\b/i;
+
+// how the mail writes the MACD numbers: `md` decimals, the chart's minus (U+2212)
+const num = (v: number, md: number) => v.toFixed(md).replace(/^-/, "−");
+const jstOf = (ms: number) => iso(ms + 9 * H).slice(0, 16).replace("T", " ");
+const utcOf = (ms: number) => iso(ms).slice(0, 16).replace("T", " ");
+
+describe("v40 the share's email, word for word (spec 4.2 and 4.4)", () => {
+  it("a US share's BUY in Japanese: the share and its market, the bar by its end, the line at 96% of the BOTTOM with the bar before not, the numbers, the close, no take-profit and no stop price, one email, its own timing, not measured, whose choices, the source, how to stop", () => {
+    const s = usSig(I_BUY);
+    const f = s.fade!;
     const mail = renderIndicatorMail(s, "ja");
     expect(mail).toEqual(renderStockMail(s, "ja"));
-    expect(mail.subject).toBe("【Sextant】アップル（AAPL） 1時間足 買い（BUY）で入る合図（株の MACD・1通目）");
-    const t = mail.text;
-    expect(t).toContain("アップル（AAPL、米国）の1時間足で、株の MACD の買い（BUY）で入る合図が出ました（1通目）。");
-    // I_BUY closes 2026-05-19 18:30 UTC, 03:30 the next day in Japan
-    expect(t).toContain("判定した足: 2026-05-20 03:30（日本時間）に確定した足");
-    expect(t).toContain("MACD(12・26・9): 青い線（MACD）が、新しい120本の MACD の枠の上の端（青い線・オレンジの線・棒の一番高い所）の90%以上（0の線から測って）に入りました。一つ前の足では入っていなかったので、流れに乗って買いで入る合図です");
-    // the edge is the PANE side's, the top for a BUY (the 95% email printed the bottom for a BUY)
-    expect(f.top!).toBeGreaterThan(0);
-    expect(t).toContain(`\n  MACD = ${f.m!.toFixed(2)}、枠の上の端 = ${f.top!.toFixed(2)}（その90% = ${(RIDE_IN_SHARE * f.top!).toFixed(2)}、96% = ${(RIDE_OUT_SHARE * f.top!).toFixed(2)}）`);
-    expect(t).not.toContain("枠の下の端");
-    expect(t).toContain(`\nこの足の終値: ${closes[I_BUY].toFixed(2)}ドル`);
-    expect(t).toContain("FX の「MACD の流れ」のメールと同じ決まり（Sextant 独自のもの。docs §8.150）を、株の1時間足に当てたものです。");
-    expect(t).toContain("2通目は、1時間足が確定するたびに見て、青い線が同じ端（枠の上の端）の96%以上にいた最初の足で送ります。FX のメールと違い、足の途中は見ません");
-    expect(t).toContain("損切りも目標もありません。青い線が90%の帯から出ても、何も送りません。2通目を送るまで、この株の同じ向き（買い）の新しい1通目は送りません。");
-    // not measured on shares, and no number of any study
-    expect(t).toContain("\n\nこの決まりは、株では測っていません。FX の5ペアで測った数字（docs §8.150）は、株には当てはまりません。損切りをしないので、96%に届くまで、含み損のまま持ち続けることがあります。\n\n");
-    expect(t).toContain("足と値段は Yahoo Finance の公開データ（公式の配信ではないため、止まることがあります）で、アプリの株のチャートと同じです。取引時間の最後の足は、引けの値段で判定します。");
-    expect(t).toContain("取引時間の最後の足の終値では、次に取引が始まるまで売買できず、その時の値段は違うことがあります。");
-    expect(t).toContain("https://fx-tactical.jp/");
-    expect(t).toContain("「株の MACD」でチェックを外してください");
-    expect(t).toContain("本メールは参考情報であり、投資助言ではありません。");
-    // a BUY on a US share at a bar inside the session: no short sale, no Tokyo, no "last bar" line
-    for (const no of ["空売り", "東証の値段", "この足は、", "昼休み"]) expect(t, no).not.toContain(no);
-    // no stop, no targets, nothing of the 95% email, none of docs §8.133's or §8.149's numbers
-    for (const no of ["損切り 1", "利確", "エントリー ≈", "95%", "山・谷", "§8.133", "§8.119", "22銘柄", "1,696", "99.36", "1,837.40", "801回", "358回", "431回", "360回", "429回", "pips", "必ず戻"]) expect(t, no).not.toContain(no);
+    expect(mail.subject).toBe("【Sextant】アップル（AAPL）1時間足 買い（BUY）: 青い線が下の端の96%で確定（株の MACD）");
+    // the bar opened 2026-01-30 18:30 UTC and closed 19:30 UTC, 04:30 the next day in Japan
+    expect(jstOf(closeOf(I_BUY))).toBe("2026-01-31 04:30");
+    expect(mail.text).toBe([
+      "アップル（AAPL、米国）の1時間足で、MACD の逆張りの買い（BUY）の合図が出ました。",
+      [
+        "判定した足: 2026-01-31 04:30（日本時間）に確定した1時間足",
+        "この足の終わりで、青い線（MACD）が、新しい120本（1時間足）の MACD の枠の下の端（青い線・オレンジの線・棒の一番低い所）の96%以上（0の線から測って）でした。一つ前の足の終わりでは、96%に届いていませんでした。下の端なので、逆張りの買い（BUY）の合図です。",
+        `MACD = ${num(f.m, 2)}、枠の下の端 = ${num(f.bottom, 2)}（その96% = ${num(0.96 * f.bottom, 2)}）`,
+        `この足の終値: ${closes[I_BUY].toFixed(2)}ドル`,
+      ].join("\n"),
+      ITEM6_JA,
+      ITEM7_JA,
+      ITEM8_US_JA + ITEM8_ARRIVE_JA,
+      ITEM9_JA,
+      ITEM10_JA,
+      ITEM11_JA,
+      STOP_JA,
+    ].join("\n\n"));
+    // below zero the minus is the chart's
+    expect(f.bottom).toBeLessThan(0);
+    expect(mail.text).toContain("MACD = −0.");
+    expect(mail.text).not.toContain("= -");
+    // a BUY on a share is no short sale, and a bar inside the session says nothing of the market shutting
+    for (const no of ["空売り", "東証", "市場が開くまで"]) expect(mail.text, no).not.toContain(no);
+    expect(mail.html).toContain("株の MACD");
+    expect(mail.html).toContain('<a href="https://fx-tactical.jp/">https://fx-tactical.jp/</a>');
   });
 
-  it("email 1 for a SELL: the pane's BOTTOM, said to be a short sale, and at a session's last bar that its close cannot be traded until the next session; in English the same", () => {
-    const s = inSig(I_LAST);
-    const f = s.ride!;
-    expect(f.bottom!).toBeLessThan(0);
+  it("a US share's BUY in English", () => {
+    const s = usSig(I_BUY);
+    const f = s.fade!;
+    const mail = renderIndicatorMail(s, "en");
+    expect(mail.subject).toBe("[Sextant] Apple (AAPL) 1-hour BUY: the MACD line closed at 96% of the bottom (Stock MACD)");
+    expect(utcOf(closeOf(I_BUY))).toBe("2026-01-30 19:30");
+    expect(mail.text).toBe([
+      "A MACD fade BUY signal on Apple (AAPL, US), 1-hour chart.",
+      [
+        "Bar judged: the 1-hour bar that closed at 2026-01-30 19:30 UTC (2026-01-31 04:30 JST)",
+        "At this bar's close the MACD line (blue) was at 96% or more of the bottom of the MACD pane of the newest 120 bars (1-hour) (the lowest of the blue line, the orange line and the bars), measured from the zero line. At the close of the bar before, it was below 96%. It is the bottom, so this is a fade BUY signal.",
+        `MACD = ${num(f.m, 2)}, the pane's bottom = ${num(f.bottom, 2)} (96% of it = ${num(0.96 * f.bottom, 2)})`,
+        `This bar's close: $${closes[I_BUY].toFixed(2)}`,
+      ].join("\n"),
+      ITEM6_EN,
+      ITEM7_EN,
+      `${ITEM8_US_EN} ${ITEM8_ARRIVE_EN}`,
+      ITEM9_EN,
+      ITEM10_EN,
+      ITEM11_EN,
+      STOP_EN,
+    ].join("\n\n"));
+    for (const no of ["short sale", "Tokyo", "opens again"]) expect(mail.text, no).not.toContain(no);
+  });
+
+  it("a US share's SELL at a session's last bar, Japanese and English: the TOP, a short sale (subject and first line), the close, and that nothing can be traded at it until the market opens again", () => {
+    const s = usSig(I_LAST);
+    const f = s.fade!;
+    expect(f.top).toBeGreaterThan(0);
+    // the bar opened 2026-02-20 15:30 New York and closed at 16:00 (21:00 UTC, 06:00 the next day in Japan)
+    expect(utcOf(closeOf(I_LAST))).toBe("2026-02-20 21:00");
     const ja = renderIndicatorMail(s, "ja");
-    expect(ja.subject).toBe("【Sextant】アップル（AAPL） 1時間足 売り（SELL）で入る合図（株の MACD・1通目）");
-    expect(ja.text).toContain("株の MACD の売り（SELL）で入る合図が出ました（1通目）。株の売りは空売りです。");
-    expect(ja.text).toContain("枠の下の端（青い線・オレンジの線・棒の一番低い所）の90%以上（0の線から測って）に入りました。一つ前の足では入っていなかったので、流れに乗って売りで入る合図です");
-    // below zero the minus is the chart's (U+2212), not toFixed's hyphen
-    expect(ja.text).toContain(`\n  MACD = −${(-f.m!).toFixed(2)}、枠の下の端 = −${(-f.bottom!).toFixed(2)}（その90% = −${(-RIDE_IN_SHARE * f.bottom!).toFixed(2)}、96% = −${(-RIDE_OUT_SHARE * f.bottom!).toFixed(2)}）`);
-    expect(ja.text).not.toContain("= -");
-    // I_LAST opens 15:30 in New York: the session's last bar (closes 16:00, 06:00 in Japan)
-    expect(ja.text).toContain("判定した足: 2025-12-09 06:00（日本時間）に確定した足");
-    expect(ja.text).toContain(`\nこの足の終値: ${closes[I_LAST].toFixed(2)}ドル\nこの足は、取引時間の最後の足です。この終値では、次の取引時間が始まるまで売買できず、その時の値段は違うことがあります\n\n`);
-    expect(ja.text).toContain("2通目を送るまで、この株の同じ向き（売り）の新しい1通目は送りません。");
+    expect(ja.subject).toBe("【Sextant】アップル（AAPL）1時間足 売り（SELL・空売り）: 青い線が上の端の96%で確定（株の MACD）");
+    expect(ja.text).toBe([
+      "アップル（AAPL、米国）の1時間足で、MACD の逆張りの売り（SELL）の合図が出ました。株の売りは空売りです。",
+      [
+        "判定した足: 2026-02-21 06:00（日本時間）に確定した1時間足",
+        "この足の終わりで、青い線（MACD）が、新しい120本（1時間足）の MACD の枠の上の端（青い線・オレンジの線・棒の一番高い所）の96%以上（0の線から測って）でした。一つ前の足の終わりでは、96%に届いていませんでした。上の端なので、逆張りの売り（SELL）の合図です。",
+        `MACD = ${num(f.m, 2)}、枠の上の端 = ${num(f.top, 2)}（その96% = ${num(0.96 * f.top, 2)}）`,
+        `この足の終値: ${closes[I_LAST].toFixed(2)}ドル`,
+        BREAK_JA,
+      ].join("\n"),
+      ITEM6_JA,
+      ITEM7_JA,
+      ITEM8_US_JA + ITEM8_ARRIVE_JA,
+      ITEM9_JA,
+      ITEM10_JA,
+      ITEM11_JA,
+      STOP_JA,
+    ].join("\n\n"));
     const en = renderIndicatorMail(s, "en");
-    expect(en.subject).toBe("[Sextant] Apple (AAPL) 1-hour SELL entry signal (Stock MACD, email 1)");
-    const t = en.text;
-    expect(t).toContain("A Stock MACD SELL entry signal fired on Apple (AAPL, US), 1-hour chart (email 1). A SELL on a share is a short sale.");
-    expect(t).toContain("Bar: closed 2025-12-08 21:00 UTC (2025-12-09 06:00 JST)");
-    expect(t).toContain(
-      "MACD(12, 26, 9): the MACD line (blue) came into the bottom band of the MACD pane of the newest 120 bars: 90% or more of the way from the zero line to the pane's bottom (the lowest of the MACD line, the signal line and the histogram). The bar before was outside it, so this is an entry with the flow: a SELL",
-    );
-    expect(t).toContain(`\n  MACD = −${(-f.m!).toFixed(2)}; bottom of the pane = −${(-f.bottom!).toFixed(2)}; 90% of it = −${(-RIDE_IN_SHARE * f.bottom!).toFixed(2)}; 96% of it = −${(-RIDE_OUT_SHARE * f.bottom!).toFixed(2)}`);
-    expect(t).toContain(`\nThis bar's close: $${closes[I_LAST].toFixed(2)}\nThis is the session's last bar: this close cannot be traded until the next session opens, and the price then may differ\n\n`);
-    expect(t).toContain("This is the rule of the app's MACD ride email on currency pairs (Sextant's own rule, docs §8.150), on the share's 1-hour bars. Email 2 is sent at the first later 1-hour close at which the blue line is at 96% or more of the same edge (the pane's bottom). Unlike the pairs' email it is looked for at closes only");
-    expect(t).toContain("There is no stop and no target. Nothing is sent if the line leaves the 90% band, and no new email 1 for this share and side (SELL) is sent until email 2 has been.");
-    expect(t).toContain("\n\nThis rule has not been measured on shares. The numbers measured on the five currency pairs (docs §8.150) do not apply to shares. With no stop, a trade can stay at a loss until the line reaches 96%.\n\n");
-    expect(t).toContain("The bars and the price are Yahoo Finance's public data (not an official feed; it may stop), the same as the app's stock chart; a session's last bar is judged on its closing price. The close of a session's last bar cannot be traded until the market opens again, and the price then may differ.");
-    expect(t).toContain("untick the share under Stock MACD");
-    for (const no of ["Stop ", "TP1", "take-profit", "take profit", "95%", "peak/valley", "always comes back", "No stop or target is given", "§8.133", "801 entries", "15 minutes late"]) expect(t, no).not.toContain(no);
-    // a BUY's English says no short sale
-    expect(renderIndicatorMail(inSig(I_BUY), "en").text).not.toContain("short sale");
+    expect(en.subject).toBe("[Sextant] Apple (AAPL) 1-hour SELL (short sale): the MACD line closed at 96% of the top (Stock MACD)");
+    expect(en.text).toBe([
+      "A MACD fade SELL signal on Apple (AAPL, US), 1-hour chart. A SELL on a share is a short sale.",
+      [
+        "Bar judged: the 1-hour bar that closed at 2026-02-20 21:00 UTC (2026-02-21 06:00 JST)",
+        "At this bar's close the MACD line (blue) was at 96% or more of the top of the MACD pane of the newest 120 bars (1-hour) (the highest of the blue line, the orange line and the bars), measured from the zero line. At the close of the bar before, it was below 96%. It is the top, so this is a fade SELL signal.",
+        `MACD = ${num(f.m, 2)}, the pane's top = ${num(f.top, 2)} (96% of it = ${num(0.96 * f.top, 2)})`,
+        `This bar's close: $${closes[I_LAST].toFixed(2)}`,
+        BREAK_EN,
+      ].join("\n"),
+      ITEM6_EN,
+      ITEM7_EN,
+      `${ITEM8_US_EN} ${ITEM8_ARRIVE_EN}`,
+      ITEM9_EN,
+      ITEM10_EN,
+      ITEM11_EN,
+      STOP_EN,
+    ].join("\n\n"));
+    // a SELL inside the session: the short sale, and no line of the market shutting
+    const mid = usSig(I_SELL);
+    const midJa = renderIndicatorMail(mid, "ja");
+    expect(midJa.subject).toBe("【Sextant】アップル（AAPL）1時間足 売り（SELL・空売り）: 青い線が上の端の96%で確定（株の MACD）");
+    expect(midJa.text).toContain("MACD の逆張りの売り（SELL）の合図が出ました。株の売りは空売りです。\n\n");
+    expect(midJa.text).toContain(`\nこの足の終値: ${closes[I_SELL].toFixed(2)}ドル\n\n${ITEM6_JA}`);
+    expect(midJa.text).not.toContain(BREAK_JA);
+    expect(renderIndicatorMail(mid, "en").text).not.toContain(BREAK_EN);
   });
 
-  it("a Tokyo share: yen, its market, Yahoo's 15-minute lag kept, and the bar before the lunch break said to be one", () => {
-    expect(stockBarBreak("7203.T", at("2026-11-02T02:00:00Z"))).toBe("lunch");
-    expect(stockBarBreak("7203.T", at("2026-11-02T06:00:00Z"))).toBe("close");
-    expect(stockBarBreak("7203.T", at("2026-11-02T01:00:00Z"))).toBeNull();
-    expect(stockBarBreak("7203.T", at("2026-11-02T03:00:00Z"))).toBeNull();
-    expect(stockBarBreak(SYM, times[I_LAST])).toBe("close");
-    expect(stockBarBreak(SYM, times[I_BUY])).toBeNull();
-    const ja = renderStockMail(toyotaIn(), "ja");
-    expect(ja.subject).toBe("【Sextant】トヨタ自動車（7203.T） 1時間足 売り（SELL）で入る合図（株の MACD・1通目）");
-    expect(ja.text).toContain("トヨタ自動車（7203.T、東証）の1時間足で、");
-    expect(ja.text).toContain("判定した足: 2026-11-02 11:30（日本時間）に確定した足");
-    expect(ja.text).toContain("\nこの足の終値: 3070.0円\nこの足は、東証の昼休み（11:30〜12:30）の前の最後の足です。この終値では、午後の取引が始まるまで売買できず、その時の値段は違うことがあります\n\n");
-    expect(ja.text).toContain("取引時間の最後の足（と、昼休みの前の足）の終値では、次に取引が始まるまで売買できず、その時の値段は違うことがあります。東証の値段は Yahoo では約15分遅れて届くため、このメールは足が確定してから約15分後に送っています（2026-11-06 に測りました）。注文の前にアプリで最新の状態を確認してください。");
-    expect(ja.text).not.toContain("まだ確かめていません");
-    const en = renderStockMail(toyotaIn(), "en");
-    expect(en.subject).toBe("[Sextant] Toyota Motor (7203.T) 1-hour SELL entry signal (Stock MACD, email 1)");
-    expect(en.text).toContain("fired on Toyota Motor (7203.T, Tokyo), 1-hour chart (email 1).");
-    expect(en.text).toContain("\nThis bar's close: 3070.0 yen\nThis is the last bar before Tokyo's lunch break (11:30–12:30 JST): this close cannot be traded until the afternoon session opens, and the price then may differ\n\n");
-    expect(en.text).toContain("The close of a session's last bar (and of the last bar before Tokyo's lunch break) cannot be traded until the market opens again, and the price then may differ. Yahoo's Tokyo prices come about 15 minutes late, so this email is sent about 15 minutes after the bar closed (measured on 2026-11-06). Check the latest state in the app before you place an order:");
-    // a bar inside Tokyo's session has no such line
-    const inside = renderStockMail(rideCloseSignal("stockmacd", "7203.T", "1h", "in", entryAt(I_LAST)!, { ...TOYOTA_LUNCH, openMs: at("2026-11-02T01:00:00Z"), closeMs: at("2026-11-02T02:00:00Z") }), "ja").text;
-    expect(inside).not.toContain("この足は、");
-    // the notice and email 2 of a Tokyo share keep the 15-minute sentence too
-    expect(renderStockMail(rideCloseSignal("stockmacd", "7203.T", "1h", "at", entryAt(I_NOTICE)!, TOYOTA_LUNCH), "ja").text).toContain("このメールは足が確定してから約15分後に送っています（2026-11-06 に測りました）。");
-    expect(renderStockMail(toyotaOut(), "ja").text).toContain("このメールは足が確定してから約15分後に送っています（2026-11-06 に測りました）。");
-  });
-
-  it("the notice: the line came into the band already at 96%, no entry, the bar's close and the three numbers", () => {
-    const s = atSig(I_NOTICE);
-    const e = entryAt(I_NOTICE)!;
+  it("a Tokyo share's BUY before the lunch break, Japanese and English: yen, its market, the bar by its end (11:30), the lunch break as a break, Yahoo's measured delay in place of the US sentence", () => {
+    const s = tokyoSig(T_LUNCH);
+    const f = s.fade!;
+    // a Tokyo share in a tenth of a yen: the edge has more than two significant digits in one decimal
+    expect(Math.abs(f.bottom)).toBeGreaterThan(1);
+    expect(jstOf(TOKYO.ends[T_LUNCH])).toBe("2026-02-26 11:30");
     const ja = renderIndicatorMail(s, "ja");
-    expect(ja.subject).toBe("【Sextant】アップル（AAPL） 1時間足 知らせ: もう96%です（株の MACD・入る合図なし）");
-    expect(ja.text).toContain("アップル（AAPL、米国）の1時間足で、MACD の青い線が、枠の下の端の90%の帯に入りましたが、足が確定した時にはもう96%以上でした。入る合図（売り（SELL）。株では空売り）は送りません。知らせだけです。");
-    expect(ja.text).toContain("判定した足: 2026-06-02 01:30（日本時間）に確定した足");
-    expect(ja.text).toContain(`\n終値 ${closes[I_NOTICE].toFixed(2)}ドル\n  MACD = −${(-e.z.m).toFixed(2)}、枠の下の端 = −${(-e.z.bottom).toFixed(2)}（その96% = −${(-RIDE_OUT_SHARE * e.z.bottom).toFixed(2)}）`);
-    expect(e.z.m).toBeLessThanOrEqual(RIDE_OUT_SHARE * e.z.bottom);
-    expect(ja.text).toContain("この株の同じ向きの次の入る合図は、青い線がいったん90%の帯から出て、入り直した足で判定します。この決まりは、株では測っていません。");
-    expect(ja.text).toContain("「株の MACD」でチェックを外してください");
-    // no entry: no price paid, no 90% mark, nothing of a stop or a result
-    for (const no of ["この足の終値:", "その90%", "利確", "損切り", "損益", "必ず戻", "この足は、"]) expect(ja.text, no).not.toContain(no);
+    expect(ja.subject).toBe("【Sextant】トヨタ自動車（7203.T）1時間足 買い（BUY）: 青い線が下の端の96%で確定（株の MACD）");
+    expect(ja.text).toBe([
+      "トヨタ自動車（7203.T、東証）の1時間足で、MACD の逆張りの買い（BUY）の合図が出ました。",
+      [
+        "判定した足: 2026-02-26 11:30（日本時間）に確定した1時間足",
+        "この足の終わりで、青い線（MACD）が、新しい120本（1時間足）の MACD の枠の下の端（青い線・オレンジの線・棒の一番低い所）の96%以上（0の線から測って）でした。一つ前の足の終わりでは、96%に届いていませんでした。下の端なので、逆張りの買い（BUY）の合図です。",
+        `MACD = ${num(f.m, 1)}、枠の下の端 = ${num(f.bottom, 1)}（その96% = ${num(0.96 * f.bottom, 1)}）`,
+        `この足の終値: ${TOKYO.closes[T_LUNCH].toFixed(1)}円`,
+        BREAK_JA,
+      ].join("\n"),
+      ITEM6_JA,
+      ITEM7_JA,
+      ITEM8_TOKYO_JA + ITEM8_ARRIVE_JA,
+      ITEM9_JA,
+      ITEM10_JA,
+      ITEM11_JA,
+      STOP_JA,
+    ].join("\n\n"));
     const en = renderIndicatorMail(s, "en");
-    expect(en.subject).toBe("[Sextant] Apple (AAPL) 1-hour notice: already at 96% (Stock MACD, no entry signal)");
-    expect(en.text).toContain("On Apple (AAPL, US), 1-hour chart, the MACD line (blue) came into the 90% band of the MACD pane's bottom, and at the bar's close it was already at 96% or more. No entry signal (it would have been a SELL, on a share a short sale) is sent: this is a notice only.");
-    expect(en.text).toContain(`\nClose $${closes[I_NOTICE].toFixed(2)}\n  MACD = −${(-e.z.m).toFixed(2)}; bottom of the pane = −${(-e.z.bottom).toFixed(2)}; 96% of it = −${(-RIDE_OUT_SHARE * e.z.bottom).toFixed(2)}`);
-    expect(en.text).toContain("The next entry signal for this share and side is judged at the bar where the line, having left the 90% band, comes back into it. This rule has not been measured on shares.");
+    expect(en.subject).toBe("[Sextant] Toyota Motor (7203.T) 1-hour BUY: the MACD line closed at 96% of the bottom (Stock MACD)");
+    expect(en.text).toBe([
+      "A MACD fade BUY signal on Toyota Motor (7203.T, Tokyo), 1-hour chart.",
+      [
+        "Bar judged: the 1-hour bar that closed at 2026-02-26 02:30 UTC (2026-02-26 11:30 JST)",
+        "At this bar's close the MACD line (blue) was at 96% or more of the bottom of the MACD pane of the newest 120 bars (1-hour) (the lowest of the blue line, the orange line and the bars), measured from the zero line. At the close of the bar before, it was below 96%. It is the bottom, so this is a fade BUY signal.",
+        `MACD = ${num(f.m, 1)}, the pane's bottom = ${num(f.bottom, 1)} (96% of it = ${num(0.96 * f.bottom, 1)})`,
+        `This bar's close: ${TOKYO.closes[T_LUNCH].toFixed(1)} yen`,
+        BREAK_EN,
+      ].join("\n"),
+      ITEM6_EN,
+      ITEM7_EN,
+      `${ITEM8_TOKYO_EN} ${ITEM8_ARRIVE_EN}`,
+      ITEM9_EN,
+      ITEM10_EN,
+      ITEM11_EN,
+      STOP_EN,
+    ].join("\n\n"));
   });
 
-  it("email 2 in Japanese: the first email, the close it was seen on, the price now, the result in the share's currency and in percent of the entry (close to close), how long, and that it reports the line, not a profit", () => {
-    const mail = renderIndicatorMail(outSig(), "ja");
-    expect(mail.subject).toBe("【Sextant】アップル（AAPL） 1時間足 96%に届きました（株の MACD・2通目、買いの分）");
-    const t = mail.text;
-    expect(t).toContain("アップル（AAPL、米国）の1時間足で、MACD の青い線が、枠の上の端の96%に届きました（株の MACD の2通目。買い（BUY）の分）。");
-    expect(t).toContain(`1通目: 2026-05-20 03:30（日本時間）に確定した足で買い（BUY）。その足の終値 ${closes[I_BUY].toFixed(2)}ドル`);
-    expect(t).toContain("\n届いたのを見た時刻: 2026-05-20 23:30（日本時間）。その時の最新の確定足の終値で見ました");
-    expect(t).toContain(`\n今の値段: ${closes[J_BUY].toFixed(2)}ドル（最新の確定足の終値）`);
-    // 217.45 against 216.44: +1.01 dollars, 0.47% of the entry
-    expect([closes[I_BUY], closes[J_BUY]]).toEqual([216.44, 217.45]);
-    expect(t).toContain("\n1通目の値段からの損益: +1.01ドル（+0.47%）。終値と終値の比べです");
-    expect(t).toContain("\n1通目の足の確定からの時間: 20時間0分（取引していない時間も入れています）");
-    expect(t).toContain("このメールは、青い線が96%に届いたことの知らせです。損益はプラスとは限りません。損益は、1通目の足の終値と、最新の確定足の終値を比べたものです。手数料などの費用は入れていません。実際に売買できる値段は、違うことがあります。この決まりは、株では測っていません。");
-    expect(t).toContain("96%に届いたかは、1時間足が確定するたびに、その足の終値で見ています（足の途中は見ていません）。");
-    expect(t).toContain("「株の MACD」でチェックを外してください");
-    for (const no of ["その時は読めず", "空売り", "東証の値段", "この足は、", "pips", "利確", "必ず戻"]) expect(t, no).not.toContain(no);
-    // a loss (the minus as the chart's), and exactly zero
-    expect(renderIndicatorMail(outSig({ seen_price: 215 }), "ja").text).toContain("\n1通目の値段からの損益: −1.44ドル（−0.67%）。終値と終値の比べです");
-    expect(renderIndicatorMail(outSig({ seen_price: 216.44 }), "ja").text).toContain("\n1通目の値段からの損益: ±0.00ドル（±0.00%）。終値と終値の比べです");
-    // a SELL (a short sale) gains when the price fell, on the pane's bottom
-    const sell = renderIndicatorMail(outSig({ side: "SELL", seen_price: 215 }), "ja");
-    expect(sell.subject).toBe("【Sextant】アップル（AAPL） 1時間足 96%に届きました（株の MACD・2通目、売りの分）");
-    expect(sell.text).toContain("枠の下の端の96%に届きました（株の MACD の2通目。売り（SELL）の分）。");
-    expect(sell.text).toContain("に確定した足で売り（SELL、空売り）。その足の終値 216.44ドル");
-    expect(sell.text).toContain("\n1通目の値段からの損益: +1.44ドル（+0.67%）。終値と終値の比べです");
-    expect(sell.text).toContain("手数料などの費用（空売りにかかる費用も）は入れていません。");
-    // the numbers behind the text
-    expect(stockRidePnl(SYM, "BUY", 216.44, 217.45)).toEqual({ value: 1.01, pct: (101 / 21644) * 100 });
-    expect(stockRidePnl(SYM, "SELL", 216.44, 217.45).value).toBe(-1.01);
-    expect(stockRidePnl("7203.T", "SELL", 3070, 3102.5)).toEqual({ value: -32.5, pct: (-325 / 30700) * 100 });
+  it("a Tokyo share's SELL at the session's last bar (15:00, ending 15:30) and at a bar inside the session: a short sale; the break only where trading stops", () => {
+    const last = renderIndicatorMail(tokyoSig(T_LAST), "ja");
+    expect(last.subject).toBe("【Sextant】トヨタ自動車（7203.T）1時間足 売り（SELL・空売り）: 青い線が上の端の96%で確定（株の MACD）");
+    expect(last.text.startsWith("トヨタ自動車（7203.T、東証）の1時間足で、MACD の逆張りの売り（SELL）の合図が出ました。株の売りは空売りです。\n\n判定した足: 2026-02-20 15:30（日本時間）に確定した1時間足\n")).toBe(true);
+    expect(last.text).toContain(`\nこの足の終値: ${TOKYO.closes[T_LAST].toFixed(1)}円\n${BREAK_JA}\n\n${ITEM6_JA}\n\n${ITEM7_JA}\n\n${ITEM8_TOKYO_JA}${ITEM8_ARRIVE_JA}\n\n`);
+    const lastEn = renderIndicatorMail(tokyoSig(T_LAST), "en");
+    expect(lastEn.subject).toBe("[Sextant] Toyota Motor (7203.T) 1-hour SELL (short sale): the MACD line closed at 96% of the top (Stock MACD)");
+    expect(lastEn.text).toContain(`\nThis bar's close: ${TOKYO.closes[T_LAST].toFixed(1)} yen\n${BREAK_EN}\n\n${ITEM6_EN}`);
+    // the 10:00 bar ends at 11:00: trading goes on
+    const ten = renderIndicatorMail(tokyoSig(T_TEN), "ja").text;
+    expect(ten).toContain("判定した足: 2026-01-16 11:00（日本時間）に確定した1時間足\n");
+    expect(ten).toContain(`\nこの足の終値: ${TOKYO.closes[T_TEN].toFixed(1)}円\n\n${ITEM6_JA}`);
+    expect(ten).not.toContain(BREAK_JA);
+    expect(renderIndicatorMail(tokyoSig(T_TEN), "en").text).not.toContain(BREAK_EN);
   });
 
-  it("email 2 seen late says at which close the line was already at 96%, that it could not be read then, and the price now", () => {
-    const late = outSig({ late: true, reached_at: pg(closeOf(J_BUY + 1) + 1_000), seen_price: closes[J_BUY + 1] });
-    const ja = renderIndicatorMail(late, "ja").text;
-    expect(ja).toContain("\n2026-05-20 22:30（日本時間）に始まった足の終わりで、もう96%以上でした。その時は読めず、今見つけました（2026-05-21 00:30、日本時間）");
-    expect(ja).not.toContain("届いたのを見た時刻");
-    expect(ja).toContain(`\n今の値段: ${closes[J_BUY + 1].toFixed(2)}ドル（最新の確定足の終値）`);
-    expect(ja).toContain("\n1通目の値段からの損益: +0.82ドル（+0.38%）。終値と終値の比べです");
-    expect(ja).toContain("\n1通目の足の確定からの時間: 21時間0分");
-    const en = renderIndicatorMail(late, "en").text;
-    expect(en).toContain("\nThe line was already at 96% or more at the close of the bar that opened 2026-05-20 13:30 UTC (2026-05-20 22:30 JST). It could not be read then and was found now (2026-05-20 15:30 UTC, 2026-05-21 00:30 JST)");
-    expect(en).toContain(`\nPrice now: $${closes[J_BUY + 1].toFixed(2)} (the newest closed 1-hour bar's close)`);
-    expect(en).toContain("\nProfit or loss against email 1's price: +$0.82 (+0.38%), close to close");
-    // a Tokyo share's late email 2 does not say it was sent 15 minutes after the close
-    const tokyo = renderStockMail(toyotaOut({ late: true }), "ja").text;
-    expect(tokyo).toContain("東証の値段は Yahoo では約15分遅れて届きます（2026-11-06 に測りました）。");
-    expect(tokyo).not.toContain("約15分後に送っています");
-    expect(renderStockMail(toyotaOut({ late: true }), "en").text).toContain("Yahoo's Tokyo prices come about 15 minutes late (measured on 2026-11-06). Check");
+  it("item 8, each kind's timing: a US share's 45 minutes with how long the mail takes not measured, a Tokyo share's measured delay, the arrival price in both; none says 「数分後」 / \"a few minutes\" or a pair's reads; item 10 names the owner only for what 4.4 lists", () => {
+    const us = [usSig(I_BUY), usSig(I_SELL), usSig(I_LAST)];
+    const jp = [tokyoSig(T_LUNCH), tokyoSig(T_LAST), tokyoSig(T_TEN)];
+    for (const s of us) {
+      const ja = renderIndicatorMail(s, "ja").text;
+      const en = renderIndicatorMail(s, "en").text;
+      expect(ja).toContain(`\n\n${ITEM8_US_JA}${ITEM8_ARRIVE_JA}\n\n`);
+      expect(en).toContain(`\n\n${ITEM8_US_EN} ${ITEM8_ARRIVE_EN}\n\n`);
+      expect(ja).toContain("実際に何分で届くかは測っていません");
+      expect(en).toContain("how long it takes to arrive has not been measured");
+      expect(ja).not.toContain(ITEM8_TOKYO_JA);
+      expect(en).not.toContain(ITEM8_TOKYO_EN);
+    }
+    for (const s of jp) {
+      const ja = renderIndicatorMail(s, "ja").text;
+      const en = renderIndicatorMail(s, "en").text;
+      expect(ja).toContain(`\n\n${ITEM8_TOKYO_JA}${ITEM8_ARRIVE_JA}\n\n`);
+      expect(en).toContain(`\n\n${ITEM8_TOKYO_EN} ${ITEM8_ARRIVE_EN}\n\n`);
+      expect(ja).not.toContain(ITEM8_US_JA);
+      expect(en).not.toContain(ITEM8_US_EN);
+    }
+    for (const s of [...us, ...jp]) {
+      const ja = renderIndicatorMail(s, "ja").text;
+      const en = renderIndicatorMail(s, "en").text;
+      for (const no of ["数分後", "3分後", "直後・3分後・5分後", "週末の止まっている時間"]) expect(ja, no).not.toContain(no);
+      for (const no of ["a few minutes", "3 and 5 minutes", "weekend pause"]) expect(en, no).not.toContain(no);
+      // item 9: not measured, and no number of any study
+      expect(ja).toContain(`\n\n${ITEM9_JA}\n\n`);
+      expect(en).toContain(`\n\n${ITEM9_EN}\n\n`);
+      // item 10: the owner is named for 96%, judging at the close, the fade side (shares included) and no take-profit
+      // or stop price; the shares' 1-hour bars and the pane are facts of the rule, not the owner's choice
+      expect(ja).toContain(`\n\n${ITEM10_JA}\n\n`);
+      expect(en).toContain(`\n\n${ITEM10_EN}\n\n`);
+      // item 11: Yahoo's source line, the app link, how to stop under 「株の MACD」 / "Stock MACD", the disclaimer
+      expect(ja.endsWith(`\n\n${ITEM11_JA}\n\n${STOP_JA}`)).toBe(true);
+      expect(en.endsWith(`\n\n${ITEM11_EN}\n\n${STOP_EN}`)).toBe(true);
+    }
+    expect(ITEM10_JA.split("アプリのオーナーが決めたものです。")[1]).toBe("株は1時間足で判定し、MACD の枠（新しい120本）は、アプリの1時間足のチャートの枠と同じです。");
+    expect(ITEM10_EN.split("are the app owner's choices.")[1]).toBe(" Shares are judged on 1-hour bars, and the MACD pane (the newest 120 bars) is the same as the app's 1-hour chart's.");
+    // not the pairs' and gold's item 10 (which names judging the email on 1-hour bars as the owner's)
+    expect(ITEM10_JA).not.toContain("メールを1時間足で判定すること");
+    expect(ITEM10_EN).not.toContain("judging the email on 1-hour bars");
   });
 
-  it("email 2 in English says the same; a Tokyo share's in yen, and seen at a session's last bar that the price cannot be traded until the next session", () => {
-    const mail = renderIndicatorMail(outSig(), "en");
-    expect(mail.subject).toBe("[Sextant] Apple (AAPL) 1-hour reached 96% (Stock MACD, email 2, the BUY)");
-    const t = mail.text;
-    expect(t).toContain("On Apple (AAPL, US), 1-hour chart, the MACD line (blue) reached 96% of the way to the top of the MACD pane (Stock MACD, email 2, for the BUY).");
-    expect(t).toContain("Email 1: a BUY at the bar closed 2026-05-19 18:30 UTC (2026-05-20 03:30 JST), that bar's close $216.44");
-    expect(t).toContain("\nSeen at 2026-05-20 14:30 UTC (2026-05-20 23:30 JST), on the close of the newest closed 1-hour bar");
-    expect(t).toContain("\nPrice now: $217.45 (the newest closed 1-hour bar's close)");
-    expect(t).toContain("\nProfit or loss against email 1's price: +$1.01 (+0.47%), close to close");
-    expect(t).toContain("\nTime since the entry bar closed: 20 hours 0 minutes (the hours the market was shut are in it)");
-    expect(t).toContain("This email reports that the line reached 96%. It does not say the trade is at a profit: the result can be a loss. The result compares the close of email 1's bar with the newest closed bar's close; it holds no commission or other cost, and the prices you can trade at may differ. This rule has not been measured on shares.");
-    expect(t).toContain("Whether the line is at 96% is looked at when each 1-hour bar closes, on that bar's close, not while a bar forms.");
-    expect(t).toContain("untick the share under Stock MACD");
-    expect(renderIndicatorMail(outSig({ seen_price: 215 }), "en").text).toContain("\nProfit or loss against email 1's price: −$1.44 (−0.67%), close to close");
-    // Toyota, a SELL from 3070.0 seen at 3102.5 at the 15:00 bar's close (the session's last): a loss of 32.5 yen, 1.06%
-    const ja = renderStockMail(toyotaOut(), "ja");
-    expect(ja.subject).toBe("【Sextant】トヨタ自動車（7203.T） 1時間足 96%に届きました（株の MACD・2通目、売りの分）");
-    expect(ja.text).toContain("1通目: 2026-11-02 11:30（日本時間）に確定した足で売り（SELL、空売り）。その足の終値 3070.0円");
-    expect(ja.text).toContain("\n届いたのを見た時刻: 2026-11-02 15:45（日本時間）。その時の最新の確定足の終値で見ました");
-    expect(ja.text).toContain("\n今の値段: 3102.5円（最新の確定足の終値）\nこの足は、取引時間の最後の足です。この値段では、次の取引時間が始まるまで売買できず、その時の値段は違うことがあります\n1通目の値段からの損益: −32.5円（−1.06%）。終値と終値の比べです");
-    const en = renderStockMail(toyotaOut(), "en").text;
-    expect(en).toContain("Email 1: a SELL (a short sale) at the bar closed 2026-11-02 02:30 UTC (2026-11-02 11:30 JST), that bar's close 3070.0 yen");
-    expect(en).toContain("\nPrice now: 3102.5 yen (the newest closed 1-hour bar's close)\nThis is the session's last bar: this price cannot be traded until the next session opens, and the price then may differ\nProfit or loss against email 1's price: −32.5 yen (−1.06%), close to close");
-    expect(en).toContain("it holds no commission or other cost (a short sale has its own), and the prices you can trade at may differ.");
-  });
-
-  it("none of the three calls email 2 a take-profit, says a price always comes back, or carries a study's numbers; each says shares are not measured", () => {
-    const mails = [inSig(I_BUY), inSig(I_LAST), toyotaIn(), atSig(I_NOTICE), outSig(), outSig({ late: true }), outSig({ side: "SELL" }), toyotaOut(), toyotaOut({ late: true })];
-    for (const s of mails) {
-      const t = allText(s);
-      for (const no of ["利確", "必ず戻", "take-profit", "take profit", "Take-profit", "always comes back", "always come back", "山・谷", "peak/valley", "§8.133", "1,696", "99.36", "1,837.40", "22銘柄", "22 shares", "z95of120", "95%"]) {
-        expect(t, `${s.pair} ${s.ride!.mail} ${no}`).not.toContain(no);
+  it("4.1's guards: 「利確」 / \"take profit\" only in item 6 and item 10; 「利確の目安」, \"take-profit level\" never; no price labelled a target or a stop; no text asserts that a price recovers; no number but 96% and the bar's own", () => {
+    // (the patterns are the spec's, character for character; that they catch such a sentence in a share's mail was
+    // checked by planting one in stocks.ts: this test failed)
+    const spec96 = readFileSync("research/macdfade96-spec.md", "utf8");
+    expect(spec96).toContain(`\`/${COME_BACK_JA.source}/\``);
+    expect(spec96).toContain(`\`/${COME_BACK_EN.source}/i\``);
+    const strip = (t: string, allowed: string[]) =>
+      allowed.reduce((x, a) => {
+        expect(x, a.slice(0, 30)).toContain(a);
+        return x.split(a).join("");
+      }, t);
+    for (const s of [usSig(I_BUY), usSig(I_SELL), usSig(I_LAST), tokyoSig(T_LUNCH), tokyoSig(T_LAST), tokyoSig(T_TEN)]) {
+      const ja = renderIndicatorMail(s, "ja");
+      const en = renderIndicatorMail(s, "en");
+      for (const t of [ja.subject, ja.text, ja.html]) {
+        expect(t).not.toContain("利確の目安");
+        expect(t).not.toMatch(COME_BACK_JA);
+        expect(t).not.toContain("必ず");
+        expect(t).not.toContain("戻");
+        expect(t).not.toMatch(/(利確|損切り|目標)[^。\n]{0,6}[0-9]/);
       }
-      expect(t).toContain("株では測っていません");
-      expect(t).toContain("has not been measured on shares");
-      // the HTML part says what the text part says
-      expect(renderIndicatorMail(s, "ja").html).toContain("株の MACD");
+      for (const t of [en.subject, en.text, en.html]) {
+        expect(t.toLowerCase()).not.toContain("take-profit level");
+        expect(t).not.toMatch(COME_BACK_EN);
+        expect(t).not.toMatch(/\b(take profit|take-profit|stop|target|TP\d)\s*(price)?\s*[:=]?\s*[0-9]/i);
+      }
+      expect(strip(ja.text, [ITEM6_JA, ITEM10_JA])).not.toContain("利確");
+      const enLeft = strip(en.text, [ITEM6_EN, ITEM10_EN]).toLowerCase();
+      expect(enLeft).not.toContain("take profit");
+      expect(enLeft).not.toContain("take-profit");
+      // no study's numbers (the pairs' measured paragraph is not in a share's mail): every percent is the rule's 96%
+      for (const t of [ja.text, en.text]) {
+        expect(t.match(/[0-9.,]+%/g)!.every((p) => p === "96%"), t.match(/[0-9.,]+%/g)!.join(" ")).toBe(true);
+        for (const no of ["pips", "1,490", "§8.133", "§8.150", "§8.155", "1,696", "99.36", "1,837.40", "22銘柄", "22 shares", "z95of120", "95%", "90%", "2通目", "email 2", "MACD の流れ", "MACD ride"]) {
+          expect(t, no).not.toContain(no);
+        }
+      }
     }
   });
 
-  it("a tiny edge is written to two significant digits, the numbers of a mail alike, from the PANE side's edge; a signal with no facts is written with dashes", () => {
+  it("a tiny edge is written to two significant digits, the numbers of a mail alike, from the edge on the fade's side; a signal with no facts is written with dashes", () => {
     const e = entryAt(I_BUY)!;
-    const withZ = (side: "top" | "bottom", z: { m: number; top: number; bottom: number }) =>
-      rideCloseSignal("stockmacd", SYM, "1h", "in", { ...e, zside: side, side: side === "top" ? "BUY" : "SELL", z }, barAt(I_BUY));
-    // a top of 0.0126: in a US share's 2 decimals it would read 0.01 four times
-    expect(renderStockMail(withZ("top", { m: 0.0126, top: 0.0126, bottom: -2.2 }), "ja").text).toContain("\n  MACD = 0.013、枠の上の端 = 0.013（その90% = 0.011、96% = 0.012）");
-    // the decimals follow the edge on the ride's side: a BUY's tiny BOTTOM changes nothing, a SELL's does
-    expect(renderStockMail(withZ("top", { m: 0.19, top: 0.2, bottom: -1e-9 }), "en").text).toContain("\n  MACD = 0.19; top of the pane = 0.20; 90% of it = 0.18; 96% of it = 0.19");
-    expect(renderStockMail(withZ("bottom", { m: -0.0095, top: 0.2, bottom: -0.0097 }), "en").text).toContain("\n  MACD = −0.0095; bottom of the pane = −0.0097; 90% of it = −0.0087; 96% of it = −0.0093");
-    const bare: IndicatorSignal = { ...inSig(I_BUY), ride: undefined };
-    expect(renderStockMail(bare, "ja").text).toContain("MACD = —、枠の上の端 = —");
+    const withZ = (zside: "top" | "bottom", z: { m: number; top: number; bottom: number }) =>
+      fadeSignal("stockmacd", SYM, "1h", { ...e, zside, side: zside === "top" ? "SELL" : "BUY", z }, { openMs: times[I_BUY], closeMs: closeOf(I_BUY), close: closes[I_BUY], price: closes[I_BUY] });
+    // a top of 0.0126: in a US share's 2 decimals it would read 0.01 three times
+    expect(renderStockMail(withZ("top", { m: 0.0126, top: 0.0126, bottom: -2.2 }), "ja").text).toContain("\nMACD = 0.013、枠の上の端 = 0.013（その96% = 0.012）\n");
+    // the decimals follow the edge on the fade's side: a SELL's tiny BOTTOM changes nothing, a BUY's does
+    expect(renderStockMail(withZ("top", { m: 0.19, top: 0.2, bottom: -1e-9 }), "en").text).toContain("\nMACD = 0.19, the pane's top = 0.20 (96% of it = 0.19)\n");
+    expect(renderStockMail(withZ("bottom", { m: -0.0095, top: 0.2, bottom: -0.0097 }), "en").text).toContain("\nMACD = −0.0095, the pane's bottom = −0.0097 (96% of it = −0.0093)\n");
+    const bare: IndicatorSignal = { ...usSig(I_SELL), fade: undefined };
+    expect(renderStockMail(bare, "ja").text).toContain("\nMACD = —、枠の上の端 = —（その96% = —）\n");
+    expect(renderStockMail(bare, "ja").text).toContain(`\nこの足の終値: ${closes[I_SELL].toFixed(2)}ドル\n`);
   });
 });
 
 describe("#391 the shares' run and the database", () => {
   it("runs every minute as its own mode, reads only its own subscriptions, and the database takes the shares and the rule", () => {
     const fn = readFileSync("supabase/functions/signal-alerts/index.ts", "utf8");
-    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v39-2026-11-12T12:00:00Z";');
+    // (v40: the MACD email, the shares' too, is the fade)
+    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v40-2026-11-18";');
     expect(fn).toContain('readRows("signal_alert_subscriptions?rule=eq.stockmacd&select=user_id,pair,interval,lang,rule")');
     // the other rules' run does not take them
     expect(fn).toContain('readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra,macdx,amdpo3,emarm,spike)&select=user_id,pair,interval,lang,rule")');
@@ -755,23 +738,98 @@ describe("#391 the shares' run and the database", () => {
     expect(cron).toContain(`body := '{"mode":"stocks"}'::jsonb,`);
   });
 
-  it("#397: the ride of a share is judged in its own try / catch, its mails written from the ride's row; the 95% decision is called nowhere", () => {
+  it("v40: the fade on a share is judged in its own try / catch at the same reads, priced at the bar's close and mailed by mailRide; nothing of v39's ride, no state row, no minute read; the 95% decision is called nowhere", () => {
     const fn = readFileSync("supabase/functions/signal-alerts/index.ts", "utf8");
     const run = fn.slice(fn.indexOf("const stockSweep = async"), fn.indexOf("const goldTicks = async"));
-    // reached: the shared patch of a row still open, then email 2 from the row as it stands
-    expect(run).toContain("const row = await reachRide(c.ride, { at: nowMs, bar: c.bar, price: c.price, late: c.late, share: c.share });");
-    expect(run).toContain('const sig = rideOutSignal("stockmacd", "1h", row);');
-    // email 1: the row first (inserted or already there), the mail from the row
-    expect(run).toContain('await sendRide(rideCloseSignal("stockmacd", sym, "1h", "in", entry, { openMs: own.entryBar, closeMs: own.entryClosedAt, mid: own.entryMid, paid: own.entryPrice }), out);');
-    expect(run).toContain("settled = await stockRide(sym, step.closed, step.newest, said);");
+    // the code without its comment lines (the history in the comments names v39's ride)
+    const code = run.split("\n").filter((l) => !l.trimStart().startsWith("//")).join("\n");
+    // spec 3.3: fresh by stockBarFresh (stockFadeClose), the entry fadeCloseEntryAt's, the price the bar's close, the
+    // signal, mailRide to the share's followers; settled only with no error and no follower left unsent
+    expect(code).toContain("const close = stockFadeClose(sym, closed, nowMs);");
+    expect(code).toContain("const price = newest.close;");
+    expect(code).toContain('const sig = fadeSignal("stockmacd", sym, "1h", entry, { openMs: newest.open_ms, closeMs: newest.end, close: newest.close, price });');
+    expect(code).toContain("const got = await mailRide(sig, subs, counts);");
+    expect(code).toContain("if (got.otherSide) out.fade.other_side = true;");
+    expect(code).toContain("return out.unsent.length === 0;");
+    expect(code).toMatch(
+      /try \{\s+settled = await stockFade\(sym, step\.closed, step\.newest, said\);\s+\} catch \(err\) \{\s+console\.error\("stockmacd failed:", sym, errText\(err\)\);\s+said\.fade\.error = "failed";\s+settled = false;\s+\}/,
+    );
+    expect(code).toMatch(/if \(settled\) \{\s+if \(step\.done\) stockDone\.set\(sym, due\);\s+if \(step\.judge && step\.newest\) stockJudged\.set\(sym, step\.newest\.open_ms\);\s+\}/);
+    // the bars, the reads and their times are as they were (spec 3.3)
+    expect(code).toContain('const r = await fetch(yahooChartUrl(sym, "1h"), { headers: YAHOO_HEADERS, signal: AbortSignal.timeout(10_000) });');
+    expect(code).toContain("const due = stockCloseDue(sym, nowMs);");
+    expect(code).toContain("if (nowMs - (stockReadAt.get(sym) ?? 0) < 50_000) continue;");
+    expect(code).toContain("const got = stockBarsOf(sym, body, nowMs);");
+    expect(code).toContain("const step = stockSweepOf(sym, got.bars, due, stockJudged.get(sym), nowMs);");
     // what is logged of a failure holds no address (a lookup's URL holds a follower's id)
-    expect(run).toContain('console.error("stockmacd failed:", sym, errText(err));');
-    // shares keep no state rows and read no minute
-    expect(run).not.toContain("macd_ride_state");
-    expect(run).not.toContain("select=*");
+    for (const line of code.split("\n").filter((l) => l.includes("console.error"))) expect(line, line).not.toMatch(/user_id|email|\bid\b/);
+    // shares keep no state rows, read no minute and nothing of v39's ride
+    for (const gone of ["macd_ride", "select=*", "readRides", "reachRide", "openRide", "rideMailThere", "rideOutSignal", "rideCloseSignal", "rideRowOf", "RIDE_CATCHUP_BARS", "MacdRide", "shareOf", "stockRide", "sendRide", "said.ride"]) {
+      expect(code, gone).not.toContain(gone);
+    }
     const src = readFileSync("supabase/functions/signal-alerts/stocks.ts", "utf8");
+    const srcCode = src.split("\n").filter((l) => !l.trimStart().startsWith("//")).join("\n");
     expect(src.split("\n").filter((l) => l.includes("z95of120") && !l.trimStart().startsWith("//"))).toEqual([]);
     for (const gone of ["decideZoneOnWindow(", "ZONE_PCT", "export const stockmacdSignals", "macdh"]) expect(src, gone).not.toContain(gone);
+    for (const gone of ["macd-ride", "rideHeldText", "RIDE_", "Ride", "stockRidesReached", "stockRideClose", "stockRidePnl", "STOCKMACD_AT_RULE_ID", "STOCKMACD_OUT_RULE_ID", "s.ride"]) {
+      expect(srcCode, gone).not.toContain(gone);
+    }
+    // the one shared function, and the guard of the chart the rule is offered on (spec 3.3)
+    expect(src).toContain('import { FADE_PCT, FADE_SHARE, fadeCloseEntryAt, fadeRuleId, type FadeEntry } from "../_shared/macd-fade.ts";');
+    expect(src).toContain('const newest = isStockmacdChart(sym, "1h") && closed.length > 0 ? closed[closed.length - 1] : null;');
+    expect(src).toContain("return { fresh: true, entry: fadeCloseEntryAt(closed.map((b) => b.close)) };");
+    // every "1h" of the share functions that stay (spec 3.5)
+    expect(src).toContain('const got = parseYahooChart(sym, body, "1h", nowMs);');
+    expect(src).toContain('judge: newest !== null && isStockmacdChart(sym, "1h") && newest.open_ms !== judgedOpen,');
+  });
+
+  // spec 7.1: "nothing read or written each minute, no state row", held as code text over the whole of index.ts (the
+  // calls are read, not the comments, which may still name the tables), and no file under supabase/functions imports
+  // _shared/macd-ride.ts (it stays as main's v9 file for the v9 bench, v9's replay and a rollback)
+  it("no rest( or readRows( call in index.ts names macd_rides or macd_ride_state, and no file under supabase/functions imports _shared/macd-ride.ts", () => {
+    const fn = readFileSync("supabase/functions/signal-alerts/index.ts", "utf8");
+    const code = fn.split("\n").filter((l) => !l.trimStart().startsWith("//")).join("\n");
+    // every call of rest( and readRows(, as far as its closing parenthesis (strings taken whole)
+    const callsOf = (name: string): string[] => {
+      const out: string[] = [];
+      const re = new RegExp(`(?<![\\w.])${name}\\(`, "g");
+      for (let m = re.exec(code); m; m = re.exec(code)) {
+        let depth = 1;
+        let quote: string | null = null;
+        let i = m.index + m[0].length;
+        for (; i < code.length && depth > 0; i++) {
+          const c = code[i];
+          if (quote) {
+            if (c === "\\") i++;
+            else if (c === quote) quote = null;
+          } else if (c === '"' || c === "'" || c === "`") quote = c;
+          else if (c === "(") depth++;
+          else if (c === ")") depth--;
+        }
+        out.push(code.slice(m.index, i));
+      }
+      return out;
+    };
+    const calls = [...callsOf("rest"), ...callsOf("readRows")];
+    expect(calls.length).toBeGreaterThan(20);
+    expect(calls).toContain('readRows("signal_alert_subscriptions?rule=eq.stockmacd&select=user_id,pair,interval,lang,rule")');
+    for (const c of calls) expect(c, c).not.toMatch(/macd_ride/);
+    // stricter still: no code line of index.ts names either table
+    expect(code).not.toContain("macd_ride");
+    // no file under supabase/functions imports macd-ride.ts (the shares' stocks.ts included)
+    const importers: string[] = [];
+    const walk = (dir: string) => {
+      for (const f of readdirSync(dir)) {
+        const p = `${dir}/${f}`;
+        if (statSync(p).isDirectory()) walk(p);
+        else if (/\.(ts|tsx|js|mjs)$/.test(p) && /(from|import)\s*\(?\s*["'][^"']*macd-ride(\.ts)?["']/.test(readFileSync(p, "utf8"))) importers.push(p);
+      }
+    };
+    walk("supabase/functions");
+    expect(importers).toEqual([]);
+    // (the file itself is still there, and the check can fail: an import of it is found)
+    expect(statSync("supabase/functions/_shared/macd-ride.ts").isFile()).toBe(true);
+    expect(/(from|import)\s*\(?\s*["'][^"']*macd-ride(\.ts)?["']/.test('import { rideEntryAt } from "../_shared/macd-ride.ts";')).toBe(true);
   });
 });
 
@@ -831,65 +889,49 @@ describe("#391 the MACD email on shares in the settings", () => {
   });
 });
 
-// ---- #397: the "stocks" run of the real index.ts over fake tables (spec sections 6 and 7) ---------------------------
+// ---- v40: the "stocks" run of the real index.ts over fake tables (spec 2.4, 2.5, 3.3, 3.4 and 7.1) -------------------
 //
 // (Last in this file: it stubs the clock, the timers and fetch, and puts them back when it is done.)
 
+type Row = Record<string, unknown>;
 const SB = "https://sb.test";
-const TIME_COLS = new Set(["bar_time", "entry_bar", "entry_closed_at", "reached_at", "reached_bar", "closed_at", "created_at"]);
+const TIME_COLS = new Set(["bar_time", "closed_at", "created_at"]);
 const world = {
   subs: [] as Row[],
-  rides: [] as Row[],
   alerts: [] as Row[],
   sent: [] as Array<{ to: string; subject: string; text: string }>,
-  // a closed bar's wick (by its open)
-  wicks: new Map<number, { high?: number; low?: number }>(),
   // how far behind the clock Yahoo's answer is (its newest bar and its last trade)
   yahooLag: 0,
   yahooStatus: 200,
   // Yahoo's reads, as "symbol interval range"
   yahoo: [] as string[],
-  // followers whose plan lookup fails (a 503); how the rides' table answers (200; 404 when it is not there), and the
-  // shares it fails for alone
+  // followers whose plan lookup fails (a 503)
   failPlanFor: new Set<string>(),
   // followers whose address lookup answers this status (503: the lookup failed)
   failAuthFor: new Map<string, number>(),
-  ridesStatus: 200,
-  ridesFailFor: new Set<string>(),
-  // the rides' table refuses a new row (a 500)
-  ridesNoInsert: false,
-  // called once when a ride is about to be patched: another run getting there first, or the table failing from then
-  onRidePatch: null as (() => void) | null,
-  // every REST read as "table select", every request that no route took
+  // shares whose read of signal_alerts cannot be sent at all (fetch throws): the fade's work on them fails
+  alertsThrowFor: new Set<string>(),
+  // shares whose read of signal_alerts is answered with a 503 (its inserts still work)
+  alertsFailFor: new Set<string>(),
+  // every REST read as "table select", every request that no route took, every request to v39's ride tables
   reads: [] as string[],
   unrouted: [] as string[],
+  rideTables: [] as string[],
   ids: 0,
 };
 const resetWorld = () => {
-  Object.assign(world, { subs: [], rides: [], alerts: [], sent: [], yahooLag: 0, yahooStatus: 200, yahoo: [], ridesStatus: 200, ridesNoInsert: false, onRidePatch: null, reads: [], unrouted: [], ids: 0 });
-  world.wicks.clear();
+  Object.assign(world, { subs: [], alerts: [], sent: [], yahooLag: 0, yahooStatus: 200, yahoo: [], reads: [], unrouted: [], rideTables: [], ids: 0 });
   world.failPlanFor.clear();
   world.failAuthFor.clear();
-  world.ridesFailFor.clear();
+  world.alertsThrowFor.clear();
+  world.alertsFailFor.clear();
 };
 let clock = 0;
 
-// A Tokyo share's bars: the same wave in yen (a tenth of a yen, as the chart draws a Tokyo share), seven bars a weekday
-// stamped 9:00 … 15:00 JST (00:00 … 06:00 UTC; the 11:00 bar ends at the lunch break, the 15:00 one at 15:30)
-const TOKYO = (() => {
-  const sym = "7203.T";
-  const t: number[] = [];
-  for (let day = Date.UTC(2025, 5, 2); t.length < N; day += 24 * H) {
-    const wd = new Date(day).getUTCDay();
-    if (wd === 0 || wd === 6) continue;
-    for (let h = 0; h < 7 && t.length < N; h++) t.push(day + h * H);
-  }
-  return { sym, times: t, ends: t.map((x) => stockBarEnd(sym, x)), closes: Array.from({ length: N }, (_, i) => Number((3000 + 100 * wave(i)).toFixed(1))) };
-})();
-
 // Yahoo's hourly answer at the clock (less its lag): a year of bars at most (1,750), each bar opened by then, the one
-// still forming flat at its open, and Yahoo's last trade then. Every US share is given the same bars, a Tokyo share
-// TOKYO's.
+// still forming 0.7 above its open (so that a price taken from the forming bar, or from Yahoo's last trade, is not the
+// judged bar's close and the price tests catch it), and Yahoo's last trade then. Every US share is given the same
+// bars, a Tokyo share TOKYO's.
 const yahooAnswer = (sym: string) => {
   const seen = clock - world.yahooLag;
   const S = sym.endsWith(".T") ? TOKYO : { times, ends, closes };
@@ -899,12 +941,11 @@ const yahooAnswer = (sym: string) => {
   const q = { open: [] as number[], high: [] as number[], low: [] as number[], close: [] as number[], volume: [] as number[] };
   for (let k = Math.max(0, last - 1749); k <= last; k++) {
     const open = k > 0 ? S.closes[k - 1] : S.closes[k];
-    const close = S.ends[k] <= seen ? S.closes[k] : open;
-    const w = world.wicks.get(S.times[k]) ?? {};
+    const close = S.ends[k] <= seen ? S.closes[k] : Number((open + 0.7).toFixed(2));
     ts.push(S.times[k] / 1000);
     q.open.push(open);
-    q.high.push(Math.max(open, close, w.high ?? -Infinity));
-    q.low.push(Math.min(open, close, w.low ?? Infinity));
+    q.high.push(Math.max(open, close));
+    q.low.push(Math.min(open, close));
     q.close.push(close);
     q.volume.push(1000);
   }
@@ -913,45 +954,18 @@ const yahooAnswer = (sym: string) => {
 
 // PostgREST's filters, as far as the run uses them
 const unquote = (v: string) => (v.startsWith('"') && v.endsWith('"') ? v.slice(1, -1) : v);
-const splitTop = (list: string): string[] => {
-  const out: string[] = [];
-  let cur = "";
-  let quoted = false;
-  for (const ch of list) {
-    if (ch === '"') quoted = !quoted;
-    if (ch === "," && !quoted) {
-      out.push(cur);
-      cur = "";
-    } else cur += ch;
-  }
-  if (cur !== "") out.push(cur);
-  return out;
-};
 const same = (col: string, a: unknown, b: string) => (TIME_COLS.has(col) ? Date.parse(String(a)) === Date.parse(b) : String(a) === b);
 const condOf = (col: string, expr: string): ((r: Row) => boolean) => {
   const dot = expr.indexOf(".");
   const op = expr.slice(0, dot);
   const val = unquote(expr.slice(dot + 1));
   if (op === "eq") return (r) => r[col] !== null && r[col] !== undefined && same(col, r[col], val);
-  if (op === "gte" || op === "lt") {
-    return (r) => {
-      if (r[col] === null || r[col] === undefined) return false;
-      const d = TIME_COLS.has(col) ? Date.parse(String(r[col])) - Date.parse(val) : Number(r[col]) - Number(val);
-      return op === "gte" ? d >= 0 : d < 0;
-    };
-  }
   throw new Error(`a filter the fake does not know: ${col}=${expr}`);
 };
 const META = new Set(["select", "order", "limit", "on_conflict"]);
 const whereOf = (u: URL): ((r: Row) => boolean) => {
   const conds: Array<(r: Row) => boolean> = [];
-  for (const [k, v] of u.searchParams) {
-    if (META.has(k)) continue;
-    if (k === "or") {
-      const any = splitTop(v.slice(1, -1)).map((clause) => condOf(clause.slice(0, clause.indexOf(".")), clause.slice(clause.indexOf(".") + 1)));
-      conds.push((r) => any.some((c) => c(r)));
-    } else conds.push(condOf(k, v));
-  }
+  for (const [k, v] of u.searchParams) if (!META.has(k)) conds.push(condOf(k, v));
   return (r) => conds.every((c) => c(r));
 };
 const pick = (r: Row, select: string | null): Row => (select === null || select === "*" ? { ...r } : Object.fromEntries(select.split(",").map((c) => [c, r[c] ?? null])));
@@ -962,7 +976,6 @@ const fakeFetch = async (input: string | URL | Request, init?: RequestInit): Pro
   const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
   const method = init?.method ?? "GET";
   const body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
-  const prefer = String((init?.headers as Record<string, string> | undefined)?.Prefer ?? "");
   if (url.startsWith("https://query1.finance.yahoo.com/v8/finance/chart/")) {
     const u = new URL(url);
     const sym = decodeURIComponent(u.pathname.split("/").pop()!);
@@ -986,16 +999,27 @@ const fakeFetch = async (input: string | URL | Request, init?: RequestInit): Pro
   const u = new URL(url);
   const table = u.pathname.slice("/rest/v1/".length);
   const select = u.searchParams.get("select");
-  const where = whereOf(u);
+  // v39's ride tables: any request to them is noted (spec 7.1: a shares run makes none), and answered as a table
+  // that is not there
+  if (table.startsWith("macd_ride")) {
+    world.rideTables.push(`${method} ${table}`);
+    return reply({ message: `relation "public.${table}" does not exist` }, 404);
+  }
   if (method === "GET") world.reads.push(`${table} ${select ?? "*"}`);
   if (table === "rpc/track_outcomes_sweep_token") return reply("tok");
+  const where = whereOf(u);
   if (table === "signal_alert_subscriptions" && method === "GET") return reply(world.subs.filter(where).map((r) => pick(r, select)));
   if (table === "profiles" && method === "GET") {
     const uid = u.searchParams.get("id")!.slice(3);
     return world.failPlanFor.has(uid) ? reply({ message: "boom" }, 503) : reply([{ plan: "light" }]);
   }
   if (table === "signal_alerts") {
-    if (method === "GET") return reply(world.alerts.filter(where).map((r) => pick(r, select)));
+    if (method === "GET") {
+      // (as Deno says a request it could not send: its URL in the message)
+      if (world.alertsThrowFor.has((u.searchParams.get("pair") ?? "").slice(3))) throw new TypeError(`error sending request for url (${url})`);
+      if (world.alertsFailFor.has((u.searchParams.get("pair") ?? "").slice(3))) return reply({ message: "boom" }, 503);
+      return reply(world.alerts.filter(where).map((r) => pick(r, select)));
+    }
     if (method === "POST") {
       const key = (r: Row) => [r.user_id, r.kind, r.pair, r.interval, Date.parse(String(r.bar_time)), r.side, r.rule].join("|");
       if (world.alerts.some((r) => key(r) === key(body))) return reply([], 201);
@@ -1008,41 +1032,15 @@ const fakeFetch = async (input: string | URL | Request, init?: RequestInit): Pro
       return empty(204);
     }
   }
-  if (table === "macd_rides") {
-    if (method === "PATCH") {
-      const hook = world.onRidePatch;
-      world.onRidePatch = null;
-      hook?.();
-    }
-    if (world.ridesStatus !== 200) return reply({ message: 'relation "public.macd_rides" does not exist' }, world.ridesStatus);
-    const pair = (u.searchParams.get("pair") ?? "").slice(3) || String(body?.pair ?? "");
-    if (world.ridesFailFor.has(pair)) return reply({ message: "boom" }, 503);
-    if (method === "GET") return reply(world.rides.filter(where).map((r) => pick(r, select)));
-    if (method === "POST") {
-      if (world.ridesNoInsert) return reply({ message: "boom" }, 500);
-      // the primary key (duplicates ignored), then the one open ride a chart and side
-      if (world.rides.some((r) => r.pair === body.pair && r.side === body.side && same("entry_bar", r.entry_bar, body.entry_bar))) return empty(201);
-      if (world.rides.some((r) => r.pair === body.pair && r.side === body.side && r.status === "open")) {
-        return reply({ code: "23505", message: 'duplicate key value violates unique constraint "macd_rides_one_open"' }, 409);
-      }
-      world.rides.push({ share0: null, reached_at: null, reached_bar: null, seen_price: null, late: null, share1: null, ...body, entry_bar: pg(Date.parse(body.entry_bar)), entry_closed_at: pg(Date.parse(body.entry_closed_at)) });
-      return empty(201);
-    }
-    if (method === "PATCH") {
-      const hit = world.rides.filter(where);
-      for (const r of hit) Object.assign(r, body, { reached_at: pg(Date.parse(body.reached_at)), reached_bar: pg(Date.parse(body.reached_bar)) });
-      return prefer.includes("return=representation") ? reply(hit.map((r) => pick(r, select))) : empty(204);
-    }
-  }
   world.unrouted.push(`${method} ${table}?${u.searchParams.toString().slice(0, 90)}`);
   return reply([], 200);
 };
 
 type Handler = (req: Request) => Promise<Response>;
-type Read = Record<string, unknown> & { pair?: string; signals?: string[]; ride?: Record<string, unknown> };
+type Read = Record<string, unknown> & { pair?: string; signals?: string[]; fade?: Record<string, unknown> };
 type Summary = Record<string, unknown> & { reads?: Read[] };
 
-describe("#397 the shares' run: the real index.ts replayed over fake tables (spec sections 6 and 7)", () => {
+describe("v40 the shares' run: the real index.ts replayed over fake tables (spec 2.4, 2.5, 3.3, 3.4 and 7.1)", () => {
   let captured: Handler | null = null;
   const realSetTimeout = globalThis.setTimeout;
   beforeAll(() => {
@@ -1078,7 +1076,7 @@ describe("#397 the shares' run: the real index.ts replayed over fake tables (spe
     if (!captured) throw new Error("the function did not start");
     return captured;
   };
-  // a run of the "stocks" mode at `when` (a second past the minute)
+  // a run of the "stocks" mode at `when`
   const run = async (h: Handler, when: number): Promise<Summary> => {
     clock = when;
     const res = await h(new Request("https://fn.test/signal-alerts", { method: "POST", headers: { "x-sweep-token": "tok", "Content-Type": "application/json" }, body: JSON.stringify({ mode: "stocks" }) }));
@@ -1091,517 +1089,267 @@ describe("#397 the shares' run: the real index.ts replayed over fake tables (spe
   const fresh = async (when: number) => run(await instance(), when);
   // `minute` minutes and a second after bar i closed
   const after = (i: number, minute: number) => closeOf(i) + minute * MIN + 1_000;
-  const follow = (user: string, pair = SYM) => ({ user_id: user, pair, interval: "1h", lang: "ja", rule: "stockmacd" });
+  const follow = (user: string, pair = SYM, lang = "ja") => ({ user_id: user, pair, interval: "1h", lang, rule: "stockmacd" });
   const readOf = (s: Summary, pair = SYM): Read | undefined => (s.reads ?? []).find((r) => r.pair === pair);
   const mails = () => world.sent.map((m) => `${m.to.split("@")[0]}: ${m.subject}`);
-  const alertsOf = (rule: string) => world.alerts.filter((r) => r.rule === rule);
-  const IN_SUBJECT = (side: "買い（BUY）" | "売り（SELL）") => `【Sextant】アップル（AAPL） 1時間足 ${side}で入る合図（株の MACD・1通目）`;
-  const OUT_SUBJECT = (side: "買い" | "売り") => `【Sextant】アップル（AAPL） 1時間足 96%に届きました（株の MACD・2通目、${side}の分）`;
-  const AT_SUBJECT = "【Sextant】アップル（AAPL） 1時間足 知らせ: もう96%です（株の MACD・入る合図なし）";
-  // nothing the run asked for went unanswered; no read took every column, none read an alert's error, and a share
-  // keeps no state rows
+  const BUY_SUBJECT = "【Sextant】アップル（AAPL）1時間足 買い（BUY）: 青い線が下の端の96%で確定（株の MACD）";
+  const SELL_SUBJECT = "【Sextant】アップル（AAPL）1時間足 売り（SELL・空売り）: 青い線が上の端の96%で確定（株の MACD）";
+  // nothing the run asked for went unanswered; no read took every column or an alert's error; the bar's rows are
+  // read whatever their side (one side a bar); Yahoo is read for the 1-hour bars as v39 read them; and, spec 7.1, a
+  // shares run makes no request to v39's ride tables (public.macd_rides, macd_ride_state)
   const clean = () => {
     expect(world.unrouted).toEqual([]);
+    expect(world.rideTables).toEqual([]);
     for (const r of world.reads) {
       expect(r, r).not.toMatch(/ \*$/);
       expect(r, r).not.toContain("error");
-      if (r.startsWith("signal_alerts ")) expect(r).toBe("signal_alerts user_id");
-      if (r.startsWith("macd_rides ")) expect(r).toBe(`macd_rides ${MACD_RIDE_COLUMNS}`);
-      expect(r.startsWith("macd_ride_state")).toBe(false);
+      if (r.startsWith("signal_alerts ")) expect(r).toBe("signal_alerts user_id,side");
     }
     for (const y of world.yahoo) expect(y).toMatch(/^[A-Z0-9.]+ 60m 1y$/);
   };
 
-  it("an entry at a close: the ride's row, email 1 with the row's numbers under email 1's id; the same close judged again by fresh instances opens no second ride and mails nobody twice, and a follower whose lookup failed gets email 1 from a later run", async () => {
+  it("a US share's BUY at a close: one email a follower, the price the bar's close; read again in the close's half hour by fresh instances, nobody is mailed twice and a follower whose plan lookup failed is mailed then; the row; nothing asked of v39's ride tables", async () => {
     world.subs = [follow("userA"), follow("userB")];
     world.failPlanFor.add("userB");
     const s0 = await fresh(after(I_BUY, 0));
-    expect(s0).toMatchObject({ ok: true, mode: "stocks", version: "signal-alerts-v39-2026-11-12T12:00:00Z", subscriptions: 2, sent: 1, not_allowed: 1 });
+    expect(s0).toMatchObject({ ok: true, mode: "stocks", subscriptions: 2, sent: 1, not_allowed: 1 });
+    expect(String(s0.version)).toMatch(/^signal-alerts-v40-/);
     // (the follower whose lookup failed got no row: said, with no name)
     expect(readOf(s0)).toMatchObject({
-      pair: SYM, due: iso(closeOf(I_BUY)), bars: 1749, newest: dt(times[I_BUY]), close: closes[I_BUY], judged: true, signals: ["stockmacd:BUY"],
-      ride: { rows: "ok", caught: [], step: "in", unsent: ["in(not_allowed)"] },
+      pair: SYM, due: iso(closeOf(I_BUY)), bars: I_BUY + 1, newest: dt(times[I_BUY]), close: closes[I_BUY], judged: true, signals: ["stockmacd:BUY"],
     });
-    // the ride: one row, open, the price paid the bar's close, the line's share
-    const e = entryAt(I_BUY)!;
-    expect(world.rides).toHaveLength(1);
-    expect(world.rides[0]).toMatchObject({
-      pair: SYM, side: "BUY", status: "open", entry_bar: pg(times[I_BUY]), entry_closed_at: pg(closeOf(I_BUY)), entry_price: closes[I_BUY], entry_mid: closes[I_BUY],
-      share0: shareOf(e.z, e.zside), reached_at: null,
-    });
-    expect(mails()).toEqual([`userA: ${IN_SUBJECT("買い（BUY）")}`]);
-    expect(world.sent[0].text).toContain(`\nこの足の終値: ${closes[I_BUY].toFixed(2)}ドル`);
-    expect(world.sent[0].text).toContain(`\n  MACD = ${e.z.m.toFixed(2)}、枠の上の端 = ${e.z.top.toFixed(2)}（その90% = ${(RIDE_IN_SHARE * e.z.top).toFixed(2)}、96% = ${(RIDE_OUT_SHARE * e.z.top).toFixed(2)}）`);
+    expect(readOf(s0)!.fade).toEqual({ fresh: true, entry: "BUY", price: closes[I_BUY], unsent: ["not_allowed"] });
+    expect(mails()).toEqual([`userA: ${BUY_SUBJECT}`]);
+    // the mail is the share's (renderStockMail), on the bar judged
+    expect(world.sent[0].text).toBe(renderStockMail(usSig(I_BUY), "ja").text);
+    // the row (spec 3.4): interval 1h, the bar's open and end, the price in its close, no stop, no target, the fade's id
     expect(world.alerts).toHaveLength(1);
     expect(world.alerts[0]).toMatchObject({
       user_id: "userA", kind: "signal", pair: SYM, interval: "1h", bar_time: iso(times[I_BUY]), closed_at: iso(closeOf(I_BUY)), side: "BUY",
-      entry: closes[I_BUY], stop: null, target: null, rule: STOCKMACD_RULE_ID, status: "sent",
+      entry: closes[I_BUY], stop: null, target: null, rule: STOCKMACD_RULE_ID, event_id: null, status: "sent",
     });
-    // the next five minutes, a fresh instance each, the lookup working: the same bar judged again
+    // read again in the close's half hour, a fresh instance each time, the lookup working: the same bar judged again
     world.failPlanFor.clear();
-    for (let m = 1; m <= 5; m++) {
+    for (const m of [1, 2, 3, 4, 5, 10, 30]) {
       const s = await fresh(after(I_BUY, m));
-      expect(readOf(s), `minute ${m}`).toMatchObject({ judged: true, newest: dt(times[I_BUY]), signals: ["stockmacd:BUY"], ride: { rows: "ok", caught: [], step: "in" } });
-      expect(readOf(s)!.ride).not.toHaveProperty("unsent");
+      expect(readOf(s), `minute ${m}`).toMatchObject({ judged: true, newest: dt(times[I_BUY]), signals: ["stockmacd:BUY"], fade: { fresh: true, entry: "BUY", price: closes[I_BUY] } });
+      expect(readOf(s)!.fade, `minute ${m}`).not.toHaveProperty("unsent");
       expect(s.sent ?? 0, `minute ${m}`).toBe(m === 1 ? 1 : 0);
     }
-    expect(world.rides).toHaveLength(1);
-    expect(mails()).toEqual([`userA: ${IN_SUBJECT("買い（BUY）")}`, `userB: ${IN_SUBJECT("買い（BUY）")}`]);
-    // the same numbers in both mails (the second written from the row the first run made)
+    expect(mails()).toEqual([`userA: ${BUY_SUBJECT}`, `userB: ${BUY_SUBJECT}`]);
     expect(world.sent[1].text).toBe(world.sent[0].text);
-    expect(alertsOf(STOCKMACD_RULE_ID).map((r) => r.user_id)).toEqual(["userA", "userB"]);
-    expect(world.alerts).toHaveLength(2);
+    expect(world.alerts.map((r) => `${r.user_id} ${r.rule} ${r.entry}`)).toEqual([`userA ${STOCKMACD_RULE_ID} ${closes[I_BUY]}`, `userB ${STOCKMACD_RULE_ID} ${closes[I_BUY]}`]);
     // Yahoo was read once a run, a year of hourly bars
-    expect(world.yahoo).toEqual(Array(6).fill("AAPL 60m 1y"));
-    clean();
-  });
-
-  it("the reach by the CLOSE, not by the high: reached at the first later close at 96%, by one patch of a row still open; email 2 from the row to every follower once, a follower whose lookup failed while the share is still read for that close (and at a later read while the reach is at most 45 minutes old), not later", async () => {
-    world.subs = [follow("userA"), follow("userB")];
-    // bar I_BUY + 1's high touches 96% (the pairs' ride would be reached there); its close does not
-    world.wicks.set(times[I_BUY + 1], { high: WICK });
-    await fresh(after(I_BUY, 0));
-    expect(mails()).toEqual([`userA: ${IN_SUBJECT("買い（BUY）")}`, `userB: ${IN_SUBJECT("買い（BUY）")}`]);
-    for (const n of [I_BUY + 1, I_BUY + 2]) {
-      const s = await fresh(after(n, 0));
-      expect(readOf(s), `bar ${n}`).toMatchObject({ newest: dt(times[n]), judged: true, signals: [], ride: { rows: "ok", caught: [], step: null } });
-      expect(world.rides[0].status).toBe("open");
-    }
+    expect(world.yahoo).toEqual(Array(8).fill("AAPL 60m 1y"));
+    // past the close's half hour nothing is due: nothing read
+    expect((await fresh(after(I_BUY, 31))).reads).toEqual([]);
+    expect(world.yahoo).toHaveLength(8);
+    // the next close: judged, no entry, nothing mailed
+    const s9 = await fresh(after(I_BUY + 1, 0));
+    expect(readOf(s9)).toMatchObject({ judged: true, newest: dt(times[I_BUY + 1]), signals: [], fade: { fresh: true, entry: null, price: null } });
     expect(world.sent).toHaveLength(2);
-    // the next day's first close: the line is at 96% of the top. One follower's lookup fails in this run
-    world.failPlanFor.add("userB");
-    const s3 = await fresh(after(J_BUY, 0));
-    expect(readOf(s3)).toMatchObject({
-      newest: dt(times[J_BUY]), judged: true, signals: ["stockmacd-out:BUY"],
-      ride: { rows: "ok", step: null, caught: [{ side: "BUY", entry_bar: iso(times[I_BUY]), reached_bar: iso(times[J_BUY]), late: false }], unsent: ["out(not_allowed)"] },
-    });
-    const z = zAt(J_BUY);
-    expect(world.rides).toHaveLength(1);
-    expect(world.rides[0]).toMatchObject({
-      status: "reached", reached_at: pg(after(J_BUY, 0)), reached_bar: pg(times[J_BUY]), seen_price: closes[J_BUY], late: false, share1: z.m / z.top,
-      entry_bar: pg(times[I_BUY]), entry_price: closes[I_BUY],
-    });
-    expect(mails().slice(2)).toEqual([`userA: ${OUT_SUBJECT("買い")}`]);
-    // email 2's row: under the ride's ENTRY bar and email 2's id, closed_at when it was seen, the entry price, the price when seen
-    expect(alertsOf(STOCKMACD_OUT_RULE_ID)).toHaveLength(1);
-    expect(alertsOf(STOCKMACD_OUT_RULE_ID)[0]).toMatchObject({
-      user_id: "userA", kind: "signal", pair: SYM, interval: "1h", bar_time: iso(times[I_BUY]), closed_at: iso(after(J_BUY, 0)), side: "BUY",
-      entry: closes[I_BUY], stop: null, target: closes[J_BUY], status: "sent",
-    });
-    const text = world.sent[2].text;
-    expect(text).toContain(`1通目: 2026-05-20 03:30（日本時間）に確定した足で買い（BUY）。その足の終値 ${closes[I_BUY].toFixed(2)}ドル`);
-    expect(text).toContain("\n届いたのを見た時刻: 2026-05-20 23:30（日本時間）。その時の最新の確定足の終値で見ました");
-    expect(text).toContain("\n今の値段: 217.45ドル（最新の確定足の終値）");
-    expect(text).toContain("\n1通目の値段からの損益: +1.01ドル（+0.47%）。終値と終値の比べです");
-    // a minute later, a fresh instance, the lookup working: the ride is reached already; the follower left gets the
-    // same mail, from the row
-    world.failPlanFor.clear();
-    const s4 = await fresh(after(J_BUY, 1));
-    expect(readOf(s4)).toMatchObject({ judged: true, signals: ["stockmacd-out:BUY"], ride: { rows: "ok", caught: [], step: null } });
-    expect(readOf(s4)!.ride).not.toHaveProperty("unsent");
-    expect(mails().slice(3)).toEqual([`userB: ${OUT_SUBJECT("買い")}`]);
-    expect(world.sent[3].text).toBe(text);
-    expect(world.rides[0].reached_at).toBe(pg(after(J_BUY, 0)));
-    // judged again and again: nothing new
-    for (const m of [2, 3, 15, 30]) await fresh(after(J_BUY, m));
-    expect(world.sent).toHaveLength(4);
-    expect(world.rides).toHaveLength(1);
-    expect(alertsOf(STOCKMACD_OUT_RULE_ID).map((r) => r.user_id)).toEqual(["userA", "userB"]);
-    // an hour on (the next close), a follower who has no row is not mailed: the 45 minutes are over
-    world.subs.push(follow("userC"));
-    const s5 = await fresh(after(J_BUY + 1, 0));
-    expect(readOf(s5)).toMatchObject({ newest: dt(times[J_BUY + 1]), judged: true, signals: [], ride: { rows: "ok", caught: [], step: null } });
-    expect(world.sent).toHaveLength(4);
     clean();
   });
 
-  it("late: a reach whose close was not read is found at the next close, in the bar it was reached in, at the newest closed bar's price; and a bar read more than 45 minutes after it ended is late too", async () => {
-    world.subs = [follow("userA")];
-    world.rides = [rowOf("BUY", I_BUY)];
-    // no run in J_BUY's half hour; the next close
-    const s0 = await fresh(after(J_BUY + 1, 0));
+  it("a US share's SELL at a session's last bar, read a second after 16:00 New York: a short sale, its own text in each follower's language, the row's closed_at the bar's own end", async () => {
+    world.subs = [follow("userA"), follow("userB", SYM, "en")];
+    const s0 = await fresh(after(I_LAST, 0));
     expect(readOf(s0)).toMatchObject({
-      newest: dt(times[J_BUY + 1]), signals: ["stockmacd-out:BUY"],
-      ride: { rows: "ok", step: null, caught: [{ side: "BUY", entry_bar: iso(times[I_BUY]), reached_bar: iso(times[J_BUY]), late: true }] },
+      due: iso(closeOf(I_LAST)), newest: dt(times[I_LAST]), close: closes[I_LAST], judged: true, signals: ["stockmacd:SELL"], fade: { fresh: true, entry: "SELL", price: closes[I_LAST] },
     });
-    expect(world.rides[0]).toMatchObject({ status: "reached", reached_bar: pg(times[J_BUY]), reached_at: pg(after(J_BUY + 1, 0)), late: true, seen_price: closes[J_BUY + 1] });
-    expect(mails()).toEqual([`userA: ${OUT_SUBJECT("買い")}`]);
-    expect(world.sent[0].text).toContain("\n2026-05-20 22:30（日本時間）に始まった足の終わりで、もう96%以上でした。その時は読めず、今見つけました（2026-05-21 00:30、日本時間）");
-    expect(world.sent[0].text).toContain(`\n今の値段: ${closes[J_BUY + 1].toFixed(2)}ドル（最新の確定足の終値）`);
-    expect(alertsOf(STOCKMACD_OUT_RULE_ID)[0]).toMatchObject({ bar_time: iso(times[I_BUY]), target: closes[J_BUY + 1] });
-    clean();
-
-    // Yahoo twenty minutes behind at the next close: its newest closed bar is still J_BUY, ended an hour ago
-    resetWorld();
-    world.subs = [follow("userA")];
-    world.rides = [rowOf("BUY", I_BUY)];
-    world.yahooLag = 20 * MIN;
-    const s1 = await fresh(after(J_BUY + 1, 0));
-    expect(readOf(s1)).toMatchObject({
-      newest: dt(times[J_BUY]), judged: true, signals: ["stockmacd-out:BUY"],
-      ride: { rows: "ok", step: null, fresh: false, caught: [{ side: "BUY", reached_bar: iso(times[J_BUY]), late: true }] },
-    });
-    expect(world.rides[0]).toMatchObject({ status: "reached", reached_bar: pg(times[J_BUY]), late: true, seen_price: closes[J_BUY] });
-    expect(world.sent).toHaveLength(1);
-    // once Yahoo has the bar due, it is judged; the ride is reached already and nobody is mailed twice
-    const s2 = await fresh(after(J_BUY + 1, 21));
-    expect(readOf(s2)).toMatchObject({ newest: dt(times[J_BUY + 1]), judged: true, signals: ["stockmacd-out:BUY"], ride: { caught: [], step: null } });
-    expect(world.sent).toHaveLength(1);
+    expect(mails()).toEqual([`userA: ${SELL_SUBJECT}`, "userB: [Sextant] Apple (AAPL) 1-hour SELL (short sale): the MACD line closed at 96% of the top (Stock MACD)"]);
+    expect(world.sent[0].text).toBe(renderStockMail(usSig(I_LAST), "ja").text);
+    expect(world.sent[1].text).toBe(renderStockMail(usSig(I_LAST), "en").text);
+    expect(world.sent[0].text).toContain(`\nこの足の終値: ${closes[I_LAST].toFixed(2)}ドル\n${BREAK_JA}\n\n`);
+    expect(world.sent[1].text).toContain(`\nThis bar's close: $${closes[I_LAST].toFixed(2)}\n${BREAK_EN}\n\n`);
+    expect(world.alerts.map((r) => [r.side, r.interval, r.bar_time, r.closed_at, r.entry, r.stop, r.target, r.rule])).toEqual(
+      Array(2).fill(["SELL", "1h", iso(times[I_LAST]), iso(times[I_LAST] + 30 * MIN), closes[I_LAST], null, null, STOCKMACD_RULE_ID]),
+    );
     clean();
   });
 
-  it("two runs reaching the same ride: one transition, the numbers of the run that made it in the mail, one email 2 a follower", async () => {
-    world.subs = [follow("userA")];
-    world.rides = [rowOf("BUY", I_BUY)];
-    // another run (begun a minute earlier, by its clock) gets there between this run's read and its patch
-    const theirs = { status: "reached", reached_at: pg(after(J_BUY, 0)), reached_bar: pg(times[J_BUY]), seen_price: closes[J_BUY], late: false, share1: 0.97 };
-    world.onRidePatch = () => Object.assign(world.rides[0], theirs);
-    const s0 = await fresh(after(J_BUY, 1));
-    expect(world.onRidePatch).toBeNull();
-    expect(world.rides[0]).toMatchObject(theirs);
-    expect(readOf(s0)).toMatchObject({ signals: ["stockmacd-out:BUY"], ride: { caught: [{ side: "BUY", reached_bar: iso(times[J_BUY]), late: false }] } });
-    expect(mails()).toEqual([`userA: ${OUT_SUBJECT("買い")}`]);
-    // the mail and its row carry the other run's time, not this run's
-    expect(alertsOf(STOCKMACD_OUT_RULE_ID)[0]).toMatchObject({ closed_at: iso(after(J_BUY, 0)), target: closes[J_BUY] });
-    expect(world.sent[0].text).toContain("\n届いたのを見た時刻: 2026-05-20 23:30（日本時間）");
-    await fresh(after(J_BUY, 2));
-    expect(world.sent).toHaveLength(1);
-    clean();
-  });
-
-  it("both sides open at once: a SELL entry while a BUY is held opens its own ride, and each is reached on its own side", async () => {
-    world.subs = [follow("userA")];
-    world.rides = [rowOf("BUY", OLD_BUY)];
-    const s0 = await fresh(after(I_SELL, 0));
-    expect(readOf(s0)).toMatchObject({ signals: ["stockmacd:SELL"], ride: { rows: "ok", caught: [], step: "in" } });
-    expect(world.rides.map((r) => [r.side, r.status, r.entry_bar])).toEqual([["BUY", "open", pg(times[OLD_BUY])], ["SELL", "open", pg(times[I_SELL])]]);
-    expect(mails()).toEqual([`userA: ${IN_SUBJECT("売り（SELL）")}`]);
-    // a SELL on a share is said to be a short sale
-    expect(world.sent[0].text).toContain("株の売りは空売りです。");
-    const s1 = await fresh(after(I_SELL + 1, 0));
-    expect(readOf(s1)).toMatchObject({ signals: [], ride: { caught: [], step: null } });
-    // the SELL is reached at J_SELL's close; the BUY stays open
-    const s2 = await fresh(after(J_SELL, 0));
-    expect(readOf(s2)).toMatchObject({ signals: ["stockmacd-out:SELL"], ride: { step: null, caught: [{ side: "SELL", entry_bar: iso(times[I_SELL]), reached_bar: iso(times[J_SELL]), late: false }] } });
-    expect(world.rides.map((r) => [r.side, r.status])).toEqual([["BUY", "open"], ["SELL", "reached"]]);
-    expect(mails()).toEqual([`userA: ${IN_SUBJECT("売り（SELL）")}`, `userA: ${OUT_SUBJECT("売り")}`]);
-    // a SELL from 197.80 seen at 197.23: +0.57 dollars
-    expect([closes[I_SELL], closes[J_SELL]]).toEqual([197.8, 197.23]);
-    expect(world.sent[1].text).toContain("\n1通目の値段からの損益: +0.57ドル（+0.29%）。終値と終値の比べです");
-    clean();
-  });
-
-  it("a ride reached at a bar that is also an already entry of its side: email 2 and no notice (quiet), however often the bar is judged; with no ride the same bar is a notice, once", async () => {
-    world.subs = [follow("userA")];
-    world.rides = [rowOf("SELL", I_HELD)];
-    const q0 = await fresh(after(J_HELD, 0));
-    expect(readOf(q0)).toMatchObject({ signals: ["stockmacd-out:SELL"], ride: { rows: "ok", step: "quiet", caught: [{ side: "SELL", entry_bar: iso(times[I_HELD]), reached_bar: iso(times[J_HELD]), late: false }] } });
-    expect(mails()).toEqual([`userA: ${OUT_SUBJECT("売り")}`]);
-    expect(alertsOf(STOCKMACD_AT_RULE_ID)).toEqual([]);
-    expect(world.rides).toHaveLength(1);
-    for (const m of [1, 2, 3]) expect(readOf(await fresh(after(J_HELD, m)))).toMatchObject({ signals: ["stockmacd-out:SELL"], ride: { step: "quiet", caught: [] } });
-    expect(world.sent).toHaveLength(1);
-    expect(world.alerts.map((r) => r.rule)).toEqual([STOCKMACD_OUT_RULE_ID]);
-    clean();
-
-    // no ride: the notice, under its own id, and no ride is opened
-    resetWorld();
-    world.subs = [follow("userA")];
-    const n0 = await fresh(after(J_HELD, 0));
-    expect(readOf(n0)).toMatchObject({ signals: ["stockmacd-at:SELL"], ride: { rows: "ok", step: "at", caught: [] } });
-    expect(mails()).toEqual([`userA: ${AT_SUBJECT}`]);
-    expect(world.rides).toEqual([]);
-    expect(world.alerts).toHaveLength(1);
-    expect(world.alerts[0]).toMatchObject({ rule: STOCKMACD_AT_RULE_ID, bar_time: iso(times[J_HELD]), closed_at: iso(closeOf(J_HELD)), side: "SELL", entry: closes[J_HELD], stop: null, target: null });
-    for (const m of [1, 2, 3]) expect(readOf(await fresh(after(J_HELD, m)))).toMatchObject({ signals: ["stockmacd-at:SELL"], ride: { step: "at" } });
-    expect(world.sent).toHaveLength(1);
-    clean();
-  });
-
-  it("an entry while an older ride of that side is open is skipped: no ride, no mail; the older ride's email 2 names its own entry bar", async () => {
-    world.subs = [follow("userA")];
-    world.rides = [rowOf("SELL", OLD_SELL)];
-    for (const m of [0, 1, 2]) {
-      const s = await fresh(after(I_SELL, m));
-      expect(readOf(s), `minute ${m}`).toMatchObject({ judged: true, signals: [], ride: { rows: "ok", caught: [], step: "skip" } });
-    }
-    expect(world.rides).toHaveLength(1);
-    expect(world.sent).toEqual([]);
-    expect(world.alerts).toEqual([]);
-    // the older ride is reached at J_SELL's close
-    await fresh(after(I_SELL + 1, 0));
-    const s2 = await fresh(after(J_SELL, 0));
-    expect(readOf(s2)).toMatchObject({ signals: ["stockmacd-out:SELL"], ride: { caught: [{ side: "SELL", entry_bar: iso(times[OLD_SELL]), reached_bar: iso(times[J_SELL]), late: false }] } });
-    expect(mails()).toEqual([`userA: ${OUT_SUBJECT("売り")}`]);
-    expect(alertsOf(STOCKMACD_OUT_RULE_ID)[0]).toMatchObject({ bar_time: iso(times[OLD_SELL]), entry: closes[OLD_SELL], target: closes[J_SELL] });
-    expect(alertsOf(STOCKMACD_RULE_ID)).toEqual([]);
-    clean();
-    // without the older ride the same bar is an entry (the check above can fail)
-    resetWorld();
-    world.subs = [follow("userA")];
-    expect(readOf(await fresh(after(I_SELL, 0)))).toMatchObject({ signals: ["stockmacd:SELL"], ride: { step: "in" } });
-  });
-
-  it("an older ride found reached at an earlier close, and the newest bar a new entry of that side: email 2 (seen late) first, then email 1 for the new ride; a follower whose lookups failed gets both from the next run", async () => {
-    world.subs = [follow("userA"), follow("userB")];
-    world.failPlanFor.add("userB");
-    world.rides = [rowOf("BUY", LATE_BUY)];
-    const s0 = await fresh(after(I_BUY, 0));
-    expect(readOf(s0)).toMatchObject({
-      signals: ["stockmacd-out:BUY", "stockmacd:BUY"],
-      ride: { rows: "ok", step: "in", caught: [{ side: "BUY", entry_bar: iso(times[LATE_BUY]), reached_bar: iso(times[J_LATE]), late: true }], unsent: ["out(not_allowed)", "in(not_allowed)"] },
-    });
-    expect(mails()).toEqual([`userA: ${OUT_SUBJECT("買い")}`, `userA: ${IN_SUBJECT("買い（BUY）")}`]);
-    expect(world.rides).toHaveLength(2);
-    expect(world.rides[0]).toMatchObject({ entry_bar: pg(times[LATE_BUY]), status: "reached", reached_bar: pg(times[J_LATE]), late: true, seen_price: closes[I_BUY] });
-    expect(world.rides[1]).toMatchObject({ entry_bar: pg(times[I_BUY]), side: "BUY", status: "open" });
-    // the two rows of the two mails do not meet (other bar, other rule)
-    expect(world.alerts.map((r) => [r.rule, r.bar_time])).toEqual([[STOCKMACD_OUT_RULE_ID, iso(times[LATE_BUY])], [STOCKMACD_RULE_ID, iso(times[I_BUY])]]);
-    // judged again by a fresh instance, the lookup working: no second ride; the follower left gets email 1 of the
-    // new ride, and email 2 of the old one — which is read now only because it was reached in the last 45 minutes
-    // (it is not open, its entry bar has left the newest 100 bars and it was reached in a bar before this one)
-    world.failPlanFor.clear();
-    const s1 = await fresh(after(I_BUY, 1));
-    expect(readOf(s1)).toMatchObject({ signals: ["stockmacd:BUY", "stockmacd-out:BUY"], ride: { step: "in", caught: [] } });
-    expect(readOf(s1)!.ride).not.toHaveProperty("unsent");
-    expect(world.rides).toHaveLength(2);
-    expect(mails().slice(2)).toEqual([`userB: ${IN_SUBJECT("買い（BUY）")}`, `userB: ${OUT_SUBJECT("買い")}`]);
-    expect(world.sent[3].text).toBe(world.sent[0].text);
-    expect(world.sent[2].text).toBe(world.sent[1].text);
-    // and again: nothing twice
-    const s2 = await fresh(after(I_BUY, 2));
-    expect(readOf(s2)).toMatchObject({ signals: ["stockmacd:BUY", "stockmacd-out:BUY"], ride: { step: "in", caught: [] } });
-    expect(world.sent).toHaveLength(4);
-    expect(world.alerts).toHaveLength(4);
-    clean();
-  });
-
-  it("a Tokyo share, Yahoo fifteen minutes behind: the bar is judged a quarter of an hour after it closed, still as an entry; the reach at a later close is not late; yen in both mails", async () => {
+  it("a Tokyo share, Yahoo fifteen minutes behind: at the close the bar is not in yet; fifteen minutes on it is judged and mailed with the measured delay; a bar that comes in 45 minutes after its close is still mailed, a second later it is not", async () => {
     const T = TOKYO;
-    const tEntry = (k: number) => rideEntryAt(T.closes.slice(k - 599, k + 1));
-    const tAt96 = (k: number, zside: "top" | "bottom") => atShare(rideZoneAt(T.closes.slice(k - 599, k + 1))!, zside, RIDE_OUT_SHARE);
-    // the first entry (not already) whose line is at 96% at no close before the one two or more bars on
-    let i = -1;
-    let j = -1;
-    for (let k = 620; k < N - 120 && i < 0; k++) {
-      const e = tEntry(k);
-      if (!e || e.already || tAt96(k + 1, e.zside)) continue;
-      for (let n = k + 2; n <= k + 90 && j < 0; n++) if (tAt96(n, e.zside)) j = n;
-      if (j > 0) i = k;
-    }
-    expect(i).toBeGreaterThan(0);
-    const e = tEntry(i)!;
-    const sideJa = e.side === "BUY" ? "買い" : "売り";
     world.subs = [follow("userA", T.sym)];
     world.yahooLag = 15 * MIN;
-    // at the close itself Yahoo's newest closed bar is the one before: judged, no entry there, and the close is not done
-    const s0 = await fresh(T.ends[i] + 1_000);
-    expect(readOf(s0, T.sym)).toMatchObject({ due: iso(T.ends[i]), newest: dt(T.times[i - 1]), judged: true, signals: [], ride: { rows: "ok", caught: [], step: null } });
+    // at the close itself Yahoo's newest closed bar is the one before, ended an hour ago: judged, not fresh, nothing
+    const s0 = await fresh(T.ends[T_TEN] + 1_000);
+    expect(readOf(s0, T.sym)).toMatchObject({ due: iso(T.ends[T_TEN]), newest: dt(T.times[T_TEN - 1]), judged: true, signals: [], fade: { fresh: false, entry: null, price: null } });
     expect(world.sent).toEqual([]);
-    // fifteen minutes on Yahoo has priced past the bar's end: the entry, 15 minutes old, is still mailed
-    const s1 = await fresh(T.ends[i] + 15 * MIN + 1_000);
-    expect(readOf(s1, T.sym)).toMatchObject({ newest: dt(T.times[i]), close: T.closes[i], judged: true, signals: [`stockmacd:${e.side}`], ride: { rows: "ok", caught: [], step: "in" } });
-    expect(readOf(s1, T.sym)!.judged_after_ms).toBeGreaterThanOrEqual(15 * MIN);
-    expect(world.rides).toHaveLength(1);
-    expect(world.rides[0]).toMatchObject({ pair: T.sym, side: e.side, status: "open", entry_bar: pg(T.times[i]), entry_closed_at: pg(T.ends[i]), entry_price: T.closes[i] });
-    expect(mails()).toEqual([`userA: 【Sextant】トヨタ自動車（7203.T） 1時間足 ${sideJa}（${e.side}）で入る合図（株の MACD・1通目）`]);
-    expect(world.sent[0].text).toContain(`\nこの足の終値: ${T.closes[i].toFixed(1)}円`);
-    expect(world.sent[0].text).toContain("東証の値段は Yahoo では約15分遅れて届くため、このメールは足が確定してから約15分後に送っています（2026-11-06 に測りました）。");
-    // the close at which the line is at 96%, read fifteen minutes after it: reached there, not late
-    const s2 = await fresh(T.ends[j] + 15 * MIN + 1_000);
-    expect(readOf(s2, T.sym)).toMatchObject({
-      newest: dt(T.times[j]), signals: [`stockmacd-out:${e.side}`],
-      ride: { rows: "ok", caught: [{ side: e.side, entry_bar: iso(T.times[i]), reached_bar: iso(T.times[j]), late: false }] },
+    // fifteen minutes on Yahoo has priced past the bar's end: the entry, 15 minutes old, is mailed
+    const s1 = await fresh(T.ends[T_TEN] + 15 * MIN + 1_000);
+    expect(readOf(s1, T.sym)).toMatchObject({
+      due: iso(T.ends[T_TEN]), newest: dt(T.times[T_TEN]), close: T.closes[T_TEN], judged: true, signals: ["stockmacd:SELL"], fade: { fresh: true, entry: "SELL", price: T.closes[T_TEN] },
     });
-    expect(world.rides[0]).toMatchObject({ status: "reached", reached_bar: pg(T.times[j]), late: false, seen_price: T.closes[j] });
-    expect(mails().slice(1)).toEqual([`userA: 【Sextant】トヨタ自動車（7203.T） 1時間足 96%に届きました（株の MACD・2通目、${sideJa}の分）`]);
-    const pnl = stockRidePnl(T.sym, e.side, T.closes[i], T.closes[j]);
-    const sign = pnl.value > 0 ? "+" : pnl.value < 0 ? "−" : "±";
-    expect(world.sent[1].text).toContain(`\n今の値段: ${T.closes[j].toFixed(1)}円（最新の確定足の終値）`);
-    expect(world.sent[1].text).toContain(`\n1通目の値段からの損益: ${sign}${Math.abs(pnl.value).toFixed(1)}円（${sign}${Math.abs(pnl.pct).toFixed(2)}%）。終値と終値の比べです`);
-    expect(world.sent[1].text).not.toContain("その時は読めず");
-    expect(alertsOf(STOCKMACD_OUT_RULE_ID)[0]).toMatchObject({ pair: T.sym, bar_time: iso(T.times[i]), entry: T.closes[i], target: T.closes[j] });
+    expect(readOf(s1, T.sym)!.judged_after_ms).toBeGreaterThanOrEqual(15 * MIN);
+    expect(mails()).toEqual(["userA: 【Sextant】トヨタ自動車（7203.T）1時間足 売り（SELL・空売り）: 青い線が上の端の96%で確定（株の MACD）"]);
+    expect(world.sent[0].text).toBe(renderStockMail(tokyoSig(T_TEN), "ja").text);
+    expect(world.sent[0].text).toContain(`\n\n${ITEM8_TOKYO_JA}${ITEM8_ARRIVE_JA}\n\n`);
+    expect(world.sent[0].text).toContain(`\nこの足の終値: ${T.closes[T_TEN].toFixed(1)}円\n\n`);
+    expect(world.alerts[0]).toMatchObject({
+      pair: T.sym, interval: "1h", bar_time: iso(T.times[T_TEN]), closed_at: iso(T.ends[T_TEN]), side: "SELL", entry: T.closes[T_TEN], stop: null, target: null, rule: STOCKMACD_RULE_ID,
+    });
+    clean();
+    // 45 minutes behind: read at 11:45 JST (in the 11:30 close's half hour) the bar that closed at 11:00 is in, 45
+    // minutes old: still mailed (STOCK_FRESH_MS)
+    resetWorld();
+    world.subs = [follow("userA", T.sym)];
+    world.yahooLag = 45 * MIN;
+    const s2 = await fresh(T.ends[T_TEN] + 45 * MIN);
+    expect(readOf(s2, T.sym)).toMatchObject({ due: iso(T.ends[T_TEN] + 30 * MIN), newest: dt(T.times[T_TEN]), judged: true, signals: ["stockmacd:SELL"], fade: { fresh: true, entry: "SELL" } });
+    expect(world.sent).toHaveLength(1);
+    // a second more: not mailed
+    resetWorld();
+    world.subs = [follow("userA", T.sym)];
+    world.yahooLag = 45 * MIN + 1_000;
+    const s3 = await fresh(T.ends[T_TEN] + 45 * MIN + 1_000);
+    expect(readOf(s3, T.sym)).toMatchObject({ newest: dt(T.times[T_TEN]), judged: true, signals: [], fade: { fresh: false, entry: null, price: null } });
+    expect(world.sent).toEqual([]);
+    expect(world.alerts).toEqual([]);
     clean();
   });
 
-  it("the rides' table unread: nothing of the ride is done and the record says so; one share's failure does not cost another its judgment", async () => {
+  it("not fresh: Yahoo twenty minutes behind at the next close, the entry bar ended over 45 minutes before — judged, not mailed", async () => {
     world.subs = [follow("userA")];
-    world.ridesStatus = 404;
-    const s0 = await fresh(after(I_BUY, 0));
-    expect(readOf(s0)).toMatchObject({ pair: SYM, newest: dt(times[I_BUY]), judged: true, signals: [], ride: { rows: "unread" } });
-    expect(readOf(s0)!.ride).toEqual({ rows: "unread" });
+    world.yahooLag = 20 * MIN;
+    const s0 = await fresh(after(I_BUY + 1, 0));
+    expect(readOf(s0)).toMatchObject({ due: iso(closeOf(I_BUY + 1)), newest: dt(times[I_BUY]), judged: true, signals: [], fade: { fresh: false, entry: null, price: null } });
     expect(world.sent).toEqual([]);
     expect(world.alerts).toEqual([]);
-    expect(world.rides).toEqual([]);
-    expect(s0.sent ?? 0).toBe(0);
     clean();
-
-    // two shares followed, the table failing for one of them
-    resetWorld();
-    world.subs = [follow("userA"), follow("userA", "MSFT")];
-    world.ridesFailFor.add(SYM);
-    const s1 = await fresh(after(I_BUY, 0));
-    expect(readOf(s1, SYM)).toMatchObject({ signals: [], ride: { rows: "unread" } });
-    expect(readOf(s1, "MSFT")).toMatchObject({ signals: ["stockmacd:BUY"], ride: { rows: "ok", step: "in" } });
-    expect(mails()).toEqual(["userA: 【Sextant】マイクロソフト（MSFT） 1時間足 買い（BUY）で入る合図（株の MACD・1通目）"]);
-    expect(world.rides.map((r) => r.pair)).toEqual(["MSFT"]);
-    // the ride's row could not be written: no email 1 without it (said in the record); written by the next run, mailed then
-    resetWorld();
-    world.subs = [follow("userA")];
-    world.ridesNoInsert = true;
-    const s2 = await fresh(after(I_BUY, 0));
-    expect(readOf(s2)).toMatchObject({ judged: true, signals: [], ride: { rows: "ok", caught: [], step: "in", opened: "no_row" } });
-    expect(world.rides).toEqual([]);
-    expect(world.sent).toEqual([]);
-    expect(world.alerts).toEqual([]);
-    world.ridesNoInsert = false;
-    expect(readOf(await fresh(after(I_BUY, 1)))).toMatchObject({ signals: ["stockmacd:BUY"], ride: { step: "in" } });
-    expect(mails()).toEqual([`userA: ${IN_SUBJECT("買い（BUY）")}`]);
-    // a reach that could not be written: no email 2 without the row saying so
-    resetWorld();
-    world.subs = [follow("userA")];
-    world.rides = [rowOf("BUY", I_BUY)];
-    world.onRidePatch = () => {
-      world.ridesFailFor.add(SYM);
-    };
-    const s3 = await fresh(after(J_BUY, 0));
-    expect(readOf(s3)).toMatchObject({ signals: [], ride: { rows: "ok", caught: [{ side: "BUY", reached_bar: iso(times[J_BUY]), error: "not_written" }], step: null } });
-    expect(world.rides[0].status).toBe("open");
-    expect(world.sent).toEqual([]);
-    world.ridesFailFor.clear();
-    expect(readOf(await fresh(after(J_BUY, 1)))).toMatchObject({ signals: ["stockmacd-out:BUY"], ride: { caught: [{ side: "BUY", late: false }] } });
-    expect(mails()).toEqual([`userA: ${OUT_SUBJECT("買い")}`]);
-    // Yahoo failing for a read: said, nothing judged
-    resetWorld();
-    world.subs = [follow("userA")];
-    world.yahooStatus = 429;
-    expect((await fresh(after(I_BUY, 0))).reads).toEqual([{ pair: SYM, error: "yahoo_429" }]);
-    expect(world.rides).toEqual([]);
   });
 
-  // the review's finding A3: a share's newest bar is read again every minute of its half hour; should Yahoo give the
-  // bar another close on a later read, the bar keeps its FIRST decision
-  it("a bar has one decision, the first: read later with another close, an entry gets no notice on top of its email 1, and a notice gets no email 1 (and no ride)", async () => {
-    // (a) I_BUY is an entry; the smallest higher close at which the line is already at 96%
-    const orig = closes[I_BUY];
-    let moved = orig;
-    for (let n = 1; n < 3000; n++) {
-      moved = Number((orig + n * 0.01).toFixed(2));
-      if (rideEntryAt([...closes.slice(I_BUY - 599, I_BUY), moved])?.already) break;
-    }
-    expect(rideEntryAt([...closes.slice(I_BUY - 599, I_BUY), moved])).toMatchObject({ side: "BUY", already: true });
+  it("one side a bar (spec 2.5): a row of the other side at the bar under the fade's id — nothing mailed, the record says other_side, the bar stays judged; another rule's row of the other side is no such row", async () => {
     world.subs = [follow("userA"), follow("userB")];
-    world.failPlanFor.add("userB");
-    expect(readOf(await fresh(after(I_BUY, 0)))).toMatchObject({ signals: ["stockmacd:BUY"], ride: { step: "in" } });
-    world.failPlanFor.clear();
-    closes[I_BUY] = moved;
-    try {
-      const a1 = await fresh(after(I_BUY, 1));
-      expect(readOf(a1)).toMatchObject({ signals: ["stockmacd:BUY"], ride: { step: "in" } });
-      expect(mails()).toEqual([`userA: ${IN_SUBJECT("買い（BUY）")}`, `userB: ${IN_SUBJECT("買い（BUY）")}`]);
-      // (the price is the row's: the first read's close; the MACD numbers printed are those of the read that mailed)
-      expect(world.sent[1].text).toContain(`\nこの足の終値: ${orig.toFixed(2)}ドル`);
-      expect(mails().some((m) => m.endsWith(AT_SUBJECT))).toBe(false);
-      expect(alertsOf(STOCKMACD_AT_RULE_ID)).toEqual([]);
-      expect(world.rides).toHaveLength(1);
-    } finally {
-      closes[I_BUY] = orig;
-    }
-    // (b) I_NOTICE is already at 96% (a SELL's side); a close a little higher at which it is an entry that is not
+    world.alerts = [{ id: "alert-x", user_id: "userC", kind: "signal", pair: SYM, interval: "1h", bar_time: iso(times[I_BUY]), side: "SELL", rule: STOCKMACD_RULE_ID, status: "sent" }];
+    const h = await instance();
+    const s0 = await run(h, after(I_BUY, 0));
+    expect(readOf(s0)).toMatchObject({ judged: true, signals: [] });
+    expect(readOf(s0)!.fade).toEqual({ fresh: true, entry: "BUY", price: closes[I_BUY], other_side: true });
+    expect(world.sent).toEqual([]);
+    expect(world.alerts).toHaveLength(1);
+    // held judged: the same instance leaves Yahoo alone for the rest of the close's half hour
+    expect((await run(h, after(I_BUY, 1))).reads).toEqual([]);
+    expect(world.yahoo).toHaveLength(1);
+    clean();
+    // v39's ride row of the other side at the same bar (another id) does not stop the fade's mail
     resetWorld();
-    const first = closes[I_NOTICE];
-    let back = first;
-    for (let n = 1; n < 3000; n++) {
-      back = Number((first + n * 0.01).toFixed(2));
-      const e = rideEntryAt([...closes.slice(I_NOTICE - 599, I_NOTICE), back]);
-      if (e !== null && !e.already) break;
-    }
-    expect(rideEntryAt([...closes.slice(I_NOTICE - 599, I_NOTICE), back])).toMatchObject({ side: "SELL", already: false });
     world.subs = [follow("userA")];
-    expect(readOf(await fresh(after(I_NOTICE, 0)))).toMatchObject({ signals: ["stockmacd-at:SELL"], ride: { step: "at" } });
-    closes[I_NOTICE] = back;
-    try {
-      const b1 = await fresh(after(I_NOTICE, 1));
-      expect(readOf(b1)).toMatchObject({ signals: [], ride: { step: "at", kept: true } });
-      expect(world.rides).toEqual([]);
-      expect(mails()).toEqual([`userA: ${AT_SUBJECT}`]);
-      expect(alertsOf(STOCKMACD_RULE_ID)).toEqual([]);
-    } finally {
-      closes[I_NOTICE] = first;
-    }
+    world.alerts = [{ id: "alert-y", user_id: "userC", kind: "signal", pair: SYM, interval: "1h", bar_time: iso(times[I_BUY]), side: "SELL", rule: "stockmacd_12_26_9_w600_1h_ride90to96of120_in_v2", status: "sent" }];
+    const s1 = await fresh(after(I_BUY, 0));
+    expect(readOf(s1)).toMatchObject({ signals: ["stockmacd:BUY"] });
+    expect(readOf(s1)!.fade).not.toHaveProperty("other_side");
+    expect(mails()).toEqual([`userA: ${BUY_SUBJECT}`]);
+    clean();
   });
 
-  // the review's finding A1: an ADDRESS lookup that fails is not "no address": no row is claimed (a row would be marked
-  // failed for good), the bar is not settled, and the same instance's next run mails the follower
-  it("an instance kept warm: a follower whose address lookup failed has no row, the bar stays unsettled, and the next run mails them", async () => {
+  it("one side a bar holds when the bar's rows cannot be read (a 503): nothing mailed, an error, the bar not settled; the next run in the close's half hour reads them, other_side, settled", async () => {
+    world.subs = [follow("userA")];
+    world.alerts = [{ id: "alert-x", user_id: "userC", kind: "signal", pair: SYM, interval: "1h", bar_time: iso(times[I_BUY]), side: "SELL", rule: STOCKMACD_RULE_ID, status: "sent" }];
+    world.alertsFailFor.add(SYM);
+    const h = await instance();
+    const s0 = await run(h, after(I_BUY, 0));
+    // (an unread table is not "no row of either side": the read throws before anything is mailed or claimed)
+    expect(readOf(s0)).toMatchObject({ judged: true, signals: [] });
+    expect(readOf(s0)!.fade).toEqual({ fresh: true, entry: "BUY", price: closes[I_BUY], error: "failed" });
+    expect(world.sent).toEqual([]);
+    expect(world.alerts.map((r) => r.side)).toEqual(["SELL"]);
+    // the same instance, a minute on, the table read again: the bar was not settled, so it is judged again and the row
+    // of the other side is seen; settled then, Yahoo is left alone for the rest of the close's half hour
+    world.alertsFailFor.clear();
+    const s1 = await run(h, after(I_BUY, 1));
+    expect(readOf(s1)).toMatchObject({ judged: true, signals: [] });
+    expect(readOf(s1)!.fade).toEqual({ fresh: true, entry: "BUY", price: closes[I_BUY], other_side: true });
+    expect((await run(h, after(I_BUY, 2))).reads).toEqual([]);
+    expect(world.yahoo).toHaveLength(2);
+    expect(world.sent).toEqual([]);
+    expect(world.alerts.map((r) => r.side)).toEqual(["SELL"]);
+    clean();
+    // with no row of the other side: the unread table mails nothing; the next run mails the follower once
+    resetWorld();
+    world.subs = [follow("userA")];
+    world.alertsFailFor.add(SYM);
+    const g = await instance();
+    const t0 = await run(g, after(I_BUY, 0));
+    expect(readOf(t0)!.fade).toEqual({ fresh: true, entry: "BUY", price: closes[I_BUY], error: "failed" });
+    expect(world.sent).toEqual([]);
+    expect(world.alerts).toEqual([]);
+    world.alertsFailFor.clear();
+    const t1 = await run(g, after(I_BUY, 1));
+    expect(readOf(t1)).toMatchObject({ judged: true, signals: ["stockmacd:BUY"], fade: { fresh: true, entry: "BUY", price: closes[I_BUY] } });
+    expect(readOf(t1)!.fade).not.toHaveProperty("error");
+    expect(mails()).toEqual([`userA: ${BUY_SUBJECT}`]);
+    expect(world.alerts.map((r) => [r.user_id, r.side, r.entry])).toEqual([["userA", "BUY", closes[I_BUY]]]);
+    clean();
+  });
+
+  it("an instance kept warm: a follower whose address lookup failed has no row and the bar stays unsettled, so the next run mails them; settled then, Yahoo is left alone for the close's half hour; the next close is read again", async () => {
     world.subs = [follow("userA"), follow("userB")];
     world.failAuthFor.set("userB", 503);
     const h = await instance();
     const s0 = await run(h, after(I_BUY, 0));
-    expect(readOf(s0)).toMatchObject({ judged: true, signals: ["stockmacd:BUY"], ride: { step: "in", unsent: ["in(lookup_failed)"] } });
+    expect(readOf(s0)).toMatchObject({ judged: true, signals: ["stockmacd:BUY"], fade: { fresh: true, entry: "BUY", unsent: ["lookup_failed"] } });
     expect(s0).toMatchObject({ sent: 1, lookup_failed: 1 });
-    expect(mails()).toEqual([`userA: ${IN_SUBJECT("買い（BUY）")}`]);
-    expect(alertsOf(STOCKMACD_RULE_ID).map((r) => `${r.user_id} ${r.status}`)).toEqual(["userA sent"]);
+    expect(mails()).toEqual([`userA: ${BUY_SUBJECT}`]);
+    expect(world.alerts.map((r) => `${r.user_id} ${r.status}`)).toEqual(["userA sent"]);
     world.failAuthFor.clear();
     const s1 = await run(h, after(I_BUY, 1));
-    expect(readOf(s1)).toMatchObject({ judged: true, signals: ["stockmacd:BUY"], ride: { step: "in" } });
-    expect(readOf(s1)!.ride).not.toHaveProperty("unsent");
-    expect(mails()).toEqual([`userA: ${IN_SUBJECT("買い（BUY）")}`, `userB: ${IN_SUBJECT("買い（BUY）")}`]);
+    expect(readOf(s1)).toMatchObject({ judged: true, signals: ["stockmacd:BUY"], fade: { fresh: true, entry: "BUY" } });
+    expect(readOf(s1)!.fade).not.toHaveProperty("unsent");
+    expect(mails()).toEqual([`userA: ${BUY_SUBJECT}`, `userB: ${BUY_SUBJECT}`]);
     expect(world.sent[1].text).toBe(world.sent[0].text);
-    // settled now: Yahoo is left alone for the rest of the half hour
-    for (const m of [2, 10]) expect((await run(h, after(I_BUY, m))).reads).toEqual([]);
+    for (const m of [2, 10, 30]) expect((await run(h, after(I_BUY, m))).reads).toEqual([]);
     expect(world.yahoo).toHaveLength(2);
-    expect(world.rides).toHaveLength(1);
-  });
-
-  it("an instance kept warm: a bar is held judged (and Yahoo left alone) only once nothing is left to try again — a follower whose lookup failed is mailed by the same instance's next run", async () => {
-    world.subs = [follow("userA"), follow("userB")];
-    world.failPlanFor.add("userB");
-    const h = await instance();
-    const s0 = await run(h, after(I_BUY, 0));
-    expect(readOf(s0)).toMatchObject({ judged: true, signals: ["stockmacd:BUY"], ride: { step: "in", unsent: ["in(not_allowed)"] } });
-    expect(mails()).toEqual([`userA: ${IN_SUBJECT("買い（BUY）")}`]);
-    // the next minute, the same instance, the lookup working: read and judged again
-    world.failPlanFor.clear();
-    const s1 = await run(h, after(I_BUY, 1));
-    expect(readOf(s1)).toMatchObject({ judged: true, signals: ["stockmacd:BUY"], ride: { step: "in" } });
-    expect(mails()).toEqual([`userA: ${IN_SUBJECT("買い（BUY）")}`, `userB: ${IN_SUBJECT("買い（BUY）")}`]);
-    expect(world.yahoo).toHaveLength(2);
-    // nothing left: the close is done for this instance — Yahoo is not read again in its half hour
-    for (const m of [2, 3, 10]) expect((await run(h, after(I_BUY, m))).reads).toEqual([]);
-    expect(world.yahoo).toHaveLength(2);
-    expect(world.rides).toHaveLength(1);
-    expect(world.sent).toHaveLength(2);
-    // the next close is read again
     const s5 = await run(h, after(I_BUY + 1, 0));
-    expect(readOf(s5)).toMatchObject({ judged: true, newest: dt(times[I_BUY + 1]), signals: [], ride: { rows: "ok", step: null } });
+    expect(readOf(s5)).toMatchObject({ judged: true, newest: dt(times[I_BUY + 1]), signals: [], fade: { fresh: true, entry: null, price: null } });
     expect(world.yahoo).toHaveLength(3);
-    // a warm instance whose rides' table could not be read tries again the next minute
-    resetWorld();
-    world.subs = [follow("userA")];
-    world.ridesStatus = 404;
-    const g = await instance();
-    expect(readOf(await run(g, after(I_BUY, 0)))).toMatchObject({ judged: true, ride: { rows: "unread" } });
-    world.ridesStatus = 200;
-    expect(readOf(await run(g, after(I_BUY, 1)))).toMatchObject({ judged: true, signals: ["stockmacd:BUY"], ride: { rows: "ok", step: "in" } });
-    expect(mails()).toEqual([`userA: ${IN_SUBJECT("買い（BUY）")}`]);
+    expect(world.sent).toHaveLength(2);
     clean();
   });
 
-  it("nobody follows a share under 'stockmacd': nothing is read; a bar judged over 45 minutes after it ended starts no ride", async () => {
+  it("one share's failure does not cost another its judgment: the failed one is not held judged and is mailed by the next run; what is logged holds no address; Yahoo failing is said", async () => {
+    const logged: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      logged.push(args.map(String).join(" "));
+    });
+    try {
+      world.subs = [follow("userA"), follow("userA", "MSFT")];
+      world.alertsThrowFor.add(SYM);
+      const h = await instance();
+      const s0 = await run(h, after(I_BUY, 0));
+      expect(readOf(s0, SYM)).toMatchObject({ judged: true, signals: [] });
+      expect(readOf(s0, SYM)!.fade).toEqual({ fresh: true, entry: "BUY", price: closes[I_BUY], error: "failed" });
+      expect(readOf(s0, "MSFT")).toMatchObject({ judged: true, signals: ["stockmacd:BUY"], fade: { fresh: true, entry: "BUY", price: closes[I_BUY] } });
+      expect(mails()).toEqual(["userA: 【Sextant】マイクロソフト（MSFT）1時間足 買い（BUY）: 青い線が下の端の96%で確定（株の MACD）"]);
+      const failed = logged.filter((l) => l.startsWith("stockmacd failed:"));
+      expect(failed).toHaveLength(1);
+      expect(failed[0]).toContain("AAPL");
+      expect(failed[0]).toContain("(url)");
+      for (const no of ["sb.test", "userA", "example.test"]) expect(failed[0], no).not.toContain(no);
+      // the same instance, a minute on: AAPL is read and judged again (MSFT's bar is settled), and mailed
+      world.alertsThrowFor.clear();
+      const s1 = await run(h, after(I_BUY, 1));
+      expect(s1.reads!.map((r) => r.pair)).toEqual([SYM]);
+      expect(readOf(s1, SYM)).toMatchObject({ judged: true, signals: ["stockmacd:BUY"], fade: { fresh: true, entry: "BUY" } });
+      expect(mails()).toEqual(["userA: 【Sextant】マイクロソフト（MSFT）1時間足 買い（BUY）: 青い線が下の端の96%で確定（株の MACD）", `userA: ${BUY_SUBJECT}`]);
+      clean();
+      // Yahoo failing for a read: said, nothing judged
+      resetWorld();
+      world.subs = [follow("userA")];
+      world.yahooStatus = 429;
+      expect((await fresh(after(I_BUY, 0))).reads).toEqual([{ pair: SYM, error: "yahoo_429" }]);
+      expect(world.sent).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("nobody follows a share under 'stockmacd': nothing is read", async () => {
     const s0 = await fresh(after(I_BUY, 0));
     expect(s0).toMatchObject({ ok: true, mode: "stocks", subscriptions: 0 });
     expect(s0.reads).toBeUndefined();
     expect(world.yahoo).toEqual([]);
     expect(world.reads).toEqual(["signal_alert_subscriptions user_id,pair,interval,lang,rule"]);
-    // Yahoo twenty minutes behind at the close after I_BUY's: the newest closed bar is I_BUY, ended an hour ago
-    resetWorld();
-    world.subs = [follow("userA")];
-    world.yahooLag = 20 * MIN;
-    const s1 = await fresh(after(I_BUY + 1, 0));
-    expect(readOf(s1)).toMatchObject({ newest: dt(times[I_BUY]), judged: true, signals: [], ride: { rows: "ok", caught: [], step: null, fresh: false } });
-    expect(world.rides).toEqual([]);
-    expect(world.sent).toEqual([]);
     clean();
   });
 });
