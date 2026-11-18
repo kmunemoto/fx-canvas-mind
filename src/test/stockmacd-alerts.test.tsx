@@ -860,9 +860,9 @@ describe("#391 the MACD email on shares in the settings", () => {
     render(<SignalAlertSettings call={call} />);
     fireEvent.click(await screen.findByTestId("signal-alerts-rule-stockmacd"));
     expect(screen.getByTestId("signal-alerts-rule-stockmacd").textContent).toBe("株の MACD");
-    // #397: the tab describes the ride (the screen's text is src/lib/i18n's; pinned here as it stood when this was written)
+    // v40: the tab describes the fade (the screen's text is src/lib/i18n's; pinned here as it stands; spec section 5)
     const intro = screen.getByTestId("signal-alerts-indicator-intro").textContent!;
-    expect(intro).toContain("FX と同じ「MACD の流れ」のメール（2通）を送ります");
+    expect(intro).toContain("米国株と日本株の1時間足で、FX と同じ「MACD の逆張り」のメールを送ります（1つの足で1通だけ）。");
     expect(intro).toContain("株の売りは空売りです");
     expect(intro).toContain("株では測っていません。");
     const rows = screen.getByTestId("signal-alerts-grid").querySelectorAll("tbody tr");
@@ -872,7 +872,11 @@ describe("#391 the MACD email on shares in the settings", () => {
     expect(screen.getByTestId("signal-alert-stockmacd-AAPL-1h")).toBeTruthy();
     expect(screen.queryByTestId("signal-alert-stockmacd-AAPL-15min")).toBeNull();
     const notes = screen.getByTestId("signal-alerts-notes").textContent!;
-    expect(notes).toContain("損切りも目標もありません。2通目は「96%に届いた」という知らせで、利確の合図とは言えません。");
+    expect(notes).toContain("利確の値段も損切りの値段もありません。これはこの決まりの作りで、損切りをしないことを勧めるものではありません。");
+    // 4.4 item 10: the owner named only for 96%, judging at the close, the fade side (shares included) and no take-profit
+    // or stop price; the shares' 1-hour bars and the pane as facts of the rule
+    expect(notes).toContain(ITEM10_JA);
+    expect(notes).toContain("決まりは FX の「MACD の逆張り」と同じで、見るのは1時間足の確定ごとです。");
     expect(notes).toContain("株では測っていません。5ペアで測った数字は、株には当てはまりません。");
     // none of docs §8.133's numbers (the 95% rule's), nor that a price always comes back
     for (const no of ["1,696回", "99.36%", "−1,837.40%", "95%", "必ず戻"]) expect(`${intro}\n${notes}`, no).not.toContain(no);
