@@ -36,8 +36,13 @@ def psql(sql, *extra):
     return r.stdout
 
 
+# production's go-live constant (README v11.1, set 2026-11-18): the bench puts its own go-live instants in its place
+PROD_LIVE = "1795003200000::bigint"
+
+
 def run(text, s, e):
     t = text.replace("{{START_MS}}", str(s)).replace("{{END_MS}}", str(e)).replace("{{GO_LIVE_MS_PAIRS}}", str(LIVE_P)).replace("{{GO_LIVE_MS_GOLD}}", str(LIVE_G))
+    t = t.replace(PROD_LIVE, f"{LIVE_P if 'pairs.sql v11' in t else LIVE_G}::bigint")
     out = psql(t, "-At", "-F", "\x1f")
     return [ln.split("\x1f") for ln in out.strip().split("\n") if ln]
 

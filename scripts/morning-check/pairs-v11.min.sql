@@ -10,8 +10,8 @@ from p
 ),
 syms as (
 select * from (values
-('USD_JPY', 'USD/JPY', 1, {{GO_LIVE_MS_PAIRS}}::bigint, 3), ('EUR_JPY', 'EUR/JPY', 2, {{GO_LIVE_MS_PAIRS}}::bigint, 3), ('AUD_JPY', 'AUD/JPY', 3, {{GO_LIVE_MS_PAIRS}}::bigint, 3),
-('EUR_USD', 'EUR/USD', 4, {{GO_LIVE_MS_PAIRS}}::bigint, 5), ('AUD_USD', 'AUD/USD', 5, {{GO_LIVE_MS_PAIRS}}::bigint, 5)
+('USD_JPY', 'USD/JPY', 1, 1795003200000::bigint, 3), ('EUR_JPY', 'EUR/JPY', 2, 1795003200000::bigint, 3), ('AUD_JPY', 'AUD/JPY', 3, 1795003200000::bigint, 3),
+('EUR_USD', 'EUR/USD', 4, 1795003200000::bigint, 5), ('AUD_USD', 'AUD/USD', 5, 1795003200000::bigint, 5)
 ) v(symbol, pair, ord, live_ms, d)
 ),
 files as (

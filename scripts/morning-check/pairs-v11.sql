@@ -30,16 +30,16 @@ pp as (
 -- ===== FRONT (five pairs): public.gmo_kline_files -> us(symbol, ot, seq, m8, d, h8, l8, bc, ac), the 1-hour series production judges on, and paid, the price in =====
 -- instrument table: GMO symbol, the app's pair name, display order, the instant from which the v11 rule (signal-alerts v40, the MACD fade on the 1-hour chart) was live, and
 -- the decimals of the chart's rounding (decimalsOf: 3 for a ...JPY pair, 5 for the others).
--- live_ms = GO_LIVE_MS_PAIRS, A PLACEHOLDER TO BE SET AT THE RELEASE (README.md v11.1): the open (epoch ms) of the first 1-hour bar v40 judged, read from the run's record in
--- net._http_response (research/macdfade1h-prod-spec.md 6.2). Until it is replaced by that number (here, then bash build.sh), the statement does not run: the marker is not
--- SQL. If the pairs' first judged bars differ, write each pair's own number in its row.
+-- live_ms = 1795003200000 (2026-11-18 12:00 UTC), set at the release (README.md v11.1): the open of the first 1-hour bar v40 judged, read from the run's record in
+-- net._http_response (research/macdfade1h-prod-spec.md 6.2): v39 last answered at 12:39:00 UTC, v40 first at 12:40:00 UTC, and all five pairs' first judged bar (at
+-- 13:00, 13:03 and 13:05 UTC) was the one opened at 12:00 UTC.
 -- The rest of the FRONT is v9's (front-pairs-v9.part, unchanged): the bars as mergeSides gives them, with each bar's BID close (bc) and ASK close (ac) as given and the CTE
 -- paid (paid_buy = the ASK close, paid_sell = the BID close, per bar of the range: ridePaidAt, as the fade prices a pair's entry, research/macdfade1h-prod-spec.md 2.3). Its
 -- highs and lows (h8, l8, hsrc: the ride's touch) are carried but not read by v11 (a WITH query nobody reads is not run).
 syms as (
   select * from (values
-    ('USD_JPY', 'USD/JPY', 1, {{GO_LIVE_MS_PAIRS}}::bigint, 3), ('EUR_JPY', 'EUR/JPY', 2, {{GO_LIVE_MS_PAIRS}}::bigint, 3), ('AUD_JPY', 'AUD/JPY', 3, {{GO_LIVE_MS_PAIRS}}::bigint, 3),
-    ('EUR_USD', 'EUR/USD', 4, {{GO_LIVE_MS_PAIRS}}::bigint, 5), ('AUD_USD', 'AUD/USD', 5, {{GO_LIVE_MS_PAIRS}}::bigint, 5)
+    ('USD_JPY', 'USD/JPY', 1, 1795003200000::bigint, 3), ('EUR_JPY', 'EUR/JPY', 2, 1795003200000::bigint, 3), ('AUD_JPY', 'AUD/JPY', 3, 1795003200000::bigint, 3),
+    ('EUR_USD', 'EUR/USD', 4, 1795003200000::bigint, 5), ('AUD_USD', 'AUD/USD', 5, 1795003200000::bigint, 5)
   ) v(symbol, pair, ord, live_ms, d)
 ),
 -- the day files of the 40 days up to the last key (1-hour files, BID and ASK)
