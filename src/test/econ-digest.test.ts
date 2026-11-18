@@ -280,9 +280,11 @@ describe("renderDigestMail", () => {
     expect(lines[0]).toBe("今日〜明日の朝と、今週の残りの、大きな予定です（中央銀行・物価・GDP など）。時刻は日本時間です。");
     expect(lines).toContain("対象の通貨: 米ドル・円・ユーロ・豪ドル・中国（売買のメールのペア: 豪ドル/円・豪ドル/ドル・ユーロ/円・ユーロ/ドル・ドル/円・金。中国は、その数字で豪ドルや NZドルが動くことがあるため）");
     // #384: the MACD email's chart is not named (the 15-minute one from signal-alerts v31, the 1-hour one before;
-    // #386: the 1-hour one again from v33)
-    expect(m.text).toContain("止めるには、アプリの「設定」→「メール通知」で「MACD の流れ」のチェックを外してください（売買のメールも止まります）。");
-    expect(m.text).toContain("このメールは、売買のメール（MACD の流れ）を受け取っている方に");
+    // #386: the 1-hour one again from v33). v40 (research/macdfade1h-prod-spec.md 4.1): the rule is named 「MACD の逆張り」,
+    // and the tab, which keeps 「MACD の流れ」 until the screen's texts are out, is named both ways
+    expect(m.text).toContain("このメールは、売買のメール（MACD の逆張り）を受け取っている方に、日本時間の平日の朝に1通送っています。");
+    expect(m.text).toContain("止めるには、アプリの「設定」→「メール通知」で「MACD の逆張り」（画面が新しくなる前は「MACD の流れ」）のチェックを外してください（売買のメールも止まります）。");
+    expect(m.text).not.toContain("売買のメール（MACD の流れ）");
     expect(m.text).not.toContain("1時間足");
     const soon = lines.indexOf("■ 今日〜明日の朝（10/22（木） 06:13 から24時間）");
     const later = lines.indexOf("■ その先（今週の残り。発言は除く）");
@@ -320,6 +322,10 @@ describe("renderDigestMail", () => {
       "- 12:30 UTC (21:30 JST) USD [Prices] ★ CPI y/y (forecast 3.1%, previous 3.0%)",
     ]);
     expect(m.text).toContain("The calendar only covers this week (its last event is on Sun 25 Oct, UTC).");
+    // v40 (research/macdfade1h-prod-spec.md 4.1): the rule named "MACD fade", the tab both ways until the screen's texts are out
+    expect(m.text).toContain("This email goes to those who receive the trade emails (MACD fade), once each weekday morning in Japan.");
+    expect(m.text).toContain('There is no switch for this email alone yet: unticking "MACD fade" ("MACD ride" until the screen is updated) under Settings → Email alerts stops it, and the trade emails too.');
+    expect(m.text).not.toContain("trade emails (MACD ride)");
     expect(m.text).not.toMatch(/undefined|null|NaN/);
   });
 

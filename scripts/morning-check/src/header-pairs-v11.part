@@ -1,0 +1,16 @@
+-- pairs-v11.sql  -  the morning check of the MACD fade e-mails on the 1-hour chart for the FIVE PAIRS (USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD), rule v11.
+-- ONE read-only statement (WITH ... SELECT) for mcp__Supabase__execute_sql. Replace the two markers START_MS and END_MS (each written once, in double curly braces, in the first CTE) by the epoch
+-- milliseconds of the range: bars are judged by their OPEN time, START_MS <= open < END_MS; the Routine's day is (X-2d) 21:00 UTC .. (X-1d) 21:00 UTC,
+-- END_MS = START_MS + 86400000. Nothing else is to be edited.
+-- THE GO-LIVE CONSTANT IS NOT SET YET: GO_LIVE_MS_PAIRS (double curly braces, in syms) is a placeholder that is replaced in src/syms-pairs-v11.part at the release of
+-- signal-alerts v40 (README.md v11.1); while it is there, the statement does not run. Bars that opened before it were judged by v39 (the MACD ride, README.md v9).
+-- It recounts the rule macdx_12_26_9_w600_1h_fade96of120_in_v11 (signal-alerts v40, research/macdfade1h-prod-spec.md: at a closed 1-HOUR bar, the MACD line, the blue line,
+-- is at 96% of the top / bottom edge of the MACD pane of the newest 120 bars and was not one bar earlier in the same 600-bar window; the FADE side: top -> SELL, bottom -> BUY;
+-- the price in is the bar's ask close on a BUY and bid close on a SELL; no stop and no target) from public.gmo_kline_files (interval 1hour) as production reads the data, and
+-- compares the expected entries with public.signal_alerts (kind signal, interval 1h, that rule id): the bar, the side, the entry against the ask / bid close, one side a
+-- bar (other_side), no stop or target (stop_or_target).
+-- It is v8's statement (pairs-v8.sql, v33's 1-hour zone rule at 95%, whose side was already the fade's) with those changes and v9's FRONT (front-pairs-v9.part: the bars'
+-- bid and ask closes), and nothing else (README.md v11.2).
+-- It reads no user_id / event_id / e-mail address and writes nothing.
+-- Result: columns row_type (RUN | SUMMARY | LINE), instrument, bar_open_utc, side, verdict, data (json). See README.md (sections v11 and v8) for every field.
+-- Written to be run in well under a minute (one day: about 1 second).

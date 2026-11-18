@@ -18,6 +18,13 @@
 # macdfade15-spec.md "On 1-hour bars (TF=1h)"); the 15-minute run (TF=15min) is the workflow_dispatch input's other
 # value. The syn job's period is New York's winter on 1h, when the walks have a Friday bar the weekend gate keeps.
 #
+# The study check (research/macdfade1h-prod-spec.md 7.2): after each walk's study in syn and after the Python in real,
+# research/macdfade-prod-check.ts runs the code the email ships (_shared/macd-fade.ts fadeCloseEntryAt, signal-alerts/
+# indicators.ts ridePaidAt) on the same files and holds its entries against the study's rows.csv and summary.json;
+# the real job also stops unless summary.json is run 44099401423's (the numbers in FADE_MEASURED). Those steps run for
+# the 1-hour email's rule only (TF 1h, share 0.96, take profit 10); a dispatch with other values measures something
+# else and skips them.
+#
 # GitHub's runners reach GMO's public price API, which the development container cannot. Read-only: public files
 # fetched, a report printed; it writes nothing to the repository and holds no secret.
 name: Research macdfade15
@@ -46,6 +53,11 @@ on:
       - supabase/functions/_shared/market-hours.ts
       - supabase/functions/live-chart/logic.ts
       - supabase/functions/track-outcomes/quotes.ts
+      # the study check of the 1-hour email (research/macdfade1h-prod-spec.md 7.2) and the shipped code it ties to the
+      # study: the shared function and ridePaidAt's file
+      - research/macdfade-prod-check.ts
+      - supabase/functions/_shared/macd-fade.ts
+      - supabase/functions/signal-alerts/indicators.ts
   workflow_dispatch:
     inputs:
       tf:
@@ -102,6 +114,14 @@ jobs:
         run: |
           deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/macdfade15.ts
           sha256sum $OUT/rows.csv $OUT/summary.json
+      # research/macdfade1h-prod-spec.md 7.2: the shipped function on the same files gives the study's entries (the
+      # files read only, nothing written)
+      - name: The shipped function against walk 1's study (research/macdfade-prod-check.ts)
+        if: env.TF == '1h' && env.SHARE == '0.96' && env.TP == '10'
+        env:
+          MODE: walkfiles
+          OUT: research/out/macdfade15-walk1
+        run: deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-env research/macdfade-prod-check.ts
       - name: Walk 2 as GMO's files, the study read from them (held against the walk in memory)
         env:
           MODE: walkfiles
@@ -110,6 +130,12 @@ jobs:
         run: |
           deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/macdfade15.ts
           sha256sum $OUT/rows.csv $OUT/summary.json
+      - name: The shipped function against walk 2's study (research/macdfade-prod-check.ts)
+        if: env.TF == '1h' && env.SHARE == '0.96' && env.TP == '10'
+        env:
+          MODE: walkfiles
+          OUT: research/out/macdfade15-walk2
+        run: deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-env research/macdfade-prod-check.ts
       # The Python written apart from the TypeScript, from research/macdfade15-spec.md alone (research/macdfade15.ts was
       # not read for it), reads SHARE, TP, START, END and LOAD_FROM from the environment, the walk's GMO files from
       # --cache and the TypeScript's rows.csv and summary.json from --out, holds every row cell by cell and every number
@@ -135,6 +161,12 @@ jobs:
           deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/macdfade15.ts
           sha256sum $OUT/rows.csv $OUT/summary.json
           python3 -I research/macdfade15-check.py --cache $OUT/gmo --out $OUT
+      - name: The shipped function against the untidy walk 1's study (research/macdfade-prod-check.ts)
+        if: env.TF == '1h' && env.SHARE == '0.96' && env.TP == '10'
+        env:
+          MODE: walkfiles
+          OUT: research/out/macdfade15-mess1
+        run: deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-env research/macdfade-prod-check.ts
       # kept when a step fails, to look into (the walks' GMO files left out)
       - if: failure()
         uses: actions/upload-artifact@v4
@@ -216,6 +248,23 @@ jobs:
           key: gmo-macdfade15-${{ github.run_id }}
       - name: The Python on the same files and rows (research/macdfade15-check.py)
         run: python3 -I research/macdfade15-check.py --cache research/.cache --out $OUT
+      # research/macdfade1h-prod-spec.md 7.2: the shipped function on GMO's same files gives the study's entries (the
+      # files the study read or fetched into research/.cache, read only here), and this run's summary.json is run
+      # 44099401423's, whose numbers fill FADE_MEASURED (4.5); either failing stops the job
+      - name: The shipped function against the study (research/macdfade-prod-check.ts); summary.json must be run 44099401423's
+        if: env.TF == '1h' && env.SHARE == '0.96' && env.TP == '10'
+        env:
+          MODE: real
+        run: |
+          got=$(sha256sum < $OUT/summary.json | cut -d' ' -f1)
+          want=60edab22302e5fe755c70b38f87b8b28fa27389ccc1bb10c1a0c0c88c448a9e2
+          echo "summary.json sha256 $got (run 44099401423's: $want)"
+          deno run --v8-flags=--max-old-space-size=12288 --allow-read=. --allow-env research/macdfade-prod-check.ts
+          if [ "$got" != "$want" ]; then
+            echo "summary.json is not run 44099401423's: the numbers in FADE_MEASURED are not this run's (research/macdfade1h-prod-spec.md 7.2): stop"
+            exit 1
+          fi
+          echo "summary.json is run 44099401423's"
       # the same study with END a week earlier (the files already kept), and the Python on it: how much the mean a
       # trade moves with the last minute's price (research/macdfade15-spec.md "How it is measured")
       - name: The study and the Python again, with END a week earlier
