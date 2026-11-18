@@ -6,6 +6,7 @@
 #   v7 (#384: rule macdx_12_26_9_w600_15min_z95of120_v7, signal-alerts v31, the 15-minute chart, GMO days from key 20261026, the switch day, see ../README.md v7.1): pairs-v7.sql, gold-v7.sql and their .min.sql
 #   v8 (#386: rule macdx_12_26_9_w600_1h_z95of120_v8, signal-alerts v33, the 1-hour chart again, GMO days from key 20261030, the switch day back, see ../README.md v8.1): pairs-v8.sql, gold-v8.sql and their .min.sql
 #   v9 (#397: the MACD ride, rule ids macdx_12_26_9_w600_1h_ride90to96of120_{in,at,out}_v9, signal-alerts v39, GMO days from key 20261112, the switch day, see ../README.md v9.1): pairs-v9.sql, gold-v9.sql and their .min.sql
+#   v11 (the MACD fade on the 1-hour chart, rule macdx_12_26_9_w600_1h_fade96of120_in_v11 and the shares' stockmacd_12_26_9_w600_1h_fade96of120_in_v4, signal-alerts v40, see ../README.md v11): pairs-v11.sql, gold-v11.sql, stocks-v11.sql and their .min.sql
 # The .sql files keep the comments; the .min.sql files are the same statement without comments and indentation (shorter to paste into one tool call).
 # Nothing is edited by hand in the deliverables: change a part, run this, run the tests (see ../README.md).
 #   bash build.sh
@@ -71,6 +72,18 @@ python3 -I mkfn.py ../../../supabase/migrations/$MIG fn-header-v9.part mc.pairs_
 python3 -I mkinstall.py install-v9.sql install-v9.part $MIG $O/pairs-v9.fn.sql $O/gold-v9.fn.sql
 # and one block that holds the two sources in full, for the SQL Editor when the pieces cannot be sent (2026-11-13: the connector answered 502)
 python3 -I mkinstall.py install-v9-full.sql install-v9-full.part $MIG $O/pairs-v9.fn.sql $O/gold-v9.fn.sql
+
+# ---- v11 (the MACD fade on the 1-hour chart, signal-alerts v40, rule macdx_12_26_9_w600_1h_fade96of120_in_v11 and the shares' stockmacd_12_26_9_w600_1h_fade96of120_in_v4,
+#      research/macdfade1h-prod-spec.md 7.3, see ../README.md v11): v8's statements with the share 0.96, the new id, the pairs' price in (v9's FRONT, front-pairs-v9.part, unchanged:
+#      the bid / ask closes) and two new parts (other_side, stop_or_target); v8's head, engine, guards and day's end unchanged; new: header, syms (the go-live markers
+#      GO_LIVE_MS_PAIRS / GO_LIVE_MS_GOLD, set at the release), front-gold-v11 (v8's gold front and an empty paid), back1, back2; and the shares' rows (stocks-v11, no recount).
+#      The go-live markers are left in the output until they are set in the syms parts (assemble.py names them as unreplaced: expected until the release). ----
+$A $O/pairs-v11.sql          header-pairs-v11.part   head.part syms-pairs-v11.part front-pairs-v9.part  engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v11.part guard-pairs.part dayend-pairs-v4.part back2-v11.part --sub SQLNAME=pairs.sql
+$A $O/pairs-v11.min.sql                              head.part syms-pairs-v11.part front-pairs-v9.part  engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v11.part guard-pairs.part dayend-pairs-v4.part back2-v11.part --sub SQLNAME=pairs.sql --strip
+$A $O/gold-v11.sql           header-gold-v11.part    head.part syms-gold-v11.part  front-gold-v11.part  engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v11.part guard-gold.part  dayend-gold-v4.part  back2-v11.part --sub SQLNAME=gold.sql
+$A $O/gold-v11.min.sql                               head.part syms-gold-v11.part  front-gold-v11.part  engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v11.part guard-gold.part  dayend-gold-v4.part  back2-v11.part --sub SQLNAME=gold.sql --strip
+$A $O/stocks-v11.sql         header-stocks-v11.part  stocks-v11.part --sub SQLNAME=stocks.sql
+$A $O/stocks-v11.min.sql                             stocks-v11.part --sub SQLNAME=stocks.sql --strip
 
 # ---- v3 must be unchanged ----
 md5sum -c v3.md5

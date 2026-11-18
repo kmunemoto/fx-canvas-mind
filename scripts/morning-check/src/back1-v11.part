@@ -1,0 +1,92 @@
+-- ===== BACK 1 (v11; the same text in pairs-v11.sql and gold-v11.sql): the bands at 96%, the decision and near_edge per judged bar, facts per instrument, and the mails =====
+-- v11 = v8's text with the share 0.95 -> 0.96 (FADE_SHARE = FADE_PCT / 100 = 96 / 100, _shared/macd-fade.ts; research/macdfade1h-prod-spec.md 2.1-2.2), the rule id
+-- macdx_12_26_9_w600_1h_fade96of120_in_v11, and the mails read with their stop / target (null on every fade row) and the sides of each bar (one side a bar).
+-- one row per judged bar. m = the blue line, sg = the orange line, h = the bars (m - sg); tn / bn = the top / bottom edge of the MACD pane of the 120 positions ending at the
+-- bar (the highest / lowest of 0, m, sg and h); tp / bp / mp = the same one bar earlier (the 120 positions ending at the bar before, from the same 600-bar computation).
+-- At 96% (macd-fade.ts closeEntryAt, Z = zoneAt at 599 and Zp = zoneAt at 598 of the bar's own 600-bar window): top = tn > 0 and m >= 0.96 * tn, bottom = bn < 0 and
+-- m <= 0.96 * bn; 0.96 = the double nearest 0.96 (FADE_SHARE = 96 / 100 is that double), the product is held against as it comes (equality in), nothing is rounded; only m
+-- comes to 96%, sg and h only set the edges. in_top / in_bot = at 96% at the bar (Z), p_top / p_bot = at 96% one bar earlier in the same window (Zp, not Z of the bar
+-- before on its own window). sd = the entry, already the FADE side (fadeSideOf): SELL = at the top now and not before, BUY = at the bottom now and not before, null = no
+-- entry (the two cannot both hold: the top needs m > 0, the bottom m < 0). The column names in_top / in_bot / band_bars are v8's (the band is now the 96% one).
+-- clo = the bar's own rounded close (the chart's close; gold's mail `entry` is this, a pair's is the ask / bid close: the FRONT's paid).
+fin2 as (
+  select f.symbol, f.ot, f.jr, y.pair, y.d, f.m, f.sg, f.h, f.tn, f.bn, f.clo, f.e12_p, f.e26_p, f.sg_p, f.ta_p, f.tb_p,
+         b.in_top, b.in_bot, b.p_top, b.p_bot,
+         case when b.in_top and not b.p_top then 'SELL' when b.in_bot and not b.p_bot then 'BUY' end as sd
+  from fin f join syms y on y.symbol = f.symbol
+  cross join lateral (select (f.tn > 0 and f.m >= 0.96::float8 * f.tn) as in_top, (f.bn < 0 and f.m <= 0.96::float8 * f.bn) as in_bot,
+                             (f.tp > 0 and f.mp >= 0.96::float8 * f.tp) as p_top, (f.bp < 0 and f.mp <= 0.96::float8 * f.bp) as p_bot) b
+),
+-- near_edge: would moving the judged bar's OWN close (the last of its 600) by 2 ticks, up or down, change the decision at that bar (SELL / BUY / none)? Production read the live
+-- file 2-6 s after the close and the table holds the final one, so a revised last close could flip a fire. One tick = 10^-d (JPY pairs 0.001, other pairs 0.00001, gold 0.01); the
+-- moved close is the rounded price 2 ticks away (exact decimal arithmetic, then the nearest double, like the rounded closes themselves). Only the last step of the recursion
+-- depends on that close, so that step is evaluated again here in closed form from the state one row earlier (e12_p, e26_p, sg_p, ta_p, tb_p), the same double operations
+-- as in the recursion; the bar before (tp, bp, mp, p_top, p_bot) does not depend on it. The decision is monotone in the close (SELL for high closes, BUY for low ones, none
+-- between), so the two end points tell whether any move inside +-2 ticks changes it.
+ne as (
+  select f.symbol, f.jr, bool_or(coalesce(x.sd, '') <> coalesce(f.sd, '')) as near_edge
+  from fin2 f
+  join s on s.symbol = f.symbol and s.rn = f.jr
+  cross join (values (-2), (2)) q(k)
+  cross join lateral (select (s.cn + q.k / (10::float8 ^ s.d)::numeric)::float8 as c2) c
+  cross join lateral (select (2.0::float8 / 13.0::float8) * c.c2 + (1 - (2.0::float8 / 13.0::float8)) * f.e12_p as ne12,
+                             (2.0::float8 / 27.0::float8) * c.c2 + (1 - (2.0::float8 / 27.0::float8)) * f.e26_p as ne26) a
+  cross join lateral (select a.ne12 - a.ne26 as nm) b
+  cross join lateral (select (2.0::float8 / 10.0::float8) * b.nm + (1 - (2.0::float8 / 10.0::float8)) * f.sg_p as nsg) z
+  cross join lateral (select greatest(f.ta_p, b.nm, z.nsg, b.nm - z.nsg) as t2, least(f.tb_p, b.nm, z.nsg, b.nm - z.nsg) as b2) e
+  cross join lateral (select case when e.t2 > 0 and b.nm >= 0.96::float8 * e.t2 and not f.p_top then 'SELL'
+                                  when e.b2 < 0 and b.nm <= 0.96::float8 * e.b2 and not f.p_bot then 'BUY' end as sd) x
+  group by f.symbol, f.jr
+),
+-- fire = the entry (the rule fires at this bar). mk_top / mk_bot = 0.96 * tn / 0.96 * bn, the marks the 96% starts at (the same products the comparisons above use).
+-- tick = one unit of the last decimal.
+fx2 as (
+  select f.*, (f.sd is not null) as fire, n.near_edge, 0.96::float8 * f.tn as mk_top, 0.96::float8 * f.bn as mk_bot, power(10::float8, -f.d) as tick
+  from fin2 f join ne n on n.symbol = f.symbol and n.jr = f.jr
+),
+-- the series per instrument: its length, the bars of the day (first / last open: a whole day ends with the bar that opened 1 h before the range ends; hours missing
+-- between the first and the last bar of the day mean a hole in the data), bad closes, and the rank of the day's first bar
+sstat as (
+  select y.symbol, count(s.rn) as history_bars,
+         count(s.rn) filter (where s.ot >= pp.start_ms and s.ot < pp.end_ms) as day_bars,
+         count(s.rn) filter (where s.bad) as bad_mantissas,
+         min(s.rn) filter (where s.ot >= pp.start_ms and s.ot < pp.end_ms) as first_day_rank,
+         min(s.ot) filter (where s.ot >= pp.start_ms and s.ot < pp.end_ms) as first_day_ot,
+         max(s.ot) filter (where s.ot >= pp.start_ms and s.ot < pp.end_ms) as last_day_ot
+  from syms y cross join pp left join s on s.symbol = y.symbol
+  group by y.symbol
+),
+wstat as (
+  select y.symbol, count(f.ot) as windows, count(f.ot) filter (where f.in_top or f.in_bot) as band_bars, count(f.ot) filter (where f.fire) as exp_fires
+  from syms y left join fx2 f on f.symbol = y.symbol
+  group by y.symbol
+),
+-- the mails: public.signal_alerts rows of THIS rule on the 1-hour chart, grouped per signal (pair, side, bar); no user_id / event_id is read.
+-- n_st = the rows with a stop or a target (the fade states neither: signalRow writes both null; any such row is told, stop_or_target)
+mails as (
+  select a.pair, a.side, (extract(epoch from a.bar_time) * 1000)::bigint as ot,
+         count(*) as n_rows, count(*) filter (where a.status = 'sent') as n_sent, string_agg(distinct a.status, ',') as statuses,
+         min(extract(epoch from (a.sent_at - a.closed_at))) as lag_min, max(extract(epoch from (a.sent_at - a.closed_at))) as lag_max,
+         min(a.entry) as entry, max(a.entry) as entry_max,
+         count(*) filter (where a.stop is not null or a.target is not null) as n_st
+  from public.signal_alerts a, pp
+  where a.kind = 'signal' and a.interval = '1h' and a.rule = 'macdx_12_26_9_w600_1h_fade96of120_in_v11'
+    and a.pair in (select pair from syms)
+    and a.bar_time >= to_timestamp(pp.start_ms / 1000.0) and a.bar_time < to_timestamp(pp.end_ms / 1000.0)
+  group by a.pair, a.side, a.bar_time
+),
+-- one side a bar (research/macdfade1h-prod-spec.md 2.5: mailRide reads the bar's rows under the rule whatever their side, and a row of the other side means nothing is
+-- mailed, other_side): msides = the bars of the range with rows of THIS rule of both sides (n_sides 2); every line of such a bar is told, other_side
+msides as (select pair, ot, count(*) as n_sides from mails group by pair, ot having count(*) > 1),
+-- subscriptions now (count only; the 1-hour macdx subscriptions, which v40 reads as v39 did: none moves, spec 3.6) and rows of ANOTHER 1-hour macdx rule id in the range: any
+-- rule id but the v11 one, so v9's ride rows (_in_v9 / _at_v9 / _out_v9: on the switch day, and in a rollback) and v8's, v6's, v4's and v3's too (a renamed rule would make
+-- every mail look "missing"). The fields keep their v6 names other_macdx_1h_rows / other_macdx_1h_rule_rows (the Routine reads them).
+subs as (select pair, count(*) as n from public.signal_alert_subscriptions where interval = '1h' and rule = 'macdx' group by pair),
+othr as (
+  select a.pair, count(*) as n
+  from public.signal_alerts a, pp
+  where a.kind = 'signal' and a.interval = '1h' and a.rule like 'macdx%' and a.rule <> 'macdx_12_26_9_w600_1h_fade96of120_in_v11'
+    and a.pair in (select pair from syms)
+    and a.bar_time >= to_timestamp(pp.start_ms / 1000.0) and a.bar_time < to_timestamp(pp.end_ms / 1000.0)
+  group by a.pair
+),
