@@ -1,5 +1,8 @@
 # The MACD fade on 1-hour closes: one email when the line closes at 96%, no target, no stop
 
+**For production, replaced (2026-11-19) by research/macdfade15min-prod-spec.md at signal-alerts v41** (the owner's
+「メールの判断15分に変更して」). It stays the record of v40.
+
 Status: a production spec, written 2026-11-17 on branch `claude/app-confirmation-jvmk03` on 53f7003 (the draft
 committed in 6cbee35), then revised the same day after three reviews (24 findings, each checked against the code and
 the sources; section 8 says what that revision read). Nothing in it is built. Production still runs v9 (signal-alerts
