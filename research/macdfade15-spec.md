@@ -573,7 +573,7 @@ the open ones at their value at the last minute loaded.
 
 - Minutes to the target, median (15min / 1h): USD/JPY 68 / 71, EUR/JPY 80 / 63, AUD/JPY 137 / 129.5, EUR/USD 226 /
   237, AUD/USD 319.5 / 291.5. Longest to the target: 15min 311,134..784,561 (216..545 days), 1h 309,327..687,037
-  (215..477 days). Longest still open: 15min 742,290..959,205 (516..666 days), 1h 470,220..888,900 (327..617 days).
+  (215..477 days). Longest still open: 15min 742,290..959,205 (515..666 days), 1h 470,220..888,900 (327..617 days).
 - The halves (split at 2025-06-06T10:30Z, the midpoint of the period; macdfade15.yml "Each pair by period"), win
   15min / 1h: USD/JPY 99.68 / 99.26 then 98.66 / 98.55 (15min both); EUR/JPY 99.51 / 100.00 then 98.25 / 98.06 (it
   turns); AUD/JPY 100 / 100 then 97.14 / 97.26; EUR/USD 99.17 / 98.68 then 98.16 / 98.78 (it turns); AUD/USD 99.84 /
