@@ -18,12 +18,13 @@
 # macdfade15-spec.md "On 1-hour bars (TF=1h)"); the 15-minute run (TF=15min) is the workflow_dispatch input's other
 # value. The syn job's period is New York's winter on 1h, when the walks have a Friday bar the weekend gate keeps.
 #
-# The study check (research/macdfade1h-prod-spec.md 7.2): after each walk's study in syn and after the Python in real,
-# research/macdfade-prod-check.ts runs the code the email ships (_shared/macd-fade.ts fadeCloseEntryAt, signal-alerts/
-# indicators.ts ridePaidAt) on the same files and holds its entries against the study's rows.csv and summary.json;
-# the real job also stops unless summary.json is run 44099401423's (the numbers in FADE_MEASURED). Those steps run for
-# the 1-hour email's rule only (TF 1h, share 0.96, take profit 10); a dispatch with other values measures something
-# else and skips them.
+# The study check (research/macdfade1h-prod-spec.md 7.2; on 15-minute bars research/macdfade15min-prod-spec.md 7.2):
+# after each walk's study in syn and after the Python in real, research/macdfade-prod-check.ts runs the code the email
+# ships (_shared/macd-fade.ts fadeCloseEntryAt, signal-alerts/indicators.ts ridePaidAt) on the same files and holds its
+# entries against the study's rows.csv and summary.json; the real job also stops unless summary.json is the run of
+# record (1h: run 44099401423's; 15min: run 44077464383's with the tf line taken out, and the ledger copy once it
+# exists). Those steps run for the email's rule only (TF 1h or 15min, share 0.96, take profit 10); a dispatch with
+# other values measures something else and skips them.
 #
 # GitHub's runners reach GMO's public price API, which the development container cannot. Read-only: public files
 # fetched, a report printed; it writes nothing to the repository and holds no secret.
@@ -114,10 +115,10 @@ jobs:
         run: |
           deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/macdfade15.ts
           sha256sum $OUT/rows.csv $OUT/summary.json
-      # research/macdfade1h-prod-spec.md 7.2: the shipped function on the same files gives the study's entries (the
-      # files read only, nothing written)
+      # research/macdfade1h-prod-spec.md 7.2 (1h) and research/macdfade15min-prod-spec.md 7.2 (15min): the shipped
+      # function on the same files gives the study's entries (the files read only, nothing written)
       - name: The shipped function against walk 1's study (research/macdfade-prod-check.ts)
-        if: env.TF == '1h' && env.SHARE == '0.96' && env.TP == '10'
+        if: (env.TF == '1h' || env.TF == '15min') && env.SHARE == '0.96' && env.TP == '10'
         env:
           MODE: walkfiles
           OUT: research/out/macdfade15-walk1
@@ -131,7 +132,7 @@ jobs:
           deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/macdfade15.ts
           sha256sum $OUT/rows.csv $OUT/summary.json
       - name: The shipped function against walk 2's study (research/macdfade-prod-check.ts)
-        if: env.TF == '1h' && env.SHARE == '0.96' && env.TP == '10'
+        if: (env.TF == '1h' || env.TF == '15min') && env.SHARE == '0.96' && env.TP == '10'
         env:
           MODE: walkfiles
           OUT: research/out/macdfade15-walk2
@@ -162,7 +163,7 @@ jobs:
           sha256sum $OUT/rows.csv $OUT/summary.json
           python3 -I research/macdfade15-check.py --cache $OUT/gmo --out $OUT
       - name: The shipped function against the untidy walk 1's study (research/macdfade-prod-check.ts)
-        if: env.TF == '1h' && env.SHARE == '0.96' && env.TP == '10'
+        if: (env.TF == '1h' || env.TF == '15min') && env.SHARE == '0.96' && env.TP == '10'
         env:
           MODE: walkfiles
           OUT: research/out/macdfade15-mess1
@@ -248,23 +249,46 @@ jobs:
           key: gmo-macdfade15-${{ github.run_id }}
       - name: The Python on the same files and rows (research/macdfade15-check.py)
         run: python3 -I research/macdfade15-check.py --cache research/.cache --out $OUT
-      # research/macdfade1h-prod-spec.md 7.2: the shipped function on GMO's same files gives the study's entries (the
-      # files the study read or fetched into research/.cache, read only here), and this run's summary.json is run
-      # 44099401423's, whose numbers fill FADE_MEASURED (4.5); either failing stops the job
-      - name: The shipped function against the study (research/macdfade-prod-check.ts); summary.json must be run 44099401423's
-        if: env.TF == '1h' && env.SHARE == '0.96' && env.TP == '10'
+      # research/macdfade1h-prod-spec.md 7.2 (1h) and research/macdfade15min-prod-spec.md 7.2 and 4.5 (15min): the
+      # shipped function on GMO's same files gives the study's entries (the files the study read or fetched into
+      # research/.cache, read only here), and this run's summary.json is the run of record whose numbers fill
+      # FADE_MEASURED: on 1h run 44099401423's; on 15min run 44077464383's once the bytes ',\n  "tf": "15min"' (53f7003
+      # added tf to meta) are taken out, and, once research/ledger/macdfade15-summary.json exists, that copy byte for
+      # byte; either failing stops the job
+      - name: The shipped function against the study (research/macdfade-prod-check.ts); summary.json must be the run of record
+        if: (env.TF == '1h' || env.TF == '15min') && env.SHARE == '0.96' && env.TP == '10'
         env:
           MODE: real
         run: |
-          got=$(sha256sum < $OUT/summary.json | cut -d' ' -f1)
-          want=60edab22302e5fe755c70b38f87b8b28fa27389ccc1bb10c1a0c0c88c448a9e2
-          echo "summary.json sha256 $got (run 44099401423's: $want)"
           deno run --v8-flags=--max-old-space-size=12288 --allow-read=. --allow-env research/macdfade-prod-check.ts
-          if [ "$got" != "$want" ]; then
-            echo "summary.json is not run 44099401423's: the numbers in FADE_MEASURED are not this run's (research/macdfade1h-prod-spec.md 7.2): stop"
-            exit 1
+          if [ "$TF" = "1h" ]; then
+            got=$(sha256sum < $OUT/summary.json | cut -d' ' -f1)
+            want=60edab22302e5fe755c70b38f87b8b28fa27389ccc1bb10c1a0c0c88c448a9e2
+            echo "summary.json sha256 $got (run 44099401423's: $want)"
+            if [ "$got" != "$want" ]; then
+              echo "summary.json is not run 44099401423's: the numbers in FADE_MEASURED are not this run's (research/macdfade1h-prod-spec.md 7.2): stop"
+              exit 1
+            fi
+            echo "summary.json is run 44099401423's"
+          else
+            got=$(sha256sum < $OUT/summary.json | cut -d' ' -f1)
+            stripped=$(python3 -I -c 'import sys; b = open(sys.argv[1], "rb").read(); t = b",\n  \"tf\": \"15min\""; assert b.count(t) == 1, "the tf line is not there once"; sys.stdout.write(__import__("hashlib").sha256(b.replace(t, b"")).hexdigest())' $OUT/summary.json)
+            want=76c86aa8fa1e4bce9e8ea77418bd32cd043166a5a420a2958747943f932a61e0
+            echo "summary.json sha256 $got; without its tf line $stripped (run 44077464383's: $want)"
+            if [ "$stripped" != "$want" ]; then
+              echo "summary.json without its tf line is not run 44077464383's: GMO's files are not that run's, these are new numbers (research/macdfade15min-prod-spec.md 4.5 step 4): stop"
+              exit 1
+            fi
+            if [ -f research/ledger/macdfade15-summary.json ]; then
+              ledger=$(sha256sum < research/ledger/macdfade15-summary.json | cut -d' ' -f1)
+              echo "research/ledger/macdfade15-summary.json sha256 $ledger"
+              if [ "$got" != "$ledger" ]; then
+                echo "summary.json is not the ledger copy byte for byte (research/macdfade15min-prod-spec.md 7.2): stop"
+                exit 1
+              fi
+            fi
+            echo "summary.json is run 44077464383's (with its tf line)"
           fi
-          echo "summary.json is run 44099401423's"
       # the same study with END a week earlier (the files already kept), and the Python on it: how much the mean a
       # trade moves with the last minute's price (research/macdfade15-spec.md "How it is measured")
       - name: The study and the Python again, with END a week earlier
