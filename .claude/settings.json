@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
+      "NotebookEdit",
+      "WebFetch",
+      "WebSearch",
+      "Agent",
+      "Workflow",
+      "Skill",
+      "Artifact",
+      "SendUserFile",
+      "TaskCreate",
+      "TaskGet",
+      "TaskList",
+      "TaskUpdate",
+      "TaskStop",
+      "Monitor",
+      "mcp__Supabase",
+      "mcp__github",
+      "mcp__Lovable",
+      "mcp__Claude_Code_Remote",
+      "mcp__Claude_Docs",
+      "mcp__Gmail__search_threads",
+      "mcp__Gmail__get_thread",
+      "mcp__Gmail__get_message"
+    ]
+  }
+}
