@@ -1,0 +1,15 @@
+-- ===== FRONT (three pairs: EUR/JPY, AUD/JPY, EUR/USD): public.gmo_kline_files -> us(symbol, ot, seq, m8, d, h8, l8, bc, ac), the 1-hour series production judges on, and paid =====
+-- instrument table: GMO symbol, the app's pair name, display order, the instant from which the v11 rule (signal-alerts v40, the MACD fade on the 1-hour chart) was live, and
+-- the decimals of the chart's rounding (decimalsOf: 3 for a ...JPY pair, 5 for the others). The three rows are syms-pairs-v11.part's EUR/JPY, AUD/JPY and EUR/USD rows as
+-- they are: signal-alerts v41 judges these three as v40 did (the same id, the same '1h' rows), so their go-live stays v40's.
+-- live_ms = 1795003200000 (2026-11-18 12:00 UTC), set at v40's release (README.md v11.1): the open of the first 1-hour bar v40 judged, read from the run's record in
+-- net._http_response (research/macdfade1h-prod-spec.md 6.2).
+-- The rest of the FRONT is v9's (front-pairs-v9.part, unchanged), as in pairs-v11.sql: the bars as mergeSides gives them, with each bar's BID close (bc) and ASK close (ac) as
+-- given and the CTE paid (paid_buy = the ASK close, paid_sell = the BID close, per bar of the range: ridePaidAt, as the fade prices a pair's entry). Its highs and lows (h8,
+-- l8, hsrc) are carried but not read (a WITH query nobody reads is not run).
+syms as (
+  select * from (values
+    ('EUR_JPY', 'EUR/JPY', 2, 1795003200000::bigint, 3), ('AUD_JPY', 'AUD/JPY', 3, 1795003200000::bigint, 3),
+    ('EUR_USD', 'EUR/USD', 4, 1795003200000::bigint, 5)
+  ) v(symbol, pair, ord, live_ms, d)
+),

@@ -5,6 +5,9 @@ Saturday key included, the pairs and gold) and, when that does not catch it, the
 bench. The data folders must already be loaded (check12.py --load).
 
 usage: python3 -I teeth12.py PAIRS_DATADIR GOLD_DATADIR [--dbp NAME] [--dbg NAME] [--from YYYYMMDD] [--to YYYYMMDD] [--only TEXT]  (--only: the changes whose name holds TEXT)
+Exit 1 when a change is not caught or cannot be made (SETUP ERROR), so that a blind spot fails the bench (research/macdfade15min-prod-spec.md 7.3). The pairs are USD/JPY
+and AUD/USD only (pairs-v12, the per-pair form): some changes are then caught only by the scenarios, the weekend ones by p33 / p34 / p37, which need a first seed whose
+two-pair walk has those entries (run12.sh's default, seed 5).
 """
 import os
 import subprocess
@@ -63,6 +66,7 @@ CHANGES = [
 tmp = tempfile.mkdtemp(prefix="teeth12-")
 caught = 0
 ran = 0
+setup_errors = 0
 for name, subs in CHANGES:
     if opt("--only") and opt("--only") not in name:
         continue
@@ -76,6 +80,7 @@ for name, subs in CHANGES:
             texts[k] = texts[k].replace(old, new)
     if bad:
         print(f"SETUP ERROR  {name}: {bad}")
+        setup_errors += 1
         continue
     paths = {}
     for k, t in texts.items():
@@ -102,4 +107,5 @@ for name, subs in CHANGES:
     caught += 1 if how else 0
     print(("CAUGHT       " if how else "NOT CAUGHT   ") + name + (f"  <- {how}" if how else ""))
     sys.stdout.flush()
-print(f"changes run {ran} (of {len(CHANGES)}), caught {caught}, not caught {ran - caught}")
+print(f"changes run {ran} (of {len(CHANGES)}), caught {caught}, not caught {ran - caught}, setup errors {setup_errors}")
+sys.exit(1 if ran - caught or setup_errors else 0)

@@ -4,6 +4,9 @@ gold-v12) for each GMO day, and compare its LINE rows with what the simulation (
 per line the price in (`paid`), the close, `entry_diff_ticks` 0, the rows a follower, the reasons of a not_mailable line and near_edge; per instrument and day,
 `expected_fires`, the switch's fields (`go_live_utc`, `end_1h_utc`, `switch_gap_bars`, `switch_overlap_bars`, worked out here from the constants) and
 `macdx_1h_rows_after_end_1h` 0. check11.py on 15-minute bars.
+The pairs are USD/JPY and AUD/USD only (research/macdfade15min-prod-spec.md 7.3, the per-pair form: sim12.ts follows and writes those two; gen12.py's other three pairs are
+loaded but neither followed nor mailed): per day the SUMMARY rows must be of exactly those two (gold: XAU/USD), and pairs-v12's RUN `macdx_15min_rows_other_pairs` must be 0
+(no 15-minute macdx row of another pair on a clean bench day); gold-v12's RUN has no such field.
 
 usage: python3 -I check12.py DATADIR --kind pairs|gold [--db NAME] [--load] [--from YYYYMMDD] [--to YYYYMMDD] [--saturdays] [--sql FILE] [--live-pairs MS] [--live-gold MS]
        [--end-pairs MS] [--end-gold MS] [--show KEY] [--quiet] [--jobs N]
@@ -34,6 +37,7 @@ LIVE_G = int(opt("--live-gold", str(int(dt.datetime(2026, 11, 25, 9, 45, tzinfo=
 END_P = int(opt("--end-pairs", str(int(dt.datetime(2026, 11, 25, 10, tzinfo=UTC).timestamp() * 1000))))
 END_G = int(opt("--end-gold", str(int(dt.datetime(2026, 11, 25, 10, tzinfo=UTC).timestamp() * 1000))))
 FOLLOWERS = {"USD/JPY": 2}
+INSTS = {"USD/JPY", "AUD/USD"} if KIND == "pairs" else {"XAU/USD"}
 
 
 def psql(sql, *extra):
@@ -104,6 +108,10 @@ for key, s, e in days:
         j = json.loads(data)
         if show == key:
             print(rt, inst, bar, side, verdict, data[:1200])
+        if rt == "RUN":
+            # pairs-v12: the day's 15-minute macdx rows of a pair not in syms (a finding above 0); gold-v12: no such field (its slot is empty)
+            if (KIND == "pairs" and j.get("macdx_15min_rows_other_pairs") != 0) or (KIND == "gold" and "macdx_15min_rows_other_pairs" in j):
+                differ(key, "RUN macdx_15min_rows_other_pairs", j.get("macdx_15min_rows_other_pairs", "absent"))
         if rt == "LINE":
             got[(inst, bar, side)] = (verdict, j)
             verdicts[verdict] = verdicts.get(verdict, 0) + 1
@@ -119,6 +127,9 @@ for key, s, e in days:
             tot["switch_days"] = tot.get("switch_days", 0) + (1 if want_sw["switch_gap_bars"] or want_sw["switch_overlap_bars"] else 0)
             tag = verdict if verdict == "OK" else f"{verdict} [{j.get('attention')}{'; ' + j['no_data_why'] if j.get('no_data_why') else ''}]"
             summaries.setdefault(tag, []).append(f"{key} {inst}")
+    insts = {inst for rt, inst, _, _, _, _ in answers[key] if rt == "SUMMARY"}
+    if insts != INSTS:
+        differ(key, "SUMMARY instruments", sorted(insts), "want", sorted(INSTS))
     tot["days"] += 1
     tot["lines"] += len(got)
     if set(got) != set(want):

@@ -10,8 +10,7 @@ from p
 ),
 syms as (
 select * from (values
-('USD_JPY', 'USD/JPY', 1, {{GO_LIVE_MS_PAIRS}}::bigint, 3, {{END_1H_MS_PAIRS}}::bigint), ('EUR_JPY', 'EUR/JPY', 2, {{GO_LIVE_MS_PAIRS}}::bigint, 3, {{END_1H_MS_PAIRS}}::bigint),
-('AUD_JPY', 'AUD/JPY', 3, {{GO_LIVE_MS_PAIRS}}::bigint, 3, {{END_1H_MS_PAIRS}}::bigint), ('EUR_USD', 'EUR/USD', 4, {{GO_LIVE_MS_PAIRS}}::bigint, 5, {{END_1H_MS_PAIRS}}::bigint),
+('USD_JPY', 'USD/JPY', 1, {{GO_LIVE_MS_PAIRS}}::bigint, 3, {{END_1H_MS_PAIRS}}::bigint),
 ('AUD_USD', 'AUD/USD', 5, {{GO_LIVE_MS_PAIRS}}::bigint, 5, {{END_1H_MS_PAIRS}}::bigint)
 ) v(symbol, pair, ord, live_ms, d, end_1h_ms)
 ),
@@ -418,7 +417,7 @@ json_build_object('sql', 'pairs.sql v12', 'rule', 'macdx_12_26_9_w600_15min_fade
 'range_utc', to_char(to_timestamp(pp.start_ms / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI') || ' .. ' || to_char(to_timestamp(pp.end_ms / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI'),
 'range_is_one_gmo_day', pp.range_ok, 'db_now_utc', to_char(now() at time zone 'UTC', 'YYYY-MM-DD HH24:MI:SS'),
 'go_live_utc', (select to_char(to_timestamp(min(live_ms) / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI') from syms),
-'end_1h_utc', (select to_char(to_timestamp(max(end_1h_ms) / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI') from syms),
+'end_1h_utc', (select to_char(to_timestamp(max(end_1h_ms) / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI') from syms), 'macdx_15min_rows_other_pairs', (select count(*) from public.signal_alerts a where a.kind = 'signal' and a.interval = '15min' and a.rule like 'macdx%' and a.pair not in (select pair from syms) and a.bar_time >= to_timestamp(pp.start_ms / 1000.0) and a.bar_time < to_timestamp(pp.end_ms / 1000.0)),
 'lines', (select count(*) from verdicts), 'elapsed_s', round(extract(epoch from clock_timestamp() - statement_timestamp())::numeric, 2),
 'sql_md5', md5(split_part(current_query(), E'\n\n-- source: POST /mcp', 1)), 'sql_chars', length(split_part(current_query(), E'\n\n-- source: POST /mcp', 1)))
 from pp

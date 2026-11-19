@@ -7,7 +7,9 @@
 #   v8 (#386: rule macdx_12_26_9_w600_1h_z95of120_v8, signal-alerts v33, the 1-hour chart again, GMO days from key 20261030, the switch day back, see ../README.md v8.1): pairs-v8.sql, gold-v8.sql and their .min.sql
 #   v9 (#397: the MACD ride, rule ids macdx_12_26_9_w600_1h_ride90to96of120_{in,at,out}_v9, signal-alerts v39, GMO days from key 20261112, the switch day, see ../README.md v9.1): pairs-v9.sql, gold-v9.sql and their .min.sql
 #   v11 (the MACD fade on the 1-hour chart, rule macdx_12_26_9_w600_1h_fade96of120_in_v11 and the shares' stockmacd_12_26_9_w600_1h_fade96of120_in_v4, signal-alerts v40, see ../README.md v11): pairs-v11.sql, gold-v11.sql, stocks-v11.sql and their .min.sql
-#   v12 (the MACD fade on the 15-minute chart, rule macdx_12_26_9_w600_15min_fade96of120_in_v12 and the shares' stockmacd_12_26_9_w600_15min_fade96of120_in_v5, signal-alerts v41, see ../README.md v12): pairs-v12.sql, gold-v12.sql, stocks-v12.sql and their .min.sql
+#   v12 (the MACD fade per pair's chart, signal-alerts v41, see ../README.md v12): pairs-v12.sql (USD/JPY and AUD/USD on the 15-minute chart, rule macdx_12_26_9_w600_15min_fade96of120_in_v12),
+#       pairs1h-v11.sql (EUR/JPY, AUD/JPY and EUR/USD on v11's 1-hour form, rule macdx_12_26_9_w600_1h_fade96of120_in_v11), stocks-v12.sql (the shares' stockmacd_12_26_9_w600_15min_fade96of120_in_v5)
+#       and their .min.sql; gold-v12.sql (gold on the 15-minute chart: never sent, kept unchanged as a record; gold stays on gold-v11)
 # The .sql files keep the comments; the .min.sql files are the same statement without comments and indentation (shorter to paste into one tool call).
 # Nothing is edited by hand in the deliverables: change a part, run this, run the tests (see ../README.md).
 #   bash build.sh
@@ -85,17 +87,26 @@ $A $O/gold-v11.sql           header-gold-v11.part    head.part syms-gold-v11.par
 $A $O/gold-v11.min.sql                               head.part syms-gold-v11.part  front-gold-v11.part  engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v11.part guard-gold.part  dayend-gold-v4.part  back2-v11.part --sub SQLNAME=gold.sql --strip
 $A $O/stocks-v11.sql         header-stocks-v11.part  stocks-v11.part --sub SQLNAME=stocks.sql
 $A $O/stocks-v11.min.sql                             stocks-v11.part --sub SQLNAME=stocks.sql --strip
+# pairs1h-v11 (research/macdfade15min-prod-spec.md 7.3, see ../README.md v12.1): EUR/JPY, AUD/JPY and EUR/USD on v11's form, from the GMO day after v41's switch day on:
+#      pairs-v11's parts with a three-row syms (syms-pairs1h-v11.part: those three rows of syms-pairs-v11.part as they are) and its own header; no markers.
+#      pairs-v11.* stay byte for byte (the switch day, a rollback).
+$A $O/pairs1h-v11.sql        header-pairs1h-v11.part head.part syms-pairs1h-v11.part front-pairs-v9.part engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v11.part guard-pairs.part dayend-pairs-v4.part back2-v11.part --sub SQLNAME=pairs1h.sql
+$A $O/pairs1h-v11.min.sql                            head.part syms-pairs1h-v11.part front-pairs-v9.part engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v11.part guard-pairs.part dayend-pairs-v4.part back2-v11.part --sub SQLNAME=pairs1h.sql --strip
 
 # ---- v12 (the MACD fade on the 15-minute chart, signal-alerts v41, rule macdx_12_26_9_w600_15min_fade96of120_in_v12 and the shares' stockmacd_12_26_9_w600_15min_fade96of120_in_v5,
 #      research/macdfade15min-prod-spec.md 7.3, see ../README.md v12): v11's statements on v7's 15-minute parts: v7's head, guards and day's end (head-v7, guard-*-v7,
 #      dayend-pairs-v7; gold's day's end dayend-gold-v4, as v7), the engine unchanged; new: header, syms (the go-live markers GO_LIVE_MS_* and END_1H_MS_*, set at the
 #      release), front-pairs-v12 (v7's 15-minute FRONT with the bid / ask closes and paid), front-gold-v12 (v7's gold FRONT and an empty paid), back1-v12, back2-v12 (v11's on
 #      '15min', the new id, the switch's fields); and the shares' rows (stocks-v12, no recount). The markers are left in the output until they are set in the syms parts
-#      (assemble.py names them as unreplaced: expected until the release). ----
-$A $O/pairs-v12.sql          header-pairs-v12.part   head-v7.part syms-pairs-v12.part front-pairs-v12.part engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v12.part guard-pairs-v7.part dayend-pairs-v7.part back2-v12.part --sub SQLNAME=pairs.sql
-$A $O/pairs-v12.min.sql                              head-v7.part syms-pairs-v12.part front-pairs-v12.part engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v12.part guard-pairs-v7.part dayend-pairs-v7.part back2-v12.part --sub SQLNAME=pairs.sql --strip
-$A $O/gold-v12.sql           header-gold-v12.part    head-v7.part syms-gold-v12.part  front-gold-v12.part  engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v12.part guard-gold-v7.part  dayend-gold-v4.part  back2-v12.part --sub SQLNAME=gold.sql
-$A $O/gold-v12.min.sql                               head-v7.part syms-gold-v12.part  front-gold-v12.part  engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v12.part guard-gold-v7.part  dayend-gold-v4.part  back2-v12.part --sub SQLNAME=gold.sql --strip
+#      (assemble.py names them as unreplaced: expected until the release).
+#      Per pair (research/macdfade15min-prod-spec.md 7.3): syms-pairs-v12.part holds USD/JPY and AUD/USD only. The RUN row of back2-v12.part (the same text in pairs-v12 and
+#      gold-v12) has the slot RUN_OTHER_PAIRS: for pairs-v12 the count macdx_15min_rows_other_pairs (the day's 15-minute macdx rows of a pair not in syms: a finding above 0,
+#      ../README.md v12.3); for gold-v12 an empty string, so that gold-v12.sql / .min.sql stay byte for byte (gold-v12 is never sent: a record). ----
+OTHER15="RUN_OTHER_PAIRS= 'macdx_15min_rows_other_pairs', (select count(*) from public.signal_alerts a where a.kind = 'signal' and a.interval = '15min' and a.rule like 'macdx%' and a.pair not in (select pair from syms) and a.bar_time >= to_timestamp(pp.start_ms / 1000.0) and a.bar_time < to_timestamp(pp.end_ms / 1000.0)),"
+$A $O/pairs-v12.sql          header-pairs-v12.part   head-v7.part syms-pairs-v12.part front-pairs-v12.part engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v12.part guard-pairs-v7.part dayend-pairs-v7.part back2-v12.part --sub SQLNAME=pairs.sql --sub "$OTHER15"
+$A $O/pairs-v12.min.sql                              head-v7.part syms-pairs-v12.part front-pairs-v12.part engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v12.part guard-pairs-v7.part dayend-pairs-v7.part back2-v12.part --sub SQLNAME=pairs.sql --sub "$OTHER15" --strip
+$A $O/gold-v12.sql           header-gold-v12.part    head-v7.part syms-gold-v12.part  front-gold-v12.part  engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v12.part guard-gold-v7.part  dayend-gold-v4.part  back2-v12.part --sub SQLNAME=gold.sql --sub RUN_OTHER_PAIRS=
+$A $O/gold-v12.min.sql                               head-v7.part syms-gold-v12.part  front-gold-v12.part  engine-head-v4.part engine-closes.part engine-rec-v4.part back1-v12.part guard-gold-v7.part  dayend-gold-v4.part  back2-v12.part --sub SQLNAME=gold.sql --sub RUN_OTHER_PAIRS= --strip
 $A $O/stocks-v12.sql         header-stocks-v12.part  stocks-v12.part --sub SQLNAME=stocks.sql
 $A $O/stocks-v12.min.sql                             stocks-v12.part --sub SQLNAME=stocks.sql --strip
 

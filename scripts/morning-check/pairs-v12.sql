@@ -1,4 +1,5 @@
--- pairs-v12.sql  -  the morning check of the MACD fade e-mails on the 15-minute chart for the FIVE PAIRS (USD/JPY, EUR/JPY, AUD/JPY, EUR/USD, AUD/USD), rule v12.
+-- pairs-v12.sql  -  the morning check of the MACD fade e-mails on the 15-minute chart for the TWO PAIRS that move to it (USD/JPY, AUD/USD), rule v12.
+-- (research/macdfade15min-prod-spec.md 7.3, the per-pair form: EUR/JPY, AUD/JPY and EUR/USD stay on v40's 1-hour form, checked by pairs1h-v11.sql; gold by gold-v11.sql.)
 -- ONE read-only statement (WITH ... SELECT) for mcp__Supabase__execute_sql. Replace the two markers START_MS and END_MS (each written once, in double curly braces, in the first CTE) by the epoch
 -- milliseconds of the range: bars are judged by their OPEN time, START_MS <= open < END_MS; the Routine's day is (X-2d) 21:00 UTC .. (X-1d) 21:00 UTC,
 -- END_MS = START_MS + 86400000. Nothing else is to be edited.
@@ -12,6 +13,9 @@
 -- bid close, one side a bar (other_side), no stop or target (stop_or_target).
 -- It is v11's statement (pairs-v11.sql) on v7's 15-minute parts (pairs-v7.sql: head-v7, front-pairs-v7 with the bars' bid and ask closes, guard-pairs-v7, dayend-pairs-v7),
 -- with the 15-minute constants of v7 in BACK 1 and BACK 2, the new id, and the switch's fields (README.md v12.2).
+-- The RUN row also counts macdx_15min_rows_other_pairs: the day's signal_alerts rows (kind signal, interval 15min, rule like macdx%) of a pair NOT in syms (EUR/JPY, AUD/JPY,
+-- EUR/USD, gold: v41 judging a chart that is not the pair's). No other statement reads them, so any count above 0 is a finding (README.md v12.3). It is written through the
+-- slot RUN_OTHER_PAIRS of back2-v12.part, which build.sh fills for this file only (gold-v12.sql gets an empty string there and stays byte for byte as it was).
 -- It reads no user_id / event_id / e-mail address and writes nothing.
 -- Result: columns row_type (RUN | SUMMARY | LINE), instrument, bar_open_utc, side, verdict, data (json). See README.md (sections v12, v11, v7 and v8) for every field.
 -- Written to be run in well under a minute (one day: a few seconds).
@@ -31,24 +35,26 @@ pp as (
          (end_ms - start_ms = 86400000 and start_ms % 86400000 = 75600000) as range_ok
   from p
 ),
--- ===== FRONT (five pairs): public.gmo_kline_files -> us(symbol, ot, seq, m8, d, bc, ac), the 15-minute series production judges on, and paid, the price in =====
+-- ===== FRONT (two pairs: USD/JPY, AUD/USD): public.gmo_kline_files -> us(symbol, ot, seq, m8, d, bc, ac), the 15-minute series production judges on, and paid, the price in =====
 -- instrument table: GMO symbol, the app's pair name, display order, the instant from which the v12 rule (signal-alerts v41, the MACD fade on the 15-minute chart) was live,
 -- the decimals of the chart's rounding (decimalsOf: 3 for a ...JPY pair, 5 for the others), and the end of v40's 1-hour form for the chart.
+-- Two rows only (research/macdfade15min-prod-spec.md 7.3, the per-pair form): USD/JPY and AUD/USD move to the 15-minute chart; EUR/JPY, AUD/JPY and EUR/USD stay on v40's
+-- 1-hour form under v11's id and are checked by pairs1h-v11.sql, gold by gold-v11.sql (README.md v12.1). Every CTE of this statement is scoped by syms, so their rows are
+-- not read here; a stray 15-minute macdx row of theirs (or of gold) is counted in the RUN row's macdx_15min_rows_other_pairs (back2-v12.part, the RUN_OTHER_PAIRS slot).
 -- live_ms = GO_LIVE_MS_PAIRS, A PLACEHOLDER TO BE SET AT THE RELEASE (README.md v12.1): the open (epoch ms) of the first 15-minute bar v41 judged, read from the run's record
 -- in net._http_response (research/macdfade15min-prod-spec.md 6.2, 6.3 step 5).
 -- end_1h_ms = END_1H_MS_PAIRS, A PLACEHOLDER TO BE SET AT THE RELEASE (README.md v12.1): the end (epoch ms: open + 1 h) of the last 1-hour bar v40 judged, read from the
 -- same record (spec 6.2). It is not a limit of the recount: it tells the 1-hour macdx rows of the day that came after v40's last judged bar (a finding,
 -- macdx_1h_rows_after_end_1h) from v40's own last rows (expected on the switch day), and, with live_ms, the 15-minute bars of the switch day judged by neither form (live_ms
 -- after end_1h_ms) or by both (live_ms before end_1h_ms).
--- Until both markers are replaced by those numbers (here, then bash build.sh), the statement does not run: a marker is not SQL. If the pairs' numbers differ, write each
--- pair's own numbers in its row.
+-- Until both markers are replaced by those numbers (here, then bash build.sh), the statement does not run: a marker is not SQL. If the two pairs' numbers differ, write each
+-- pair's own numbers in its row. With a first answer of v41 from H:06 to H:18 UTC (spec 6.2), both are H:00 for both pairs (spec 7.3).
 -- The rest of the FRONT is v7's 15-minute one (front-pairs-v7.part: interval '15min', the closure test on open + 15 min) with v9's two closes: each bar's BID close (bc) and ASK
 -- close (ac) as given, and the CTE paid (paid_buy = the ASK close, paid_sell = the BID close, per bar of the range: ridePaidAt on the 15-minute read's own quote, as the fade
 -- prices a pair's entry from fadeQuotes, research/macdfade15min-prod-spec.md 2.3).
 syms as (
   select * from (values
-    ('USD_JPY', 'USD/JPY', 1, {{GO_LIVE_MS_PAIRS}}::bigint, 3, {{END_1H_MS_PAIRS}}::bigint), ('EUR_JPY', 'EUR/JPY', 2, {{GO_LIVE_MS_PAIRS}}::bigint, 3, {{END_1H_MS_PAIRS}}::bigint),
-    ('AUD_JPY', 'AUD/JPY', 3, {{GO_LIVE_MS_PAIRS}}::bigint, 3, {{END_1H_MS_PAIRS}}::bigint), ('EUR_USD', 'EUR/USD', 4, {{GO_LIVE_MS_PAIRS}}::bigint, 5, {{END_1H_MS_PAIRS}}::bigint),
+    ('USD_JPY', 'USD/JPY', 1, {{GO_LIVE_MS_PAIRS}}::bigint, 3, {{END_1H_MS_PAIRS}}::bigint),
     ('AUD_USD', 'AUD/USD', 5, {{GO_LIVE_MS_PAIRS}}::bigint, 5, {{END_1H_MS_PAIRS}}::bigint)
   ) v(symbol, pair, ord, live_ms, d, end_1h_ms)
 ),
@@ -563,7 +569,7 @@ u as (
            'range_utc', to_char(to_timestamp(pp.start_ms / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI') || ' .. ' || to_char(to_timestamp(pp.end_ms / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI'),
            'range_is_one_gmo_day', pp.range_ok, 'db_now_utc', to_char(now() at time zone 'UTC', 'YYYY-MM-DD HH24:MI:SS'),
            'go_live_utc', (select to_char(to_timestamp(min(live_ms) / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI') from syms),
-           'end_1h_utc', (select to_char(to_timestamp(max(end_1h_ms) / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI') from syms),
+           'end_1h_utc', (select to_char(to_timestamp(max(end_1h_ms) / 1000.0) at time zone 'UTC', 'YYYY-MM-DD HH24:MI') from syms), 'macdx_15min_rows_other_pairs', (select count(*) from public.signal_alerts a where a.kind = 'signal' and a.interval = '15min' and a.rule like 'macdx%' and a.pair not in (select pair from syms) and a.bar_time >= to_timestamp(pp.start_ms / 1000.0) and a.bar_time < to_timestamp(pp.end_ms / 1000.0)),
            'lines', (select count(*) from verdicts), 'elapsed_s', round(extract(epoch from clock_timestamp() - statement_timestamp())::numeric, 2),
            -- the md5 and length of the statement text AS THE DATABASE RECEIVED IT (the tool appends a comment after a blank line: cut off). The caller compares it with the md5 of the text it meant to send,
            -- so that a slip made while copying the 20 kB text into the tool call shows (a mismatch means: send again from the file; the numbers of this answer are then not to be trusted)

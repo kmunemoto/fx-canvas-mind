@@ -2,6 +2,10 @@
 """Local test bench of morning-check v12 (README.md v12.4): rows changed on purpose (scen11.py on 15-minute bars, with the switch day). Each scenario changes rows inside a
 transaction, runs one statement (pairs-v12, gold-v12 or stocks-v12) for one GMO day, checks its answer, and rolls back. The data folders must already be loaded
 (check12.py --load: the pairs into --dbp, gold into --dbg).
+The pairs are USD/JPY and AUD/USD only (research/macdfade15min-prod-spec.md 7.3, the per-pair form: sim12.ts follows those two; pairs-v12's syms holds those two). The
+weekend scenarios p33, p34 (an entry of AUD/USD in the weekend window) and p37 (an entry on a Friday bar opened 20:00 to 20:30) FAIL, not skip, when the data folder's walk
+has no such entry: pick a first seed that has both (run12.sh's default, seed 5, does; seed 1 has neither in the two-pair walk). p21 also needs, on the switch day (key
+20261125), an entry before live_ms and one from it (seed 5 has both; seed 3 has the weekend kinds but no entry from live_ms that day).
 
 usage: python3 -I scen12.py PAIRS_DATADIR GOLD_DATADIR [--dbp NAME] [--dbg NAME] [--pairs FILE] [--gold FILE] [--stocks FILE] [--only NAME] [--show] [--jobs N]
 Prints one line per scenario (PASS / FAIL and why) and the count; with --show also the LINE / SUMMARY rows each scenario is about. Exit 1 on any FAIL.
@@ -211,6 +215,21 @@ def run_has(**keys):
     return check
 
 
+def only_insts(want):
+    """the SUMMARY and LINE rows of the answer are of these instruments only (pairs-v12: USD/JPY and AUD/USD)"""
+    def check(out):
+        got = {r["inst"] for r in out if r["rt"] != "RUN"}
+        return None if got == want else f"instruments {sorted(got)} (want {sorted(want)})"
+    return check
+
+
+def no_case(name, why):
+    """a scenario the data folder cannot give: told as a FAIL, not skipped (research/macdfade15min-prod-spec.md 7.3, the weekend scenarios must still run)"""
+    if opt("--only") and opt("--only") != name.split(" ")[0]:
+        return
+    tasks.append(lambda: (name, False, why + ": run the bench with a first seed that has it (README.md v12.4; run12.sh's default seed 5)", []))
+
+
 def copy_row(x, **cols):
     """a second row of x's mail with some columns changed (who u9 unless given)"""
     names = ["kind", "pair", "interval", "bar_time", "closed_at", "side", "entry", "stop", "target", "rule", "status", "sent_at", "who"]
@@ -224,10 +243,11 @@ def row1h(pair, bar, rule=RULE_V11, side="SELL", entry=1):
             f"'{iso(bar)}', '{iso(bar + HOUR)}', '{side}', {entry}, '{rule}', 'sent', '{iso(bar + HOUR + 2000)}');")
 
 
-# ---- the pairs (P: one follower; U: USD/JPY, two followers) ----
+# ---- the pairs (P: AUD/USD, one follower; U: USD/JPY, two followers) ----
 scen("p00 control: a fade entry the mail matches (the ask / bid close, no stop or target)", "pairs", P, "",
      both(expect_line(P, "ok", entry_diff_ticks=0, paid=P["price"], close=P["close"]), summary_ok(P["pair"]),
-          summary_has(P["pair"], switch_gap_bars=0, switch_overlap_bars=0, macdx_1h_rows_after_end_1h=0, go_live_utc=fmt(LIVE_P), end_1h_utc=fmt(END_P))))
+          summary_has(P["pair"], switch_gap_bars=0, switch_overlap_bars=0, macdx_1h_rows_after_end_1h=0, go_live_utc=fmt(LIVE_P), end_1h_utc=fmt(END_P)),
+          run_has(macdx_15min_rows_other_pairs=0), only_insts({"USD/JPY", "AUD/USD"})))
 scen("p01 missing: the row deleted", "pairs", P, f"delete from public.signal_alerts where {where(P)};", both(expect_line(P, "missing"), attention_has(P["pair"], "missing=1")))
 scen("p02 wrong side: the row says the other side", "pairs", P, f"update public.signal_alerts set side = '{other(P['side'])}' where {where(P)};",
      both(expect_line(P, "missing"), expect_line(P, "extra", side=other(P["side"]), why=lambda w: w and "OPPOSITE" in w), attention_has(P["pair"], "missing=1", "extra=1")))
@@ -264,7 +284,8 @@ scen("p16 extra: a row at a bar with no entry", "pairs", NB,
      f"insert into public.signal_alerts (kind, pair, interval, bar_time, closed_at, side, entry, rule, status, sent_at) values ('signal', '{P['pair']}', '15min', '{iso(nb)}', '{iso(nb + M15)}', 'SELL', 1, '{RULE}', 'sent', '{iso(nb + M15 + 2000)}');",
      both(expect_line(NB, "extra", side="SELL", why=lambda w: w and "recount" in w), attention_has(P["pair"], "extra=1")))
 # ---- the switch day (GMO key 20261125: v40 judged the 1-hour bars up to the one that ended at 10:00 UTC, v41 the 15-minute bars from 10:00) ----
-SP = "EUR/JPY"
+# SP: a pair that switches (spec 7.3: EUR/JPY no longer does; AUD/USD, one follower)
+SP = "AUD/USD"
 scen("p17 switch day: v40's 1-hour fade row of the bar 09:00-10:00 (ended at end_1h_ms): counted, expected, not late", "pairs", None, row1h(SP, END_P - HOUR),
      both(attention_has(SP, "other_macdx_1h_rule_rows=1", lacks=("macdx_1h_rows_after_end_1h",)), summary_has(SP, macdx_1h_rows_after_end_1h=0)), s=SW_S, e=SW_E)
 scen("p18 switch day: a 1-hour fade row of the bar 10:00-11:00 (after end_1h_ms): counted and late", "pairs", None, row1h(SP, END_P),
@@ -283,7 +304,8 @@ def switch_lines(out):
     okl = [r for r in ls if r["verdict"] == "ok"]
     bad = [(r["inst"], r["bar"], r["verdict"], r["data"].get("why")) for r in ls
            if (r["bar"] < fmt(LIVE_P)) != (r["verdict"] == "not_mailable") or (r["verdict"] == "not_mailable" and r["data"].get("why") != "before_go_live")]
-    return None if nm and okl and not bad and len(nm) + len(okl) == len(ls) else f"lines {[(r['inst'], r['bar'], r['verdict']) for r in ls]}; bad {bad}"
+    why = "" if nm and okl else " (the data's switch day lacks an entry " + ("before live_ms and one " if not nm and not okl else "before live_ms" if not nm else "from live_ms") + ": pick a first seed that has both)"
+    return None if nm and okl and not bad and len(nm) + len(okl) == len(ls) else f"lines {[(r['inst'], r['bar'], r['verdict']) for r in ls]}; bad {bad}{why}"
 
 
 scen("p21 switch day: the entries before live_ms are before_go_live, those from it ok (the sim's lines), no gap, no overlap", "pairs", None, "",
@@ -320,12 +342,27 @@ if PW:
          f"insert into public.signal_alerts (kind, pair, interval, bar_time, closed_at, side, entry, rule, status, sent_at) values ('signal', '{PW['pair']}', '15min', '{iso(PW['bar'])}', '{iso(PW['bar'] + M15)}', '{PW['side']}', {PW['price']!r}, '{RULE}', 'sent', '{iso(PW['bar'] + M15 + 2000)}');",
          expect_line(PW, "ok", why="mailed although weekend_window"))
     scen("p34 the same bar, no mail: not_mailable weekend_window", "pairs", PW, "", expect_line(PW, "not_mailable", why="weekend_window"))
+else:
+    no_case("p33 a bar that closes in the weekend window (Friday 21:00 UTC), mailed anyway: ok, said", "the data has no weekend_window entry of a pair other than USD/JPY after go-live")
+    no_case("p34 the same bar, no mail: not_mailable weekend_window", "the data has no weekend_window entry of a pair other than USD/JPY after go-live")
 # an entry on a Friday bar that closes before 21:00 UTC (opened 20:00 to 20:30): production judges it (the weekend gate starts at Friday 21:00), if the seed has one
 PF = next((x for x in ex_p if dt.datetime.fromtimestamp(x["bar"] / 1000, UTC).weekday() == 4 and 1200 <= dt.datetime.fromtimestamp(x["bar"] / 1000, UTC).hour * 60
            + dt.datetime.fromtimestamp(x["bar"] / 1000, UTC).minute <= 1230), None)
 if PF:
     scen("p37 a Friday bar that closes before 21:00 UTC, go-live before it, no mail: missing (judged by production, not weekend_window)", "pairs", PF,
          f"delete from public.signal_alerts where {where(PF)};", expect_line(PF, "missing"), live_p=PF["bar"] - M15)
+else:
+    no_case("p37 a Friday bar that closes before 21:00 UTC, go-live before it, no mail: missing (judged by production, not weekend_window)",
+            "the data has no entry on a Friday bar opened 20:00 to 20:30 UTC")
+# the RUN row's count of the day's 15-minute macdx rows of a pair NOT in pairs-v12's syms (research/macdfade15min-prod-spec.md 7.3, "A blind spot closed"): 0 on a clean day
+# (p00), and here a stray row of EUR/JPY under the v12 id and one of gold under v7's 15-minute id (both counted: 2) beside a 1-hour row of EUR/USD (v40's id: not counted)
+# and a 15-minute row of AUD/USD of another id (a pair in syms: counted in its own SUMMARY, not here)
+scen("p38 stray 15-minute macdx rows of EUR/JPY and gold in the day: RUN macdx_15min_rows_other_pairs 2 (a 1-hour row of EUR/USD and AUD/USD's own rows not counted)", "pairs", P,
+     f"insert into public.signal_alerts (kind, pair, interval, bar_time, closed_at, side, entry, rule, status, sent_at) values ('signal', 'EUR/JPY', '15min', '{iso(P['bar'])}', '{iso(P['bar'] + M15)}', 'SELL', 1, '{RULE}', 'sent', '{iso(P['bar'] + M15 + 2000)}');"
+     f"insert into public.signal_alerts (kind, pair, interval, bar_time, closed_at, side, entry, rule, status, sent_at) values ('signal', 'XAU/USD', '15min', '{iso(P['bar'])}', '{iso(P['bar'] + M15)}', 'BUY', 1, 'macdx_12_26_9_w600_15min_z95of120_v7', 'sent', '{iso(P['bar'] + M15 + 2000)}');"
+     + row1h("EUR/USD", P["bar"] - P["bar"] % HOUR)
+     + f"insert into public.signal_alerts (kind, pair, interval, bar_time, closed_at, side, entry, rule, status, sent_at) values ('signal', 'AUD/USD', '15min', '{iso(P['bar'])}', '{iso(P['bar'] + M15)}', '{P['side']}', 1, 'macdx_12_26_9_w600_15min_z95of120_v7', 'sent', '{iso(P['bar'] + M15 + 2000)}');",
+     both(run_has(macdx_15min_rows_other_pairs=2), expect_line(P, "ok"), attention_has(P["pair"], "other_macdx_1h_rule_rows=1"), only_insts({"USD/JPY", "AUD/USD"})))
 scen("p35 the go-live marker left in: the statement does not run", "pairs", P, "", None, keep=("GO_LIVE_MS_PAIRS",), expect_error="syntax error")
 scen("p36 the end_1h marker left in: the statement does not run", "pairs", P, "", None, keep=("END_1H_MS_PAIRS",), expect_error="syntax error")
 # ---- gold ----
