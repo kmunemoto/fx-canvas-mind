@@ -1882,7 +1882,9 @@ fake tables, **each pair on its own chart**:
   chart not offered and accepts the 15分 column of USD/JPY and AUD/USD and the 1時間 column of the other four.
 - **The ids:** `macdhRuleId("15min")` and `macdhRuleId("1h")` equal the two strings of 3.7; `signalRuleId` gives the
   chart's id for `macdx` and throws for an interval with no version; a code-text pin that no `MACDH_INTERVALS[0]` and no
-  `MACDH_RULE_ID` is left in indicators.ts and index.ts, and that `fadeAtClose` holds no interval literal.
+  `MACDH_RULE_ID` is left in the code of indicators.ts and index.ts (comment lines aside: index.ts's history comments of
+  v25 to v40 name `MACDH_RULE_ID` as the record of those versions and stay; the build's reading, 2026-11-19), and that
+  `fadeAtClose` holds no interval literal.
 - A follower whose lookup failed, mailed at the next judging (a 15-minute pair at minute 1 or 3, a 1-hour pair at 3 or
   5); a row of the other side: nothing, `other_side`.
 - **The test mail** (3.6): a follower with a USD/JPY `macdx` row on `'1h'` and its twin on `'15min'`, and a share's two
@@ -2067,7 +2069,9 @@ release check.
   has neither kind (the review's port, and its run of the real sim12.ts on seeds 1 and 3; not run by this writer). So
   scen12.py fails, not skips, when `PW` or `PF` is missing; teeth12.py exits 1 when a change is not caught; the first
   seed is one whose two-pair walk has both kinds, confirmed with the real sim12.ts (by the review's port seeds 3, 5 and 7
-  do), or fixture rows give the two cases; and the README's two-pair counts are written only once p33, p34 and p37 run
+  do; the build found that scenario p21 also needs, on the switch day, an entry before LIVE and one from it, which seed 3
+  lacks — a run with seed 3 first gave 68 of 69 — so run12.sh's first seed is 5; seeds 5 and 7 meet all three cases), or
+  fixture rows give the two cases; and the README's two-pair counts are written only once p33, p34 and p37 run
   and all 27 changes are caught. The gold half of check12 and teeth12 may stay in run12.sh (its text is unchanged) but
   is not a release check.
 - **Review finding (4):** README v12.4 (:98) says "The five pairs (37)" and "The shares (`stocks-v12`, 17": scen12.py
@@ -2162,7 +2166,8 @@ release check.
     readings ("The switch day's reading" above): bars before LIVE `before_go_live`; `switch_gap_bars` and
     `switch_overlap_bars` told; `history_files_missing` expected; `pairs-v11` answering `NO_DATA` for a pair whose
     1-hour day file of the day is not stored, said as that prompt says it; `stocks-v11`'s RUN
-    `stockmacd_subscriptions_not_1h` expected.
+    `stockmacd_subscriptions_not_1h` expected; `pairs-v12`'s `other_macdx_1h_rule_rows` (v40's rows of the day) expected
+    while `macdx_1h_rows_after_end_1h` is absent, as on the switch day (added at the build, 2026-11-19).
   - The switch-day prompt's step 5 sentence for any day a v12 statement was not sent.
   - The `'15min'` delete of 6.4 waits for the run of the window's last GMO day (6.4).
 - **The 15-minute files:** as the first version said, for USD/JPY and AUD/USD only: the sweep stores each ended 15-minute
