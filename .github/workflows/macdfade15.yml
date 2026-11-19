@@ -22,8 +22,9 @@
 # after each walk's study in syn and after the Python in real, research/macdfade-prod-check.ts runs the code the email
 # ships (_shared/macd-fade.ts fadeCloseEntryAt, signal-alerts/indicators.ts ridePaidAt) on the same files and holds its
 # entries against the study's rows.csv and summary.json; the real job also stops unless summary.json is the run of
-# record (1h: run 44099401423's; 15min: main's run 44535888012's, with the tf line taken out and whole against the
-# ledger copy; its own cache is restored last on 15min, below). Those steps run for the email's rule only (TF 1h or 15min, share 0.96, take profit 10); a dispatch with
+# record (1h: run 44555599946's, read on whole GMO files, whole against its ledger copy
+# research/ledger/macdfade1h-whole-summary.json; 15min: main's run 44535888012's, with the tf line taken out and whole
+# against the ledger copy; that run's cache is restored last on both, below). Those steps run for the email's rule only (TF 1h or 15min, share 0.96, take profit 10); a dispatch with
 # other values measures something else and skips them.
 #
 # GitHub's runners reach GMO's public price API, which the development container cannot. Read-only: public files
@@ -264,10 +265,12 @@ jobs:
       # research/macdfade1h-prod-spec.md 7.2 (1h) and research/macdfade15min-prod-spec.md 7.2 and 4.5 (15min): the
       # shipped function on GMO's same files gives the study's entries (the files the study read or fetched into
       # research/.cache, read only here), and this run's summary.json is the run of record whose numbers fill
-      # FADE_MEASURED: on 1h run 44099401423's; on 15min main's run 44535888012's (research/macdfade15-spec.md "Result of
-      # the re-run on GMO's files read afresh": run 44077464383's files had three GMO 1-minute day files cut short),
-      # checked once without the bytes ',\n  "tf": "15min"' (53f7003 added tf to meta) and once whole against its copy
-      # research/ledger/macdfade15-summary.json; either failing stops the job
+      # FADE_MEASURED: on 1h run 44555599946's (research/macdfade15-spec.md "Result of the 1-hour re-run on whole GMO
+      # files": run 44099401423, whose numbers v40 ships, read the same three cut-short files), whole against its copy
+      # research/ledger/macdfade1h-whole-summary.json; on 15min main's run 44535888012's (research/macdfade15-spec.md
+      # "Result of the re-run on GMO's files read afresh": run 44077464383's files had three GMO 1-minute day files cut
+      # short), checked once without the bytes ',\n  "tf": "15min"' (53f7003 added tf to meta) and once whole against
+      # its copy research/ledger/macdfade15-summary.json; either failing stops the job
       - name: The shipped function against the study (research/macdfade-prod-check.ts)
         if: (env.TF == '1h' || env.TF == '15min') && env.SHARE == '0.96' && env.TP == '10'
         env:
@@ -373,14 +376,22 @@ jobs:
         if: (env.TF == '1h' || env.TF == '15min') && env.SHARE == '0.96' && env.TP == '10'
         run: |
           if [ "$TF" = "1h" ]; then
+            # run 44555599946 (2026-11-19, on whole GMO files); v40's FADE_MEASURED is still run 44099401423's
+            # (60edab22…, three files cut short: the same fade and flow, another baseline) until the per-pair release
             got=$(sha256sum < $OUT/summary.json | cut -d' ' -f1)
-            want=60edab22302e5fe755c70b38f87b8b28fa27389ccc1bb10c1a0c0c88c448a9e2
-            echo "summary.json sha256 $got (run 44099401423's: $want)"
+            want=d59b64c6212e594f0b3b4a89bb1683a6a5f98652208cafb59f6420bb352c833b
+            echo "summary.json sha256 $got (run 44555599946's: $want)"
             if [ "$got" != "$want" ]; then
-              echo "summary.json is not run 44099401423's: the numbers in FADE_MEASURED are not this run's (research/macdfade1h-prod-spec.md 7.2): stop"
+              echo "summary.json is not run 44555599946's: GMO's files are not that run's (its cache gone, or GMO changed a file), these are new numbers (research/macdfade15-spec.md \"Result of the 1-hour re-run on whole GMO files\"): stop"
               exit 1
             fi
-            echo "summary.json is run 44099401423's"
+            ledger=$(sha256sum < research/ledger/macdfade1h-whole-summary.json | cut -d' ' -f1)
+            echo "research/ledger/macdfade1h-whole-summary.json sha256 $ledger"
+            if [ "$got" != "$ledger" ]; then
+              echo "summary.json is not the ledger copy byte for byte: stop"
+              exit 1
+            fi
+            echo "summary.json is run 44555599946's"
           else
             got=$(sha256sum < $OUT/summary.json | cut -d' ' -f1)
             stripped=$(python3 -I -c 'import sys; b = open(sys.argv[1], "rb").read(); t = b",\n  \"tf\": \"15min\""; assert b.count(t) == 1, "the tf line is not there once"; sys.stdout.write(__import__("hashlib").sha256(b.replace(t, b"")).hexdigest())' $OUT/summary.json)
