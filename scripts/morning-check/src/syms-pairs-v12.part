@@ -1,0 +1,21 @@
+-- ===== FRONT (five pairs): public.gmo_kline_files -> us(symbol, ot, seq, m8, d, bc, ac), the 15-minute series production judges on, and paid, the price in =====
+-- instrument table: GMO symbol, the app's pair name, display order, the instant from which the v12 rule (signal-alerts v41, the MACD fade on the 15-minute chart) was live,
+-- the decimals of the chart's rounding (decimalsOf: 3 for a ...JPY pair, 5 for the others), and the end of v40's 1-hour form for the chart.
+-- live_ms = GO_LIVE_MS_PAIRS, A PLACEHOLDER TO BE SET AT THE RELEASE (README.md v12.1): the open (epoch ms) of the first 15-minute bar v41 judged, read from the run's record
+-- in net._http_response (research/macdfade15min-prod-spec.md 6.2, 6.3 step 5).
+-- end_1h_ms = END_1H_MS_PAIRS, A PLACEHOLDER TO BE SET AT THE RELEASE (README.md v12.1): the end (epoch ms: open + 1 h) of the last 1-hour bar v40 judged, read from the
+-- same record (spec 6.2). It is not a limit of the recount: it tells the 1-hour macdx rows of the day that came after v40's last judged bar (a finding,
+-- macdx_1h_rows_after_end_1h) from v40's own last rows (expected on the switch day), and, with live_ms, the 15-minute bars of the switch day judged by neither form (live_ms
+-- after end_1h_ms) or by both (live_ms before end_1h_ms).
+-- Until both markers are replaced by those numbers (here, then bash build.sh), the statement does not run: a marker is not SQL. If the pairs' numbers differ, write each
+-- pair's own numbers in its row.
+-- The rest of the FRONT is v7's 15-minute one (front-pairs-v7.part: interval '15min', the closure test on open + 15 min) with v9's two closes: each bar's BID close (bc) and ASK
+-- close (ac) as given, and the CTE paid (paid_buy = the ASK close, paid_sell = the BID close, per bar of the range: ridePaidAt on the 15-minute read's own quote, as the fade
+-- prices a pair's entry from fadeQuotes, research/macdfade15min-prod-spec.md 2.3).
+syms as (
+  select * from (values
+    ('USD_JPY', 'USD/JPY', 1, {{GO_LIVE_MS_PAIRS}}::bigint, 3, {{END_1H_MS_PAIRS}}::bigint), ('EUR_JPY', 'EUR/JPY', 2, {{GO_LIVE_MS_PAIRS}}::bigint, 3, {{END_1H_MS_PAIRS}}::bigint),
+    ('AUD_JPY', 'AUD/JPY', 3, {{GO_LIVE_MS_PAIRS}}::bigint, 3, {{END_1H_MS_PAIRS}}::bigint), ('EUR_USD', 'EUR/USD', 4, {{GO_LIVE_MS_PAIRS}}::bigint, 5, {{END_1H_MS_PAIRS}}::bigint),
+    ('AUD_USD', 'AUD/USD', 5, {{GO_LIVE_MS_PAIRS}}::bigint, 5, {{END_1H_MS_PAIRS}}::bigint)
+  ) v(symbol, pair, ord, live_ms, d, end_1h_ms)
+),
