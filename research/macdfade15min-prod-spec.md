@@ -207,11 +207,35 @@ Which chart is read (no change needed):
 
 ### 3.3 Shares: `stockFade` on 15-minute bars (stocks.ts; index.ts:1521-1630)
 
-**Before building, fit these to a real Yahoo `15m` answer** (research/macdfade15-prod-spec.md 3.3 said the same; not
-done since). The probe .github/workflows/yahoo-probe15.yml (28ae95d, read only: AAPL, 7203.T and 6758.T, the last three
-sessions' rows, the closing points, Tokyo's lunch and afternoon stamps, the trading periods, the answer's size) exists.
-Whether it ran, and what it printed, was not read by this writer (no output is in the repository). Its answer is saved
-in the repository (6.3 step 1b) and decides the items marked "(probe)" below.
+**Before building, fit these to a real Yahoo `15m` answer** (research/macdfade15-prod-spec.md 3.3 said the same).
+The probe .github/workflows/yahoo-probe15.yml (read only: AAPL, 7203.T and 6758.T) decides the items marked "(probe)"
+below. **No Yahoo price and no Yahoo answer goes into this repository** (corrected 2026-11-19): the repository is
+public, so are its Actions logs, and Yahoo's terms say 「You must not redistribute information displayed on or provided
+by Yahoo Finance」 (help.yahoo.com/kb/SLN2310.html). Since d794649 the probe prints only the rows' times and shapes (a
+price or null; one price; volume 0 or not), how prices compare (equal or not; inside a bar's low..high or not), the
+answers' times (regularMarketTime, currentTradingPeriod, tradingPeriods), and a 5-day skeleton (stamps and shapes). The
+tests' fixtures are built from those shapes with made-up prices. (Its first runs, 44081784066, 44535921376 and
+44536526466, printed prices and whole answers into the public log; the owner was told.)
+
+Seen (runs 44535921376, 44536526466, 44538415663; 2026-11-19 between 13:41 and 13:56 UTC, after Tokyo's close of 11/19
+and before New York's open):
+- New York (AAPL): 26 rows a session, 9:30 to 15:45 local. The latest finished session (11/18) has one more row, 16:00,
+  of one price and volume 0, equal to regularMarketPrice (regularMarketTime 16:00:01); the session before it (11/17)
+  has none. Yahoo already names the next session (currentTradingPeriod.regular 11/19 9:30 to 16:00), so today's
+  `parseYahooChart` keeps that 16:00 row as a bar of its own (it is not inside the 15:45 bar and not at or after the
+  named session's end).
+- Tokyo (7203.T, 6758.T): rows 9:00 to 11:15 (10 bars), then an 11:30 row of one price **with** volume (the morning's
+  closing auction; in the older sessions too), null rows 11:45, 12:00 and 12:15, then 12:30 to 15:15 (12 bars). The
+  latest finished session (11/19) has one more row, 15:30, of one price and volume 0, equal to regularMarketPrice
+  (regularMarketTime 15:30:00); the session before it (11/18) has none. Yahoo still names 11/19's session (00:00 to
+  06:30 UTC), so today's `parseYahooChart` joins the 15:30 row to the 15:15 bar (at or after the session's end), and
+  keeps the 11:30 row as a one-price bar of its own.
+- The answer's `previousClose` (the day before the latest's close, as Yahoo gives it) is not the close of that day's
+  last 15-minute bar: Tokyo, outside that bar's low..high (both shares); New York, inside it but not equal. So the
+  older sessions' last bars do not carry the closing auction's price.
+- Not yet seen (timed reads dispatched for New York's close of 11/19, and Tokyo's lunch and close of 11/20): when the
+  closing row and the 11:30 row appear after the bar before them, and regularMarketTime then; whether the latest
+  session's closing row stays in the answer while the next session trades.
 
 Changes in stocks.ts:
 1. `STOCKMACD_INTERVALS = ["15min"]` (:49). It drives `isStockmacdChart` (:50-52), the run's subscription filter
@@ -222,22 +246,21 @@ Changes in stocks.ts:
    `fadeSignal("stockmacd", sym, "1h", …)` (:1557) and `yahooChartUrl(sym, "1h")` (:1571).
 3. `CLOSES` (:107-110), the regular session's 15-minute closes in the market's time: New York every 15 minutes from
    9:45 to 16:00 (26 closes; bars 9:30 to 15:45); Tokyo 9:15 to 11:30 (10) and 12:45 to 15:30 (12), 22 closes (bars
-   9:00 to 11:15 and 12:30 to 15:15). The Tokyo afternoon stamps (12:30 on) are assumed, not seen: on hourly bars Yahoo
-   stamps that first afternoon bar 12:00 (probe).
+   9:00 to 11:15 and 12:30 to 15:15). The Tokyo afternoon stamps 12:30 to 15:15: seen (above).
 4. `stockBarEnd` (:132-137): the open plus 15 minutes, or the session's end when earlier (a day that ends early). The
    `half` test goes (no 15-minute bar is a half bar).
 5. `stockBarBreak` (:233-237): Tokyo's 15:15 bar "close", its 11:15 bar "lunch"; New York's 15:45 bar "close".
 6. **The closing points (probe).** `parseYahooChart` joins a last point of volume 0 to the bar before it only while it
    falls inside that bar (`ms - lastMs < barMs`, live-chart/stocks.ts:158) or at or after the session end Yahoo names
    (:159). Its own comment says that on 30-minute and shorter bars a closing point exactly one bar after the row before
-   stays a bar of its own (:136-137). On 15-minute bars Tokyo's 11:30 and 15:30 points and New York's 16:00 point sit
-   exactly one bar after the last row. Once Yahoo names the next session (seen on Tokyo after its close, docs §8.141),
+   stays a bar of its own (:136-137). On 15-minute bars Tokyo's 11:30 row and 15:30 point and New York's 16:00 point
+   sit exactly one bar after the row before (seen, above; Tokyo's 11:30 row has volume and is not the answer's last). Once Yahoo names the next session (seen on Tokyo after its close, docs §8.141),
    such a point would stay a one-point bar. Then the 15:15 (or 15:45, or 11:15) bar would be judged on its close before
    the auction, so the mail's 「取引時間の最後の足は、引けの値段で判定します」 would be wrong; and a stray bar would sit in
    the chart and in the 600-bar window. The probe decides whether a change is needed. If it is, the candidate is: join a
    last volume-0 point exactly one bar after the row before when it falls at a market's close or lunch time. The change
    is in live-chart/stocks.ts and is shared with the chart. **The closing-price condition**: after the fitting (the
-   probe's answer, and this change if made), a test with the probe's real answer as its fixture shows that a session's
+   probe's answer, and this change if made), a test with a fixture of the probe's shapes (made-up prices) shows that a session's
    last bar (Tokyo 11:15 and 15:15, New York 15:45) is judged on the closing point. Every text that says a session's
    last bar is judged on its closing price stays only if this holds: the mail's sentence (4.4, item 11) and the
    parenthesis of `stockmacdNotes` [2] (section 5). If it does not hold, both are removed (or rewritten to say what the
@@ -307,7 +330,8 @@ The record's shape does not change; each pair has about four times as many judge
   - src/test/stockmacd-alerts.test.tsx: :72 (the interval), :87 (other ids: the 1-hour v4 id joins it), :95-102 (`"1h"`
     charts), :382-391, :710, :732, the code-text pins of `"1h"` (:750, :759, :779-783: they pin the constant), the
     settings tab (:843, :858, :884), the replay (:1096, :1132, :1170, :1194 and the read `60m 1y`), the hourly fixtures:
-    rebuilt from the probe's real 15-minute answer (6.3 step 1b). New: the run's budget (3.3 item 10) and the
+    rebuilt as 15-minute answers with the probe's stamps and shapes and made-up prices (6.3 step 1b; no Yahoo price in
+    the repository, 3.3). New: the run's budget (3.3 item 10) and the
     closing-price condition (3.3 item 6).
   - src/test/signal-alert-settings.test.tsx: the `macdx` pins on `"1h"` (:376-437), the notes and intros, the intro's
     and the FAQ's arrival lead (:488-501, which pin 「足が確定してから数分で届きます」 / "It arrives a few minutes after
@@ -716,8 +740,8 @@ sentence holds 「−」 as a word, 「この決まり − 合図なし」, not 
 - **The numbers are in** (6.3 step 1a): research/ledger/macdfade15-summary.json passed the checks of 4.5 (its sha256
   with the `tf` line removed is run 44077464383's; rows.csv's too; the walks' ranges as printed), and `FADE_MEASURED`
   holds its values.
-- **The shares are fitted** (6.3 step 1b): the probe's answer is saved in the repository and 3.3 items 3-6 match it
-  (or are changed to match it, with this file corrected first).
+- **The shares are fitted** (6.3 step 1b): the probe's shapes and times are written in 3.3 (no price, 3.3), and 3.3
+  items 3-6 match them (or are changed to match them, with this file corrected first).
 - **The study check passed on the 15-minute real run** (7.2) on the function's branch **at the function PR's final head
   commit**: the `tf` `15min` dispatch's head SHA equals that commit, and both (the run id and the SHA) are written in
   the PR; its summary.json sha256 equals the ledger copy's. A push runs the workflow on `TF=1h` only
@@ -791,8 +815,8 @@ the timing decides is a **gap** (a span judged by neither) or an **overlap** (v4
    load it through indicators.ts:40 and both are in the list a push deploys, deploy-functions.yml:22-25, :76), and
    econ-calendar the next time it is deployed.
 1b. **The probe:** .github/workflows/yahoo-probe15.yml dispatched (read only; a public Yahoo read from GitHub's
-   runners). Its printed answer is saved under research/ledger/, and 3.3 items 3-6 are fitted to it (this file
-   corrected first where it differs). Best run after a Tokyo and a New York session have both ended, so the closing
+   runners; since d794649 it prints no price, 3.3). What it shows is written in 3.3, and 3.3 items 3-6 are fitted to
+   it (this file corrected first where it differs). Best run after a Tokyo and a New York session have both ended, so the closing
    points are in the answer.
 2. **No app PR before the function:** the id parse, tags and plan line already read the new ids (section 5).
 2a. **The study check on the function's branch** (7.2): a dispatch of macdfade15.yml with `tf` `15min` on that branch
@@ -898,9 +922,9 @@ tests over fake tables, on 15-minute bars:
   close's minute; Twelve Data read at most twice a close.
 - A follower whose lookup failed, mailed at the next judging; a row of the other side: nothing, `other_side`.
 - A share: `CLOSES`, `stockBarEnd` and `stockBarBreak` on 15-minute bars (US, Tokyo lunch, Tokyo close, a US half day),
-  from the probe's real answer as fixtures; a Tokyo bar arriving 15 minutes late: judged at the next close's reads and
+  from fixtures with the probe's stamps and shapes (made-up prices); a Tokyo bar arriving 15 minutes late: judged at the next close's reads and
   mailed (fresh at 45); a bar overtaken before any read judged it: not judged; read again in its window: one email a
-  follower. The closing-price condition (3.3 item 6) on the probe's answer: a session's last bar judged on its closing
+  follower. The closing-price condition (3.3 item 6) on those fixtures: a session's last bar judged on its closing
   point, or, if it does not hold, the mail's and the note's sentence absent (ja and en).
 - The stocks run's budget (3.3 item 10): with Yahoo reads made slow (a fake fetch), no read starts once 30 seconds have
   passed; the shares left are in `reads` as `skipped: "budget"` and are the first read by the next run; `took_ms` is in
@@ -1015,7 +1039,8 @@ Built from v7's 15-minute parts and v11's fade parts (scripts/morning-check/src/
     the fade's mean differs from the baseline's beyond chance.
   - Whether 12 calendar days hold 600 GMO 15-minute bars over Christmas and New Year.
 - **Not checked:**
-  - Whether yahoo-probe15 ran and what it printed (3.3), and so whether the closing-price sentences hold (3.3 item 6).
+  - Yahoo's 15-minute answer around a close and through the next session (3.3 "Not yet seen"), and so whether the
+    closing-price sentences hold (3.3 item 6).
   - Which `macdx` / `stockmacd` rows will be ticked or unticked between the twins and v41's first answer, or under v41
     before a rollback (3.6 and 6.4 reconcile them; the counts are read then).
   - Whether a re-run of the 15-minute study gives run 44077464383's files (4.5 stops if not).
