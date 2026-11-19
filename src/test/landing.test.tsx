@@ -66,26 +66,29 @@ describe("the landing page's promises match the product", () => {
   }
 });
 
-// The sales page's three texts on the MACD fade (research/macdfade1h-prod-spec.md section 5), word for word, ja and en,
-// with 〔adverse〕 as section 5 chose it from the measured numbers (2026-11-17): no percent and no measured number (the
-// tests above), the fade named first with why it is left out of the break-even comparison, and what the numbers
-// cannot hide said without one
-describe("the sales page's texts on the MACD fade (research/macdfade1h-prod-spec.md section 5)", () => {
+// The sales page's three texts on the MACD fade (research/macdfade15min-prod-spec.md section 5, v41: the fade on
+// 15-minute bars; research/macdfade1h-prod-spec.md section 5 was v40's), word for word, ja and en, with 〔adverse〕
+// chosen from the measured numbers the code holds (_shared/macd-fade-measured.ts FADE_MEASURED): no percent and no
+// measured number (the tests above), the fade named first with why it is left out of the break-even comparison, and
+// what the numbers cannot hide said without one. FADE_MEASURED still holds the 1-hour run's numbers until
+// research/macdfade15min-prod-spec.md 4.5 puts the 15-minute run's in; so 〔adverse〕 is still the one
+// research/macdfade1h-prod-spec.md section 5 chose (2026-11-17), and becomes the 15-minute spec's four clauses then
+describe("the sales page's texts on the MACD fade (research/macdfade15min-prod-spec.md section 5)", () => {
   const ADVERSE = {
     ja: "5ペアのうち、1回あたりの平均がマイナスのペアがありました。測った期間の終わりに、含み損のまま残っていた取引がありました。",
     en: "On some of the five pairs its mean a trade was below zero. At the end of the period measured, some trades were still open at an unrealised loss.",
   };
   const FAQ_WIN = {
-    ja: "MACD の逆張りは、損切りをしない決まりで、損益ゼロに必要な勝率というものがないため、勝率では比べません。それ以外の、過去のチャート（スプレッド込み）で測ったサインは、どれも損益ゼロに必要な勝率に届いていません。数字はアプリ内の説明に載せています。MACD の逆張り（1時間足）は、5ペアで測った数字が設定の注にあります。損切りをしないので、含み損のまま残る取引が出ることがあり、合図なしで入った時より良いとは示せていません。5ペアのうち、1回あたりの平均がマイナスのペアがありました。測った期間の終わりに、含み損のまま残っていた取引がありました。損切りをしないのはこの決まりの作りで、損切りをしないことを勧めるものではありません。金・株と、流動性狩り＋EMAクロスは、まだ測っていません。勝てる根拠として使わないでください。",
-    en: "The MACD fade has no stop by design, so it has no break-even win rate and is not compared by one. Of the other signals measured on past charts (spread paid), none reached the win rate needed to break even. The numbers are in the app's notes. The MACD fade (1-hour) has its own numbers, measured on the five pairs only, in the settings' notes. With no stop, some trades can stay open at an unrealised loss, and it has not been shown to do better than entering with no signal. On some of the five pairs its mean a trade was below zero. At the end of the period measured, some trades were still open at an unrealised loss. Having no stop is how this rule is built; it is not advice to hold without a stop. Gold, stocks and the liquidity sweep + EMA cross have not been measured. Please do not take them as a reason to expect to win.",
+    ja: "MACD の逆張りは、損切りをしない決まりで、損益ゼロに必要な勝率というものがないため、勝率では比べません。それ以外の、過去のチャート（スプレッド込み）で測ったサインは、どれも損益ゼロに必要な勝率に届いていません。数字はアプリ内の説明に載せています。MACD の逆張り（15分足）は、5ペアで測った数字が設定の注にあります。損切りをしないので、含み損のまま残る取引が出ることがあり、合図なしで入った時より良いとは示せていません。5ペアのうち、1回あたりの平均がマイナスのペアがありました。測った期間の終わりに、含み損のまま残っていた取引がありました。損切りをしないのはこの決まりの作りで、損切りをしないことを勧めるものではありません。金・株と、流動性狩り＋EMAクロスは、まだ測っていません。勝てる根拠として使わないでください。",
+    en: "The MACD fade has no stop by design, so it has no break-even win rate and is not compared by one. Of the other signals measured on past charts (spread paid), none reached the win rate needed to break even. The numbers are in the app's notes. The MACD fade (15-minute) has its own numbers, measured on the five pairs only, in the settings' notes. With no stop, some trades can stay open at an unrealised loss, and it has not been shown to do better than entering with no signal. On some of the five pairs its mean a trade was below zero. At the end of the period measured, some trades were still open at an unrealised loss. Having no stop is how this rule is built; it is not advice to hold without a stop. Gold, stocks and the liquidity sweep + EMA cross have not been measured. Please do not take them as a reason to expect to win.",
   };
   const HONEST = {
     ja: "MACD の逆張り（5ペアで測定）は、損切りをしない決まりで、損益ゼロに必要な勝率がないため、勝率では比べません。それ以外のアプリのサインは、過去のチャート（11通貨ペア・スプレッド込み）での検証で、どれも損益ゼロに必要な勝率に届いていません。MACD の逆張りは、損切りをしないので、含み損のまま残る取引が出ることがあり、合図なしで入った時より良いとは示せていません。5ペアのうち、1回あたりの平均がマイナスのペアがありました。測った期間の終わりに、含み損のまま残っていた取引がありました。サインは注文の指示ではなく、判断の材料です。通知したサインの実際の成績は、成績を記録している決まりについて、件数とともにアプリ内にそのまま表示します。MACD の逆張りの成績は、記録も表示もしていません。",
     en: "The MACD fade (measured on five pairs) has no stop by design, so it has no break-even win rate and is not compared by one. Of the app's other signals, none reached the win rate needed to break even on past charts (11 pairs, spread paid). With no stop, some MACD fade trades can stay open at an unrealised loss, and it has not been shown to do better than entering with no signal. On some of the five pairs its mean a trade was below zero. At the end of the period measured, some trades were still open at an unrealised loss. A signal is not an order to trade; it is something to weigh. For the rules whose results are recorded, the real record of the signals emailed is shown in the app, with how many there were. The MACD fade's results are not recorded or shown.",
   };
   const OTHER = {
-    ja: "サインの成績を隠さない点です。過去のチャートでの検証結果と、成績を記録している決まりについては、通知したサインが実際に損切りと利確のどちらに先に届いたかを、勝てていない場合もそのまま表示します。MACD の逆張りは、利確と損切りの値段を書かない決まりで、その成績は記録も表示もしていません。売買のサインは確定した足で判定し（MACD の逆張りも、1時間足の確定で判定します）、後から消えたり動いたりしません。",
-    en: "It does not hide the record. How each rule did on past charts, and, for the rules whose results are recorded, whether each signal emailed reached its stop or its target first, are shown as they are, losing ones included. The MACD fade states no take-profit or stop price, and its results are not recorded or shown. Trade signals are judged on closed bars (the MACD fade too, at 1-hour closes) and never vanish or move afterwards.",
+    ja: "サインの成績を隠さない点です。過去のチャートでの検証結果と、成績を記録している決まりについては、通知したサインが実際に損切りと利確のどちらに先に届いたかを、勝てていない場合もそのまま表示します。MACD の逆張りは、利確と損切りの値段を書かない決まりで、その成績は記録も表示もしていません。売買のサインは確定した足で判定し（MACD の逆張りも、15分足の確定で判定します）、後から消えたり動いたりしません。",
+    en: "It does not hide the record. How each rule did on past charts, and, for the rules whose results are recorded, whether each signal emailed reached its stop or its target first, are shown as they are, losing ones included. The MACD fade states no take-profit or stop price, and its results are not recorded or shown. Trade signals are judged on closed bars (the MACD fade too, at 15-minute closes) and never vanish or move afterwards.",
   };
   const answer = (d: typeof ja | typeof en, q: string) => d.lp.faqs.find((f: { q: string; a: string }) => f.q === q)!.a;
 
@@ -120,22 +123,26 @@ describe("the sales page's texts on the MACD fade (research/macdfade1h-prod-spec
       [m.pairs.some((p) => p.mean! < 0), "5ペアのうち、1回あたりの平均がマイナスのペアがありました。", "On some of the five pairs its mean a trade was below zero."],
       [m.fade.open > 0 && m.fade.openPipsWorst! < 0, "測った期間の終わりに、含み損のまま残っていた取引がありました。", "At the end of the period measured, some trades were still open at an unrealised loss."],
     ];
-    // the values compared (section 5's "Chosen"): +3.26 against 0, +3.20 and −2.08; USD/JPY −0.26; 22 open, the worst −1,733.2
+    // the values compared (the 1-hour spec's section 5 "Chosen", FADE_MEASURED's numbers today): +3.26 against 0, +3.20
+    // and −2.08; USD/JPY −0.26; 22 open, the worst −1,733.2. (With the 15-minute run's numbers, research/
+    // macdfade15min-prod-spec.md 4.5 and 5: [false, true, true, true, true].)
     expect(clauses.map((c) => c[0])).toEqual([false, false, false, true, true]);
     expect(clauses.filter((c) => c[0]).map((c) => c[1]).join("")).toBe(ADVERSE.ja);
     expect(clauses.filter((c) => c[0]).map((c) => c[2]).join(" ")).toBe(ADVERSE.en);
-    // the clauses as section 5 writes them (its lines joined)
-    const spec = readFileSync("research/macdfade1h-prod-spec.md", "utf8");
-    const specJa = spec.replace(/\n +/g, "");
-    const specEn = spec.replace(/\n +/g, " ");
-    for (const c of clauses) {
-      expect(specJa, c[1]).toContain(`「${c[1]}」`);
-      expect(specEn, c[2]).toContain(`"${c[2]}"`);
+    // the clauses as section 5 writes them (its lines joined), in both specs
+    for (const file of ["research/macdfade15min-prod-spec.md", "research/macdfade1h-prod-spec.md"]) {
+      const spec = readFileSync(file, "utf8");
+      const specJa = spec.replace(/\n +/g, "");
+      const specEn = spec.replace(/\n +/g, " ");
+      for (const c of clauses) {
+        expect(specJa, `${file}: ${c[1]}`).toContain(`「${c[1]}」`);
+        expect(specEn, `${file}: ${c[2]}`).toContain(`"${c[2]}"`);
+      }
     }
   });
 
-  it("are section 5's own texts: with 〔adverse〕 put back, each is in research/macdfade1h-prod-spec.md (its lines joined)", () => {
-    const spec = readFileSync("research/macdfade1h-prod-spec.md", "utf8");
+  it("are section 5's own texts: with 〔adverse〕 put back, each is in research/macdfade15min-prod-spec.md (its lines joined)", () => {
+    const spec = readFileSync("research/macdfade15min-prod-spec.md", "utf8");
     const specJa = spec.replace(/\n +/g, "");
     const specEn = spec.replace(/\n +/g, " ");
     expect(specJa).toContain(`「${FAQ_WIN.ja.replace(ADVERSE.ja, "〔adverse〕")}」`);
@@ -144,7 +151,12 @@ describe("the sales page's texts on the MACD fade (research/macdfade1h-prod-spec
     expect(specEn).toContain(`"${FAQ_WIN.en.replace(`${ADVERSE.en} `, "〔adverse〕")}"`);
     expect(specEn).toContain(`"${HONEST.en.replace(`${ADVERSE.en} `, "〔adverse〕")}"`);
     expect(specEn).toContain(`"${OTHER.en}"`);
-    // and the 〔adverse〕 section 5 chose
+  });
+
+  it("the 〔adverse〕 chosen: the 1-hour spec's choice while FADE_MEASURED holds the 1-hour numbers (the 15-minute spec's own choice, its four clauses, comes with 4.5's numbers)", () => {
+    const spec = readFileSync("research/macdfade1h-prod-spec.md", "utf8");
+    const specJa = spec.replace(/\n +/g, "");
+    const specEn = spec.replace(/\n +/g, " ");
     expect(specJa).toContain(`〔adverse〕 = ja「${ADVERSE.ja}」`);
     expect(specEn).toContain(`en "${ADVERSE.en}"`);
   });
@@ -154,7 +166,9 @@ describe("the sales page's texts on the MACD fade (research/macdfade1h-prod-spec
     const BACK_EN =
       /\b(always|will|surely|certainly|eventually)\s+(come|comes|go|goes)\s+back\b|\b(always|will|surely|certainly|eventually)\s+(return|returns|recover|recovers)\b|\bcomes?\s+back\s+(eventually|in\s+the\s+end)\b/i;
     for (const t of [FAQ_WIN.ja, HONEST.ja, OTHER.ja, FAQ_WIN.en, HONEST.en, OTHER.en]) {
+      // the 1-hour run's numbers and the 15-minute run's (research/macdfade15min-prod-spec.md 4.5)
       expect(t).not.toMatch(/\d+(\.\d+)?\s?%|1,?490|1,?468|3\.26|3\.20|2\.08|9,?820|1,?733|2,?243|0\.26/);
+      expect(t).not.toMatch(/6,?006|5,?926|2\.41|3\.31|3\.19|44,?784|1,?913|2,?975|0\.82|0\.90|0\.78|8\.15[56]/);
       expect(BACK_JA.test(t), t).toBe(false);
       expect(BACK_EN.test(t), t).toBe(false);
     }

@@ -35,7 +35,8 @@ import { ZONE_BARS } from "../_shared/macd-level.ts";
 // v40 (docs §8.155; research/macdfade1h-prod-spec.md): the MACD email as the fade at a closed 1-hour bar: one email
 // when the line closes at 96% of the pane's top (a SELL) or bottom (a BUY), the bar before not at 96%. The rule is the
 // shared one (_shared/macd-fade.ts, which research/macdfade-prod-check.ts holds to the study, research/macdfade15-spec.md
-// "On 1-hour bars"); what was measured of it is kept in one place (_shared/macd-fade-measured.ts)
+// "On 1-hour bars"); what was measured of it is kept in one place (_shared/macd-fade-measured.ts). v41
+// (research/macdfade15min-prod-spec.md): the same fade at a closed 15-minute bar (MACDH_INTERVALS)
 import { FADE_PCT, FADE_SHARE, fadeRuleId, type FadeEntry, type FadeZoneSide } from "../_shared/macd-fade.ts";
 import { fadeMeasuredLine } from "../_shared/macd-fade-measured.ts";
 import { pineAtr } from "../_shared/pine.ts";
@@ -158,14 +159,26 @@ export const MACDX_RULE_ID =
 // only (a pair's ask close for a BUY and bid close for a SELL of GMO's 1-hour
 // bar, gold's close): no take-profit and no stop price. v9's ride and its
 // three ids are written no more. One id, built from the constants
-// (MACDH_RULE_ID, below MACDH_INTERVALS, which stays the 1-hour chart):
+// (MACDH_RULE_ID, below MACDH_INTERVALS, which stayed the 1-hour chart):
 // macdx_12_26_9_w600_1h_fade96of120_in_v11 (v11: a number no id ever written
-// holds, spec 3.7). The subscriptions keep rule = 'macdx', on the same charts.
+// held, spec 3.7). The subscriptions kept rule = 'macdx', on the same charts.
+// v41 (research/macdfade15min-prod-spec.md): the same fade on the 15-minute
+// chart of the five pairs and gold (MACDH_INTERVALS), the owner's 「メールの
+// 判断15分に変更して」 (2026-11-19): the 600 closes ending at the bar, 96%,
+// the bar before not at 96%, the pane of the newest 120 bars (now 15-minute
+// bars), the price in (a pair's ask close for a BUY and bid close for a SELL
+// of GMO's 15-minute bar, gold's close), no take-profit and no stop price.
+// One id: macdx_12_26_9_w600_15min_fade96of120_in_v12 (v12, not v11: v40
+// writes v11, and every change of the MACD email's chart raised the number,
+// spec 3.7). The subscriptions keep rule = 'macdx'; each '1h' row gets a
+// '15min' twin before the release (spec 3.6), since v41 reads, offers and
+// accepts the 15-minute chart only.
 // MACDH_K is v26's k, kept with the rule it belongs to (decideScaledOnWindow,
 // which the morning check's SQL v3 mirrors); no email uses it from v28.
 export const MACDH_K = 0.8;
-// v40: the version in the fade's rule id (spec 3.7)
-export const MACDH_FADE_VERSION = 11;
+// v40: the version in the fade's rule id (spec 3.7); v41: 12 (11 is v40's,
+// written from 2026-11-18; research/macdfade15min-prod-spec.md 3.7)
+export const MACDH_FADE_VERSION = 12;
 // #291: the video's way (docs §8.112, _shared/sweep-cross.ts): EMA 20 and EMA
 // 80, judged on the 600 closed bars ending at the bar, crosses counted from
 // its 241st, the stop a pip beyond the last five bars, the targets 15 and 20
@@ -263,9 +276,19 @@ export const isMacdxChart = (pair: unknown, interval: unknown): boolean =>
 // read 0, 3 and 5 minutes after the hour, gold's from a minute after the close.
 // v40 (docs §8.155; research/macdfade1h-prod-spec.md 2.4, 3.2 and 3.6): the
 // MACD fade on the same 1-hour charts, read and judged as v39 read them
-// (「やっぱりメールの判断1時間足で」): nothing of the charts or the
-// subscriptions changes.
-export const MACDH_INTERVALS = ["1h"] as const;
+// (「やっぱりメールの判断1時間足で」).
+// v41 (research/macdfade15min-prod-spec.md 2.4, 3.2 and 3.6): the fade on
+// their 15-minute chart (the owner: 「メールの判断15分に変更して」,
+// 2026-11-19), read as v31 read it: the five pairs' GMO bars 0, 1 and 3
+// minutes after each quarter hour (gmoIntervalsDue), gold's Twelve Data bars
+// from a minute after each close until the next (twelveCloseDue), fresh 20
+// minutes (freshFor). The charts change, and so do the subscriptions: v41
+// reads, offers and accepts 'macdx' on the 15-minute chart only, so each '1h'
+// row gets a '15min' twin before the release (spec 3.6). This one constant
+// drives isMacdhChart, isIndicatorChartFor('macdx'), the run's subscriptions,
+// the status call, set / set_many, the rule id and the econ digest's
+// recipients (econ-calendar/mailer.ts).
+export const MACDH_INTERVALS = ["15min"] as const;
 export const MACDH_PAIRS: readonly string[] = [
   ...MACDX_PAIRS.filter((p) => ["USD/JPY", "EUR/JPY", "AUD/JPY", "EUR/USD", "AUD/USD"].includes(p)),
   GOLD,
@@ -274,7 +297,8 @@ export const isMacdhChart = (pair: unknown, interval: unknown): boolean =>
   typeof pair === "string" && typeof interval === "string" && MACDH_PAIRS.includes(pair) &&
   (MACDH_INTERVALS as readonly string[]).includes(interval) && isIndicatorChart(pair, interval);
 // v40 (spec 3.7): the fade's one rule id (what indicatorRuleId gives for
-// 'macdx'), every part from a constant: macdx_12_26_9_w600_1h_fade96of120_in_v11
+// 'macdx'), every part from a constant: macdx_12_26_9_w600_1h_fade96of120_in_v11;
+// v41: macdx_12_26_9_w600_15min_fade96of120_in_v12
 export const MACDH_RULE_ID = fadeRuleId("macdx", MACDH_INTERVALS[0], MACDH_FADE_VERSION);
 // #291: the video's way is mailed on gold's 1-minute chart only (the owner:
 // 「1分足のゴールド専用のゴールドの売買のメールだけはこれで判断して」), whose bars
@@ -371,13 +395,14 @@ export interface IndicatorSignal {
 }
 
 // v40 (docs §8.155; research/macdfade1h-prod-spec.md 3.4): what made the MACD
-// fade's one email, at a closed 1-hour bar. `zside`: the edge of the MACD
+// fade's one email, at a closed bar (v40: a 1-hour bar; v41: a 15-minute bar,
+// research/macdfade15min-prod-spec.md 3.4). `zside`: the edge of the MACD
 // pane the line closed at, the top (a SELL) or the bottom (a BUY). m, top and
 // bottom: the MACD line and the pane's edges at the bar's close (Z), as the
 // shared code gives them, unrounded; share0 the line's share of that edge (m /
 // top or m / bottom). `price`: the price in, a pair's ask close for a BUY and
-// bid close for a SELL (GMO's 1-hour bar, as given), gold's and a share's
-// close. On a fade's signal barTime is the bar's open, closedAt its close,
+// bid close for a SELL (GMO's bar of the chart judged, as given), gold's and a
+// share's close. On a fade's signal barTime is the bar's open, closedAt its close,
 // close its close as the chart draws it; no stop and no target (sl and tps
 // null), and no text states either. (#397: v39's RideFacts, a mail of the
 // ride, went with it)
@@ -632,7 +657,8 @@ export const macdxSignals = (
 // trade, its rows in public.macd_rides and public.macd_ride_state (not
 // written from v40; v9's morning check and a rollback read them).
 // v40 (docs §8.155; research/macdfade1h-prod-spec.md sections 2 and 3): the
-// MACD email is the fade at a closed 1-hour bar. What a close does is
+// MACD email is the fade at a closed bar (v40: 1-hour; v41: 15-minute,
+// research/macdfade15min-prod-spec.md sections 2 and 3). What a close does is
 // fadeCloseEntryAt (_shared/macd-fade.ts) on the 600 closes ending there; the
 // sweep (index.ts fadeAtClose) prices it and mails it, and keeps nothing.
 // What is here: the price in, the signal, its row and its tag, all pure so
@@ -641,8 +667,9 @@ export const macdxSignals = (
 
 // The price in at a bar's close, from GMO's bar with both sides (as given,
 // unrounded): a BUY is filled on the ask, a SELL on the bid (fillSide,
-// track-outcomes/quotes.ts): the study's price, GMO's own 1-hour bar's bid and
-// ask close (research/macdfade15-spec.md "On 1-hour bars", "Prices in"). Gold
+// track-outcomes/quotes.ts): the study's price, GMO's own bar's bid and ask
+// close (research/macdfade15-spec.md "Prices in"; v41: the 15-minute bar's,
+// from the same read the chart's closes come from, index.ts fadeQuotes). Gold
 // and the shares have one price, the bar's close. (v39's ride paid the same;
 // research/macdfade-prod-check.ts prices the study's entries with this one)
 export const ridePaidAt = (side: "BUY" | "SELL", q: QuoteCandle): number => sideOf(q, fillSide(side)).close;
@@ -1418,6 +1445,12 @@ const macdNumbers = (pair: string, end: number | null): ((v: number | null) => s
 // take-profit or a stop, and nothing says a price will come back. (#397:
 // v39's three mails, renderRideMail and its measured paragraph, went with the
 // ride)
+// v41 (research/macdfade15min-prod-spec.md 4.2 and 4.3): on the 15-minute
+// chart; the bar's word comes from the signal's interval (tfLabel). Rewritten:
+// when it is judged and sent (a pair at the reads right after the close and 1
+// and 3 minutes after, gmoIntervalsDue; gold from 1 minute after the close
+// until the next bar closes, twelveCloseDue) and whose choices these are (the
+// pane of the newest 120 15-minute bars is the owner's choice too, 2026-11-17)
 const renderFadeMail = (s: IndicatorSignal, lang: Lang): Mail => {
   const f = s.fade ?? null;
   const gold = isGold(s.pair);
@@ -1445,13 +1478,13 @@ const renderFadeMail = (s: IndicatorSignal, lang: Lang): Mail => {
       "There is no take-profit price and no stop price. That is how this rule is built; it is not advice to hold without a stop.",
       "This is the only email: nothing more is sent about this signal. A later signal on the same chart and side is sent too, whatever came before it.",
       (gold
-        ? "This email is judged and sent between 1 and 30 minutes after the bar closes (how long it takes to arrive has not been measured)."
-        : "This email is judged and sent at the reads right after the bar closes and 3 and 5 minutes after (how long it takes to arrive has not been measured).") +
+        ? "This email is judged and sent from 1 minute after the bar closes until the next bar closes, under 15 minutes after it (how long it takes to arrive has not been measured)."
+        : "This email is judged and sent at the reads right after the bar closes and 1 and 3 minutes after (how long it takes to arrive has not been measured).") +
         " The price when it arrives may differ from the close above (the difference has not been measured). Bars that close in the weekend pause (Friday 21:00 to Sunday 22:00 UTC) are not judged.",
       gold
         ? "Not measured on gold (its bars are Twelve Data's, with no separate bid and ask). The numbers measured on the five pairs are in the app's settings notes."
         : fadeMeasuredLine("en", s.pair),
-      `This rule is Sextant's own, not a published indicator. ${FADE_PCT}%, judging at the bar's close, judging the email on ${tf} bars, the fade side and stating no take-profit or stop price are the app owner's choices. The MACD pane (the newest ${ZONE_BARS} bars) is the same as the app's ${tf} chart's.`,
+      `This rule is Sextant's own, not a published indicator. ${FADE_PCT}%, judging at the bar's close, judging the email on ${tf} bars, the MACD pane of the newest ${ZONE_BARS} ${tf} bars, the fade side and stating no take-profit or stop price are the app owner's choices. That pane is the same as the app's ${tf} chart's.`,
       `${gold
         ? "The bars are Twelve Data's (GMO Coin does not carry XAU/USD), as the app's chart draws them."
         : `The bars are the mid of GMO Coin's public bid and ask, as the app's chart draws them; the price above is the same ${tf} bar's bid or ask close.`} Check the latest state in the app before you place an order:\n${APP_URL}`,
@@ -1471,13 +1504,13 @@ const renderFadeMail = (s: IndicatorSignal, lang: Lang): Mail => {
     "利確の値段も損切りの値段もありません。これはこの決まりの作りで、損切りをしないことを勧めるものではありません。",
     "メールはこの1通だけです。このあと、この合図について知らせは送りません。同じチャート・同じ向きに前の合図があっても、次の合図は送ります。",
     (gold
-      ? "このメールは、足の確定の1分後から30分後までの間に判定して送ります（実際に何分で届くかは測っていません）。"
-      : "このメールは、足の確定の直後・3分後・5分後の読み込みで判定して送ります（実際に何分で届くかは測っていません）。") +
+      ? "このメールは、足の確定の1分後から、次の足が確定するまで（確定から15分より前）の間に判定して送ります（実際に何分で届くかは測っていません）。"
+      : "このメールは、足の確定の直後・1分後・3分後の読み込みで判定して送ります（実際に何分で届くかは測っていません）。") +
       "届いた時の値段は、上の終値と違うことがあります（その差は測っていません）。週末の止まっている時間（日本時間 土曜6:00〜月曜7:00）に確定した足は判定しません。",
     gold
       ? "金では測っていません（足は Twelve Data のもので、売値・買値の別はありません）。5ペアで測った数字は、アプリの設定の注にあります。"
       : fadeMeasuredLine("ja", s.pair),
-    `この決まりは Sextant 独自のもので、公開されているインジケーターではありません。${FADE_PCT}%・足の確定で判定すること・メールを${tf}で判定すること・逆張りの向き・利確と損切りの値段を書かないことは、アプリのオーナーが決めたものです。MACD の枠（新しい${ZONE_BARS}本）は、アプリの${tf}のチャートの枠と同じです。`,
+    `この決まりは Sextant 独自のもので、公開されているインジケーターではありません。${FADE_PCT}%・足の確定で判定すること・メールを${tf}で判定すること・MACD の枠を${tf}の新しい${ZONE_BARS}本にすること・逆張りの向き・利確と損切りの値段を書かないことは、アプリのオーナーが決めたものです。この枠は、アプリの${tf}のチャートの枠と同じです。`,
     `${gold
       ? `足は Twelve Data のもの（${pairJa(s.pair)}は GMOコインにないため）で、アプリのチャートと同じです。`
       : `足は GMOコインの公開レート（買値と売値の中間）で、アプリのチャートと同じです。上の値段は、同じ${tf}の売値・買値の終値です。`}注文の前にアプリで最新の状態を確認してください。\n${APP_URL}`,

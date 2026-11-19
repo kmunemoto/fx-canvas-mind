@@ -1,6 +1,8 @@
-// The MACD fade judged at closed 1-hour bars (research/macdfade1h-prod-spec.md sections 2.1-2.2, 3.1, 3.7, 4.1 and
-// 4.5): the shared code the function runs (supabase/functions/_shared/macd-fade.ts) and the measured paragraph
-// (supabase/functions/_shared/macd-fade-measured.ts).
+// The MACD fade judged at closed bars (research/macdfade1h-prod-spec.md sections 2.1-2.2, 3.1, 3.7, 4.1 and 4.5, the
+// record of v40 on 1-hour bars; v41 moves the email to 15-minute bars, research/macdfade15min-prod-spec.md 3.1 and 3.7):
+// the shared code the function runs (supabase/functions/_shared/macd-fade.ts) and the measured paragraph
+// (supabase/functions/_shared/macd-fade-measured.ts; still the 1-hour run's numbers until research/macdfade15min-
+// prod-spec.md 4.5 puts the 15-minute run's in).
 //
 //   1. the constants and the two rule ids (built from the constants as 3.7 writes them; the app's FADE_ID of section 5
 //      matches them, RIDE_ID does not)
@@ -41,8 +43,8 @@ import {
   fadeMeasuredLine,
   fadeMeasuredNotes,
 } from "../../supabase/functions/_shared/macd-fade-measured";
-import { MACDH_INTERVALS } from "../../supabase/functions/signal-alerts/indicators";
-import { STOCKMACD_INTERVALS } from "../../supabase/functions/signal-alerts/stocks";
+import { MACDH_FADE_VERSION, MACDH_INTERVALS, MACDH_RULE_ID } from "../../supabase/functions/signal-alerts/indicators";
+import { STOCKMACD_FADE_VERSION, STOCKMACD_INTERVALS, STOCKMACD_RULE_ID } from "../../supabase/functions/signal-alerts/stocks";
 
 const W = LEVEL_WINDOW;
 const SIDES: FadeZoneSide[] = ["top", "bottom"];
@@ -50,7 +52,7 @@ const SIDES: FadeZoneSide[] = ["top", "bottom"];
 const SLOW = 120_000;
 
 // the app's regexes: RIDE_ID as src/lib/signalAlerts.ts:48 has it, FADE_ID as research/macdfade1h-prod-spec.md
-// section 5 proposes it
+// section 5 proposed it (research/macdfade15min-prod-spec.md section 5: unchanged)
 const RIDE_ID = /^(?:macdx|stockmacd)_.*_(?:touch|ride)(\d+)to(\d+)of120_(in|at|out)_/;
 const FADE_ID = /^(?:macdx|stockmacd)_.*_fade(\d+)(?:tp[0-9a-z]+)?of120_in_/;
 
@@ -124,13 +126,19 @@ describe("the MACD fade's constants and rule ids (spec 3.1, 3.7)", () => {
   });
 
   it("the two ids built from the constants as 3.7 writes them, matching FADE_ID (pct 96) and not RIDE_ID", () => {
-    // 3.7: fadeRuleId("macdx", MACDH_INTERVALS[0], 11), fadeRuleId("stockmacd", STOCKMACD_INTERVALS[0], 4)
-    expect(MACDH_INTERVALS[0]).toBe("1h");
-    expect(STOCKMACD_INTERVALS[0]).toBe("1h");
-    const pairs = fadeRuleId("macdx", MACDH_INTERVALS[0], 11);
-    const shares = fadeRuleId("stockmacd", STOCKMACD_INTERVALS[0], 4);
-    expect(pairs).toBe("macdx_12_26_9_w600_1h_fade96of120_in_v11");
-    expect(shares).toBe("stockmacd_12_26_9_w600_1h_fade96of120_in_v4");
+    // research/macdfade15min-prod-spec.md 3.7: fadeRuleId("macdx", MACDH_INTERVALS[0], 12),
+    // fadeRuleId("stockmacd", STOCKMACD_INTERVALS[0], 5) (v40's: 11 and 4 on "1h")
+    expect(MACDH_INTERVALS[0]).toBe("15min");
+    expect(STOCKMACD_INTERVALS[0]).toBe("15min");
+    expect(MACDH_FADE_VERSION).toBe(12);
+    expect(STOCKMACD_FADE_VERSION).toBe(5);
+    const pairs = fadeRuleId("macdx", MACDH_INTERVALS[0], MACDH_FADE_VERSION);
+    const shares = fadeRuleId("stockmacd", STOCKMACD_INTERVALS[0], STOCKMACD_FADE_VERSION);
+    expect(pairs).toBe("macdx_12_26_9_w600_15min_fade96of120_in_v12");
+    expect(shares).toBe("stockmacd_12_26_9_w600_15min_fade96of120_in_v5");
+    // the function's own ids are these
+    expect(MACDH_RULE_ID).toBe(pairs);
+    expect(STOCKMACD_RULE_ID).toBe(shares);
     for (const id of [pairs, shares]) {
       const m = FADE_ID.exec(id);
       expect(m, id).not.toBeNull();
@@ -149,8 +157,14 @@ describe("the MACD fade's constants and rule ids (spec 3.1, 3.7)", () => {
       expect(FADE_ID.test(old)).toBe(false);
       expect(RIDE_ID.test(old)).toBe(false);
     }
-    // 3.7: the pairs' id differs from every earlier id, the never-built ones included
-    for (const other of ["macdx_12_26_9_w600_1h_fade96tp10of120_in_v11", "macdx_12_26_9_w600_15min_fade96of120_in_v11", "stockmacd_12_26_9_w600_15min_fade96of120_in_v4"]) {
+    // 3.7: the ids differ from every earlier id, the never-built ones and the two 1-hour fade ids v40 writes included
+    for (const other of [
+      "macdx_12_26_9_w600_1h_fade96tp10of120_in_v11",
+      "macdx_12_26_9_w600_15min_fade96of120_in_v11",
+      "stockmacd_12_26_9_w600_15min_fade96of120_in_v4",
+      "macdx_12_26_9_w600_1h_fade96of120_in_v11",
+      "stockmacd_12_26_9_w600_1h_fade96of120_in_v4",
+    ]) {
       expect(pairs).not.toBe(other);
       expect(shares).not.toBe(other);
     }
@@ -159,10 +173,18 @@ describe("the MACD fade's constants and rule ids (spec 3.1, 3.7)", () => {
   it("the copies above are the app's RIDE_ID as written, and section 5's FADE_ID (the app's, once it has one)", () => {
     const app = readFileSync("src/lib/signalAlerts.ts", "utf8");
     expect(app).toContain(`const RIDE_ID = /${RIDE_ID.source}/;`);
-    const spec = readFileSync("research/macdfade1h-prod-spec.md", "utf8");
+    const spec = readFileSync("research/macdfade15min-prod-spec.md", "utf8");
     expect(spec).toContain(`/${FADE_ID.source}/`);
     const fade = /const FADE_ID\s*=\s*(\/.*\/);/.exec(app);
     if (fade) expect(fade[1]).toBe(`/${FADE_ID.source}/`);
+  });
+
+  it("research/macdfade15min-prod-spec.md 4.5: _shared/macd-fade-measured.ts imports nothing from signal-alerts/ (indicators.ts imports it, and it builds its notes at load: an import back would read MACDH_INTERVALS before indicators.ts has set it)", () => {
+    const src = readFileSync("supabase/functions/_shared/macd-fade-measured.ts", "utf8");
+    const imports = [...src.matchAll(/^\s*import\s[^;]*?from\s+"([^"]+)"/gms)].map((m) => m[1]);
+    expect(imports).toEqual(["./pair-names.ts"]);
+    expect(src).not.toMatch(/signal-alerts\//);
+    expect(src).not.toMatch(/import\s*\(/);
   });
 });
 
