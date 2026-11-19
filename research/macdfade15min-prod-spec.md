@@ -21,7 +21,8 @@ numbers are stale (they were read on the shelved v10 files). Where that file and
 **The study it must equal.** research/macdfade15-spec.md (the rule on 15-minute bars, `TF=15min`; built in
 research/macdfade15.ts, run by .github/workflows/macdfade15.yml, checked by research/macdfade15-check.py). Its real
 15-minute run is that spec's section "Result of the real run (2026-11-17, Actions run 44077464383, commit fff5ddb)"
-(:406-436). The study's rule, files and numbers govern: where it reads differently from section 2, this file is
+(:406-440), and for the email's numbers its section "Result of the re-run on GMO's files read afresh (2026-11-19,
+Actions run 44535888012, main 9ca2054)" (:442-500; 4.5). The study's rule, files and numbers govern: where it reads differently from section 2, this file is
 corrected before anything is built.
 
 ## 1. What the owner asked
@@ -525,12 +526,19 @@ governs the parenthesis of `stockmacdNotes` [2] (section 5).
 
 ### 4.5 The measured paragraph (pairs only; `FADE_MEASURED`, `fadeMeasuredLine`)
 
-The numbers are the study's real 15-minute run: Actions run 44077464383 on fff5ddb, recorded in
-research/macdfade15-spec.md :406-436. The Python agreed with every row and number (`PYTHON AGREES`). rows.csv sha256
-`f2d27000b2999a523d3c4317fbe22392d32a54bbe244dbb1f0b6363fb7d65856`, summary.json sha256
-`76c86aa8fa1e4bce9e8ea77418bd32cd043166a5a420a2958747943f932a61e0`. **summary.json is not in the repository**: the
-development container's proxy refused the artifact host, and the numbers in the study spec are the job's printed lines.
-The 1-hour numbers (research/ledger/macdfade1h-summary.json) are not these.
+**Corrected 2026-11-19 (step 4 below happened).** The numbers are the study's 15-minute re-run on GMO's files read
+afresh: Actions run 44535888012 on main 9ca2054, recorded in research/macdfade15-spec.md :442-500, its summary.json in
+**research/ledger/macdfade15-summary.json** (sha256 `eacb7815d7779be716b24e559c0aea139e6455910abcf4b1ec59ab4d8c5eb188`,
+16,817 bytes; without the bytes `,\n  "tf": "15min"`, `74a4a230a291d68a8e8169ea293a5428f46863ffc0ed86804522f4f509cc888b`;
+rows.csv `b73115a0668b3c50b76f2f4507095adac8423e7ae08a9d68a5309d6cddfb0f37`). The Python agreed with every row and
+number. The first real run (44077464383 on fff5ddb, research/macdfade15-spec.md :406-440; rows.csv `f2d27000…5856`,
+summary.json `76c86aa8…1e61e0`) read three GMO 1-minute day files of 2025-06-20 that had been kept cut short (59 bars of
+1,440: AUD_JPY bid, EUR_USD bid, USD_JPY ask; gmo-cache-diff run 44546585012). The re-run reads them whole. The fade's
+and the flow's trades, counts, pips, open trades, worst and longest are the same; the baseline gains 552 trades (+3.31
+→ +3.32 a trade), the fade's time to the target is a little shorter (median 144 → 143 minutes, P90 5,740 → 5,681), and
+fade − base is −0.91 (was −0.90). Run 44077464383's file is reproduced by the branch's run 44537377516 from the
+branch's caches (the same three short files; without its `tf` line, `76c86aa8…`). The 1-hour numbers
+(research/ledger/macdfade1h-summary.json) are not these.
 
 **How the file gets into research/ledger (route 1, as research/macdfade1h-prod-spec.md 4.5 took it for 1 hour).**
 .github/workflows/macdfade15.yml already prints summary.json whole as one base64 line, with its sha256 and size
@@ -544,21 +552,27 @@ job reads GMO's files from the caches (or fetches them), runs the study and the 
    is as before). The file is `JSON.stringify(summary, null, 1)` (research/macdfade15.ts:746), so `meta` ends
    `"tp": 10,\n  "tf": "15min"\n },`. Removing the exact bytes `,\n  "tf": "15min"` (17 bytes) must give a file whose
    sha256 is `76c86aa8fa1e4bce9e8ea77418bd32cd043166a5a420a2958747943f932a61e0`. The printed rows.csv sha256 must be
-   `f2d27000…5856`.
+   `f2d27000…5856`. **(2026-11-19: main's run 44535888012 gave `74a4a230…` and `b73115a0…`; step 4 was taken.)**
 3. The printed lines are read against research/macdfade15-spec.md :416-436, every number. The walks' ranges printed
    beside the gaps must be −0.80..+2.24 (fade − base) and −2.25..+5.70 (fade − flow). null.json's sha256 is printed
    (:309) and recorded (the 15-minute run's is recorded nowhere yet).
 4. **If any of 1-3 fails, nothing is built.** A difference means GMO's files are not those of run 44077464383 (the
    caches evicted and files fetched again, or GMO changed a file). The re-run's numbers are then new measurements: they
    are recorded in research/macdfade15-spec.md as a new result section and told to the owner before anything goes on.
+   **Taken 2026-11-19:** the cause was found (three short files in the branch's caches, above), the re-run on the whole
+   files is the run of record (research/macdfade15-spec.md :442-500), its walks' ranges are the same (−0.80..+2.24 and
+   −2.25..+5.70), and the owner was told. The study check (7.2) now holds summary.json to `74a4a230…` without its `tf`
+   line and to the ledger copy whole, and restores run 44535888012's cache last on `15min` so a branch run reads the
+   whole files.
 5. `FADE_MEASURED` is written out from the ledger copy by a script (not copied by hand), and a test reads the copy and
    pins every value of `FADE_MEASURED` to it: `meta.tf` `"15min"`, `meta.share` 0.96 and `meta.tp` 10 included.
-   `FADE_MEASURED_SOURCE` (macd-fade-measured.ts:73-80): run 44077464383, commit fff5ddb, the re-run's id,
-   `research/ledger/macdfade15-summary.json`, the copy's sha256 (with its `tf` line).
+   `FADE_MEASURED_SOURCE` (macd-fade-measured.ts:73-80): run 44535888012, commit 9ca2054 (main), the first run
+   44077464383 and why it was replaced (three short GMO files), `research/ledger/macdfade15-summary.json`, the copy's
+   sha256 (with its `tf` line).
 
 docs §8.156 records the run ids, both sha256 (with and without the `tf` line), null.json's and that route 1 was taken.
 
-**The values** (from the printed lines of run 44077464383; the final ones are the ledger copy's, by the script):
+**The values** (the ledger copy's, run 44535888012; the build writes them by the script):
 
 | slot | summary.json | value, written as the code writes it |
 |---|---|---|
@@ -566,25 +580,25 @@ docs §8.156 records the run ids, both sha256 (with and without the `tf` line), 
 | 〔trades〕, 〔tp〕, 〔open〕 | `dirs.fade.all.trades`, `.tp`, `.open` | 6,006 / 5,926 / 80 |
 | 〔mean〕 | `dirs.fade.all.pipsMean` | +2.41 |
 | 〔maeMedian〕, 〔maeMax〕 | `.maeMedian`, `.maeMax` | 11.9, 2,975.8 (P90 104.0, not in the paragraph) |
-| 〔tpMedian〕, 〔tpP90〕, 〔tpMax〕 | `.tpMinutesMedian`, `.tpMinutesP90`, `.tpMinutesMax` | 144, 5,740, 784,561 minutes: ja 「約2時間」「約4日」「約545日」, en "about 2 hours", "about 4 days", "about 545 days" |
+| 〔tpMedian〕, 〔tpP90〕, 〔tpMax〕 | `.tpMinutesMedian`, `.tpMinutesP90`, `.tpMinutesMax` | 143, 5,681, 784,561 minutes: ja 「約2時間」「約4日」「約545日」, en "about 2 hours", "about 4 days", "about 545 days" |
 | 〔openPipsSum〕, 〔openPipsWorst〕, 〔openLongest〕 | `.openPipsSum`, `.openPipsWorst`, `.openMinutesMax` | −44,784.5, −1,913.4, 959,205 minutes: ja 「約666日」, en "about 666 days" |
 | 〔flowMean〕 | `dirs.flow.all.pipsMean` | +3.19 |
-| 〔baseMean〕 | `base.all.pipsMean` (704,078 trades) | +3.31 |
-| 〔pairMean〕 (〔pairBaseMean〕) | `dirs.fade.<pair>.pipsMean`, `base.<pair>.pipsMean` | USD/JPY +2.67 (+5.68), EUR/JPY +1.29 (+3.41), AUD/JPY −0.82 (−0.31), EUR/USD +3.86 (+2.59), AUD/USD +4.94 (+5.18) |
+| 〔baseMean〕 | `base.all.pipsMean` (704,630 trades) | +3.32 |
+| 〔pairMean〕 (〔pairBaseMean〕) | `dirs.fade.<pair>.pipsMean`, `base.<pair>.pipsMean` | USD/JPY +2.67 (+5.69), EUR/JPY +1.29 (+3.41), AUD/JPY −0.82 (−0.30), EUR/USD +3.86 (+2.60), AUD/USD +4.94 (+5.18) |
 | 〔negPairs〕 | as the 1-hour spec | ja 「豪ドル/円（-0.82 pips）」, en "AUD/JPY (-0.82 pips)" |
 | 〔notMailed〕 | the sum of `pairs[].notMailed` | 3 (USD/JPY, AUD/JPY and AUD/USD one each) |
 | 〔sec〕 | the docs §8 section of the release | 8.156 (the next section after §8.155; if another section takes it first, the next free one, written at the release) |
-| 〔gapBase〕, 〔gapFlow〕 | `fade.pipsMean − baseMean`, `fade.pipsMean − flowMean`, unrounded, then to 2 decimals with the sign | -0.90, -0.78 (the print's gaps, research/macdfade15-spec.md :430-431) |
+| 〔gapBase〕, 〔gapFlow〕 | `fade.pipsMean − baseMean`, `fade.pipsMean − flowMean`, unrounded, then to 2 decimals with the sign | -0.91, -0.78 (the print's gaps, research/macdfade15-spec.md :430-431) |
 | 〔baseLo〕〜〔baseHi〕, 〔flowLo〕〜〔flowHi〕 | not in summary.json: the walks' ranges as printed, held in `FADE_MEASURED.chance` | -0.80〜+2.24, -2.25〜+5.70 |
 
 Durations, signs, thousands separators and the minus as research/macdfade1h-prod-spec.md 4.5 (the code's rules,
 macd-fade-measured.ts:181-217). The durations above were worked out with those rules from the printed minutes; a
 median stored with .5 would not change their words. The table's "−" is this file's typography; the code writes "-".
 
-**Read against the numbers (2026-11-19):** the fade's mean (+2.41) is below the no-signal baseline (+3.31) and below
-entering the other way (+3.19). Fade − base is −0.90 pips a trade, below the ten driftless walks' range (−0.80..+2.24);
+**Read against the numbers (2026-11-19, the re-run's):** the fade's mean (+2.41) is below the no-signal baseline (+3.32) and below
+entering the other way (+3.19). Fade − base is −0.91 pips a trade, below the ten driftless walks' range (−0.80..+2.24);
 fade − flow is −0.78, inside its range (−2.25..+5.70). With `END` a week earlier the order is the same (fade +1.96, flow
-+2.73, base +2.97). Four of the five pairs' fade means are below their baselines (only EUR/USD's is above). By side,
++2.73, base +2.98). Four of the five pairs' fade means are below their baselines (only EUR/USD's is above). By side,
 bottom (BUY) 2,956 trades +6.29 a trade, top (SELL) 3,050 trades −1.35 a trade. So no sentence says the fade did better
 than no signal or than the other way, and 〔chance〕 says it did worse than no signal (below). On 1-hour bars fade − base
 was +0.06, inside its range; the 15-minute result is worse. About 40 entries a week over the five pairs (6,006 over the
@@ -626,10 +640,10 @@ build. The case is chosen from the unrounded gaps against the ranges held in `FA
 
 The sentence, ja 「合図なしとの差（この決まり − 合図なし）は1回あたり〔gapBase〕 pips で、合図なしで入った時より低くありました。値動きに傾きのない作り物の値段10本で同じように測った差は〔baseLo〕〜〔baseHi〕 pips で、この差はその幅より下（合図なしより悪い側）でした。逆向きとの差は〔gapFlow〕 pips で、10本の幅（〔flowLo〕〜〔flowHi〕 pips）の中でした（偶然で出る幅の中なので、逆向きより良いとも悪いとも言えません）。10本の幅の外には偶然だけでも11回に約2回は出るので、幅の外に出たことも確かめ〈検定〉ではありません（作り物の値段は GMO のものではありません）。」 en "The difference from no signal (this rule less no signal) was 〔gapBase〕 pips a trade: lower than entering with no signal. The same difference measured on ten made-up price walks with no trend ranged from 〔baseLo〕 to 〔baseHi〕 pips, and this one was below that range (on the side of doing worse than no signal). The difference from the other way was 〔gapFlow〕 pips, within the walks' range (〔flowLo〕 to 〔flowHi〕 pips; a range chance alone gives, so it is not shown to do better or worse than the other way). Chance alone puts a gap outside ten walks' range about 2 times in 11, so being outside it is not a test either (the walks' prices are not GMO's)."
 
-Filled with the 15-minute numbers, ja 「合図なしとの差（この決まり − 合図なし）は1回あたり-0.90 pips で、合図なしで入った時より低くありました。値動きに傾きのない作り物の値段10本で同じように測った差は-0.80〜+2.24 pips で、この差はその幅より下（合図なしより悪い側）でした。逆向きとの差は-0.78 pips で、10本の幅（-2.25〜+5.70 pips）の中でした（偶然で出る幅の中なので、逆向きより良いとも悪いとも言えません）。10本の幅の外には偶然だけでも11回に約2回は出るので、幅の外に出たことも確かめ〈検定〉ではありません（作り物の値段は GMO のものではありません）。」 en "The difference from no signal (this rule less no signal) was -0.90 pips a trade: lower than entering with no signal. The same difference measured on ten made-up price walks with no trend ranged from -0.80 to +2.24 pips, and this one was below that range (on the side of doing worse than no signal). The difference from the other way was -0.78 pips, within the walks' range (-2.25 to +5.70 pips; a range chance alone gives, so it is not shown to do better or worse than the other way). Chance alone puts a gap outside ten walks' range about 2 times in 11, so being outside it is not a test either (the walks' prices are not GMO's)."
+Filled with the 15-minute numbers, ja 「合図なしとの差（この決まり − 合図なし）は1回あたり-0.91 pips で、合図なしで入った時より低くありました。値動きに傾きのない作り物の値段10本で同じように測った差は-0.80〜+2.24 pips で、この差はその幅より下（合図なしより悪い側）でした。逆向きとの差は-0.78 pips で、10本の幅（-2.25〜+5.70 pips）の中でした（偶然で出る幅の中なので、逆向きより良いとも悪いとも言えません）。10本の幅の外には偶然だけでも11回に約2回は出るので、幅の外に出たことも確かめ〈検定〉ではありません（作り物の値段は GMO のものではありません）。」 en "The difference from no signal (this rule less no signal) was -0.91 pips a trade: lower than entering with no signal. The same difference measured on ten made-up price walks with no trend ranged from -0.80 to +2.24 pips, and this one was below that range (on the side of doing worse than no signal). The difference from the other way was -0.78 pips, within the walks' range (-2.25 to +5.70 pips; a range chance alone gives, so it is not shown to do better or worse than the other way). Chance alone puts a gap outside ten walks' range about 2 times in 11, so being outside it is not a test either (the walks' prices are not GMO's)."
 
 (The gaps written are the unrounded differences to 2 decimals, which is how the study's print writes them,
-research/macdfade15.ts gap and `fmt`; a test pins them to −0.90 and −0.78. The walks' ranges are held as printed. The
+research/macdfade15.ts gap and `fmt`; a test pins them to −0.91 and −0.78. The walks' ranges are held as printed. The
 sentence holds 「−」 as a word, 「この決まり − 合図なし」, not as a number's sign.)
 
 ## 5. The screen and the sales page
@@ -719,7 +733,7 @@ sentence holds 「−」 as a word, 「この決まり − 合図なし」, not 
     - some pair's fade pipsMean < 0: 「5ペアのうち、1回あたりの平均がマイナスのペアがありました。」 / "On some of the five pairs its mean a trade was below zero."
     - 〔open〕 > 0 and 〔openPipsWorst〕 < 0: 「測った期間の終わりに、含み損のまま残っていた取引がありました。」 / "At the end of the period measured, some trades were still open at an unrealised loss."
     **Chosen (2026-11-19, from the printed lines; the build checks it against the ledger copy):** fade +2.41 is not
-    below 0; it is below base +3.31 and below flow +3.19; AUD/JPY's fade −0.82 is below 0; 80 trades were open with the
+    below 0; it is below base +3.32 and below flow +3.19; AUD/JPY's fade −0.82 is below 0; 80 trades were open with the
     worst at −1,913.4. So the last four are met.
     〔adverse〕 = ja「合図なしで入った時より、1回あたりの平均が低くありました。同じ合図で逆向きに入った時より、1回あたりの平均が低くありました。5ペアのうち、1回あたりの平均がマイナスのペアがありました。測った期間の終わりに、含み損のまま残っていた取引がありました。」
     en "Its mean a trade was below entering with no signal. Its mean a trade was below entering the other way on the same signals. On some of the five pairs its mean a trade was below zero. At the end of the period measured, some trades were still open at an unrealised loss."
@@ -737,9 +751,9 @@ sentence holds 「−」 as a word, 「この決まり − 合図なし」, not 
 
 ### 6.1 Preconditions
 
-- **The numbers are in** (6.3 step 1a): research/ledger/macdfade15-summary.json passed the checks of 4.5 (its sha256
-  with the `tf` line removed is run 44077464383's; rows.csv's too; the walks' ranges as printed), and `FADE_MEASURED`
-  holds its values.
+- **The numbers are in** (6.3 step 1a): research/ledger/macdfade15-summary.json passed the checks of 4.5 (it is run
+  44535888012's, `eacb7815…`, and without its `tf` line `74a4a230…`; rows.csv `b73115a0…`; the walks' ranges as
+  printed), and `FADE_MEASURED` holds its values.
 - **The shares are fitted** (6.3 step 1b): the probe's shapes and times are written in 3.3 (no price, 3.3), and 3.3
   items 3-6 match them (or are changed to match them, with this file corrected first).
 - **The study check passed on the 15-minute real run** (7.2) on the function's branch **at the function PR's final head
@@ -954,7 +968,9 @@ as research/macdfade1h-prod-spec.md 7.2.
 In .github/workflows/macdfade15.yml the four study-check steps (:119-124, :133-138, :164-169, :254-262) run when `TF`
 is `1h` or `15min` (share 0.96, take profit 10). The real job's step stops unless summary.json is the run of record:
 on `1h`, sha256 `60edab22…a9e2` as today; on `15min`, the sha256 of the file with the bytes `,\n  "tf": "15min"`
-removed must be `76c86aa8…1e61e0` (4.5), and, once the ledger copy exists, the whole file's sha256 must be the copy's.
+removed must be `74a4a230…c888b` (run 44535888012's, 4.5), and the whole file's sha256 must be the ledger copy's. On
+`15min` the real job restores run 44535888012's cache (`gmo-macdfade15-44535888012`) last, over the branch's caches,
+so the three GMO files that were kept short there are read whole; if that cache is gone, the check stops the job.
 The syn job's 15-minute period is the workflow's (:93-95).
 
 ### 7.3 The morning check of the new form (`pairs-v12` / `gold-v12` / `stocks-v12`; README v12)
@@ -1000,12 +1016,13 @@ Built from v7's 15-minute parts and v11's fade parts (scripts/morning-check/src/
 
 ## 8. Not measured, not checked
 
-- **Measured, now in this file:** the five pairs' numbers of this form on 15-minute bars (the study's real run 44077464383,
-  recorded in research/macdfade15-spec.md :406-436; the numbers here are the job's printed lines). The fade did worse a
-  trade than no signal (−0.90, below ten walks' range) and than the other way (−0.78, inside its range); ten walks give
+- **Measured, now in this file:** the five pairs' numbers of this form on 15-minute bars (the study's re-run 44535888012,
+  recorded in research/macdfade15-spec.md :442-500, its summary.json in research/ledger/; the first run 44077464383
+  read three short GMO files). The fade did worse a
+  trade than no signal (−0.91, below ten walks' range) and than the other way (−0.78, inside its range); ten walks give
   a range, not a test.
-- **Not in the repository yet:** the 15-minute summary.json (4.5 brings it), its null.json and rows.csv (their sha256
-  are recorded or will be).
+- **In the repository:** the 15-minute summary.json (research/ledger/macdfade15-summary.json). **Not:** its null.json and
+  rows.csv (their sha256 are recorded in research/macdfade15-spec.md :442-500).
 - **Not measured:**
   - Gold and the shares with this form (the study has no bid and ask minutes for them).
   - The shares' 15-minute bars as Yahoo gives them: the rows of `15m` over `60d` (600 closed bars are assumed to fit:
@@ -1043,7 +1060,10 @@ Built from v7's 15-minute parts and v11's fade parts (scripts/morning-check/src/
     closing-price sentences hold (3.3 item 6).
   - Which `macdx` / `stockmacd` rows will be ticked or unticked between the twins and v41's first answer, or under v41
     before a rollback (3.6 and 6.4 reconcile them; the counts are read then).
-  - Whether a re-run of the 15-minute study gives run 44077464383's files (4.5 stops if not).
+  - Whether a re-run of the 15-minute study on the branch gives run 44535888012's file (7.2 stops if not; it rests on
+    that run's cache, which GitHub drops after 7 days unused).
+  - The 1-hour run of v40's numbers (44099401423) read the same three short GMO files (23 bars with no minute on the
+    same pairs); it was not re-run, so how much v40's measured paragraph would move is not measured.
   - Whether production's GMO 15-minute bars equal the study's loader's (the study check ties the shipped function to
     the study on the study's files only).
   - Who follows which chart, and how many `macdx` / `stockmacd` rows there are on which interval (production not read);
@@ -1089,7 +1109,8 @@ Built from v7's 15-minute parts and v11's fade parts (scripts/morning-check/src/
    trade and the BUYs +6.29. The gap to no signal (−0.90) is below what ten made-up price walks gave; that is not a test, but it
    points the wrong way. On 1-hour bars the fade was about the same as no signal (+3.26 against +3.20). The emails and
    the screen will say this plainly. This spec goes ahead on 15-minute bars as asked; please say if you want to stay on
-   1-hour bars after seeing these numbers.
+   1-hour bars after seeing these numbers. (As asked, from the first run; the re-run of 2026-11-19 on whole GMO files
+   moved no-signal to +3.32 and the gap to −0.91, the rest the same; the owner was told.)
 
    **The question as put to the owner (in Japanese, CLAUDE.md; the same numbers, from research/macdfade15-spec.md
    :416-436 and research/ledger/macdfade1h-summary.json):**

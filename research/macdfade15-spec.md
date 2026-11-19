@@ -405,6 +405,10 @@ week earlier) printed it as one base64 line, decoded into research/ledger/macdfa
 
 ## Result of the real run (2026-11-17, Actions run 44077464383, commit fff5ddb)
 
+**Superseded for the email's numbers (2026-11-19)** by "Result of the re-run on GMO's files read afresh" below: this run
+read three GMO 1-minute day files that had been kept cut short (2025-06-20, 59 bars instead of 1,440). The 92 bars with
+no minute below are those files.
+
 The syn job passed (the walks' checks, walks 1 and 2 read back byte for byte, the Python on them, the untidy walk and
 the Python on it). The real run read GMO's files (21,250 files: 21,030 from the caches, 220 fetched, none failed) and
 the Python agreed with every row and number (12,012 rows, 180,850 cells and fields; `PYTHON AGREES`), and again with
@@ -433,6 +437,65 @@ the artifact host, so the numbers below are copied from the job's printed lines)
   range is not a test (about 2 times in 11 by chance alone).
 - With `END` a week earlier (2026-11-03T21:00Z): fade 5,968 trades, 98.7%, open 80, +1.96 a trade (open sum
   −47,194.0); flow +2.73; base +2.97.
+- Orders not filled: 0 (in at the bar's close).
+
+## Result of the re-run on GMO's files read afresh (2026-11-19, Actions run 44535888012, main 9ca2054)
+
+The 15-minute run for the email's numbers (research/macdfade15min-prod-spec.md 4.5): a `workflow_dispatch` with `tf`
+`15min` on main, whose caches did not hold the branch's files, so the study read GMO's files from main's caches and
+fetched the rest (its study step took 10 min 52 s; the branch's run 44537377516, on the branch's caches, took 53 s). The
+code is run 44077464383's but for 53f7003, which added `tf` to the summary's `meta` and nothing else on 15-minute bars
+(walks: byte for byte; research/macdfade15.ts and its imports otherwise unchanged since fff5ddb). The syn job passed, the
+Python agreed with every row and number, and again with `END` a week earlier.
+
+**Why the numbers differ from run 44077464383.** The two runs' caches were restored side by side (Actions run
+44546585012, .github/workflows/gmo-cache-diff.yml; no price printed): of the 21,250 GMO day files both runs read, 21,247
+hold the same bars and status (12,920 the same bytes; 8,327 answered again by GMO, so other `responsetime` bytes); three
+differ, all 1-minute files of GMO's day 2025-06-20 (a Friday): AUD_JPY bid, EUR_USD bid and USD_JPY ask. The branch's
+copies hold 59 bars, main's 1,440; the 59 are among the 1,440 with the same values. Both copies were made by GMO on
+2025-06-22 at 22:00 UTC, so the loader's whole-file test (research/ownerhold-data.ts `wholeDayFile`: made after the day
+ended) took the short ones as whole. With one side's minutes missing for 1,381 minutes, 92 of that day's 15-minute bars
+had no minute on those three pairs (`closeVsMinute.noMinute` 92 in run 44077464383, 0 here), and every number below that
+reads those minutes moved:
+- the baseline gains 92 bars on each of the three pairs (184 trades each, 552 in all: 704,078 → 704,630); its mean a
+  trade +3.311 → +3.316 (by pair: USD/JPY +5.685 → +5.691, AUD/JPY −0.312 → −0.298, EUR/USD +2.591 → +2.601);
+- the fade's and the flow's trades, take-profit counts, open trades, pips (sums and means), open sums, worst, longest
+  and mae max are unchanged; the minutes to the target of the trades open over that day are shorter (fade: median 144 →
+  143, P90 5,740 → 5,681; flow: P90 5,736 → 5,707), and so are a few within-1-hour / within-1-day counts and medians by
+  pair or side (`dirs.fade.SELL.maeMedian` 12.1 → 12.05; `dirs.fade["USD/JPY"].maeP90` 114.3 → 113.6);
+- the entries on a bar with no minute: 6 → 0 (USD/JPY 2, AUD/JPY 3, EUR/USD 1).
+Every changed value is listed by the comparison of the two summary.json files (research/ledger/macdfade15-summary.json
+against run 44537377516's copy, which equals run 44077464383's without its `tf` line). The 1-hour run 44099401423 (v40's
+numbers) read the same short files (its 23 bars with no minute on the same three pairs); it is not re-run here.
+
+Files: rows.csv sha256 `b73115a0668b3c50b76f2f4507095adac8423e7ae08a9d68a5309d6cddfb0f37`, summary.json sha256
+`eacb7815d7779be716b24e559c0aea139e6455910abcf4b1ec59ab4d8c5eb188` (16,817 bytes; without the bytes `,\n  "tf": "15min"`
+`74a4a230a291d68a8e8169ea293a5428f46863ffc0ed86804522f4f509cc888b`), null.json
+`a0d390456ebc5ce5747bc88623dc756440165b55e19a2689c44041c7c1d6791e`, the run a week earlier: rows.csv
+`12673c1be727ded8f14c3fdf756d5aa6f65bf6a8a2dd7d24ead2e0e4c439d1a8`, summary.json
+`505e4fe7b90307f1b42a5d11f8de157cfe086879223ce7784a354d592c4086b6`. summary.json is in the repository:
+research/ledger/macdfade15-summary.json, decoded from the job's base64 line, the same sha256.
+
+- GMO's 15-minute close equalled the last 1-minute close inside the bar in every bar (differ 0, no minute 0, on all
+  five pairs). `prevAt` 0, `short` 0, `zoneless` 0 on every pair.
+- Signals 6,009: entries 6,006, `notMailed` 3 (USD/JPY, AUD/JPY, AUD/USD one each).
+- Take profit 10, no stop, from 2024-01-01 to 2026-11-10T21:00Z (open trades valued at the last minute loaded):
+
+| all | trades | tp | open | pips a trade | open: sum / mean / worst | mae median / P90 / max | tp minutes median / P90 / max | open longest (min) |
+|---|---|---|---|---|---|---|---|---|
+| fade | 6,006 | 5,926 (98.7%) | 80 | +2.41 | −44,784.5 / −559.81 / −1,913.4 | 11.9 / 104.0 / 2,975.8 | 143 / 5,681 / 784,561 | 959,205 |
+| flow | 6,006 | 5,945 (99.0%) | 61 | +3.19 | −40,269.4 / −660.15 / −2,249.7 | 12.0 / 98.2 / 3,312.1 | 148 / 5,707 / 804,937 | 916,245 |
+| base | 704,630 | 696,317 (98.8%) | 8,313 | +3.32 | −4,626,320.8 / −556.52 / −2,284.1 | 13.1 / 106.1 / 3,309.9 | 219 / 6,093 / 1,046,557 | 1,131,209 |
+
+- Fade a trade by pair (base): USD/JPY +2.67 (+5.69), EUR/JPY +1.29 (+3.41), AUD/JPY −0.82 (−0.30), EUR/USD +3.86
+  (+2.60), AUD/USD +4.94 (+5.18). Fade by side: bottom (BUY) 2,956 trades +6.29, open 28; top (SELL) 3,050 trades
+  −1.35, open 52.
+- Gaps against the ten driftless walks (the walks are the generator's, the same as before): fade − base −0.91 pips a
+  trade (walks −0.80..+2.24: below their range), −0.15 points of tp share (walks −0.31..+0.23: inside); fade − flow
+  −0.78 pips a trade (walks −2.25..+5.70: inside). The same reading as before: the fade did not do better than entering
+  with no signal, and a gap outside ten walks' range is not a test.
+- With `END` a week earlier (2026-11-03T21:00Z): fade 5,968 trades, 98.7%, open 80, +1.96 a trade (open sum
+  −47,194.0); flow +2.73; base +2.98.
 - Orders not filled: 0 (in at the bar's close).
 
 ## Not measured here

@@ -22,8 +22,8 @@
 # after each walk's study in syn and after the Python in real, research/macdfade-prod-check.ts runs the code the email
 # ships (_shared/macd-fade.ts fadeCloseEntryAt, signal-alerts/indicators.ts ridePaidAt) on the same files and holds its
 # entries against the study's rows.csv and summary.json; the real job also stops unless summary.json is the run of
-# record (1h: run 44099401423's; 15min: run 44077464383's with the tf line taken out, and the ledger copy once it
-# exists). Those steps run for the email's rule only (TF 1h or 15min, share 0.96, take profit 10); a dispatch with
+# record (1h: run 44099401423's; 15min: main's run 44535888012's, with the tf line taken out and whole against the
+# ledger copy; its own cache is restored last on 15min, below). Those steps run for the email's rule only (TF 1h or 15min, share 0.96, take profit 10); a dispatch with
 # other values measures something else and skips them.
 #
 # GitHub's runners reach GMO's public price API, which the development container cannot. Read-only: public files
@@ -231,6 +231,16 @@ jobs:
           path: research/.cache
           key: gmo-macdfade15-none
           restore-keys: gmo-macdfade15-
+      # 15min (research/macdfade15-spec.md "Result of the re-run on GMO's files read afresh"): the 15-minute run of record
+      # is main's run 44535888012. The branch's caches hold three GMO 1-minute day files of 2025-06-20 cut short (59 bars
+      # instead of 1,440: AUD_JPY bid, EUR_USD bid, USD_JPY ask; gmo-cache-diff run 44546585012); that run's own cache,
+      # restored last by its exact key (main's caches are readable from a branch), puts the whole files over them. If it
+      # is gone (GitHub drops a cache unused for 7 days), the short files stay and the check below stops the job.
+      - if: env.TF == '15min'
+        uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-macdfade15-44535888012
       - name: The study (its numbers go to files; none printed here)
         env:
           MODE: real
@@ -252,9 +262,10 @@ jobs:
       # research/macdfade1h-prod-spec.md 7.2 (1h) and research/macdfade15min-prod-spec.md 7.2 and 4.5 (15min): the
       # shipped function on GMO's same files gives the study's entries (the files the study read or fetched into
       # research/.cache, read only here), and this run's summary.json is the run of record whose numbers fill
-      # FADE_MEASURED: on 1h run 44099401423's; on 15min run 44077464383's once the bytes ',\n  "tf": "15min"' (53f7003
-      # added tf to meta) are taken out, and, once research/ledger/macdfade15-summary.json exists, that copy byte for
-      # byte; either failing stops the job
+      # FADE_MEASURED: on 1h run 44099401423's; on 15min main's run 44535888012's (research/macdfade15-spec.md "Result of
+      # the re-run on GMO's files read afresh": run 44077464383's files had three GMO 1-minute day files cut short),
+      # checked once without the bytes ',\n  "tf": "15min"' (53f7003 added tf to meta) and once whole against its copy
+      # research/ledger/macdfade15-summary.json; either failing stops the job
       - name: The shipped function against the study (research/macdfade-prod-check.ts); summary.json must be the run of record
         if: (env.TF == '1h' || env.TF == '15min') && env.SHARE == '0.96' && env.TP == '10'
         env:
@@ -273,10 +284,10 @@ jobs:
           else
             got=$(sha256sum < $OUT/summary.json | cut -d' ' -f1)
             stripped=$(python3 -I -c 'import sys; b = open(sys.argv[1], "rb").read(); t = b",\n  \"tf\": \"15min\""; assert b.count(t) == 1, "the tf line is not there once"; sys.stdout.write(__import__("hashlib").sha256(b.replace(t, b"")).hexdigest())' $OUT/summary.json)
-            want=76c86aa8fa1e4bce9e8ea77418bd32cd043166a5a420a2958747943f932a61e0
-            echo "summary.json sha256 $got; without its tf line $stripped (run 44077464383's: $want)"
+            want=74a4a230a291d68a8e8169ea293a5428f46863ffc0ed86804522f4f509cc888b
+            echo "summary.json sha256 $got; without its tf line $stripped (run 44535888012's: $want)"
             if [ "$stripped" != "$want" ]; then
-              echo "summary.json without its tf line is not run 44077464383's: GMO's files are not that run's, these are new numbers (research/macdfade15min-prod-spec.md 4.5 step 4): stop"
+              echo "summary.json without its tf line is not run 44535888012's: GMO's files are not that run's (its cache gone, or GMO changed a file), these are new numbers (research/macdfade15min-prod-spec.md 4.5 step 4): stop"
               exit 1
             fi
             if [ -f research/ledger/macdfade15-summary.json ]; then
@@ -287,7 +298,7 @@ jobs:
                 exit 1
               fi
             fi
-            echo "summary.json is run 44077464383's (with its tf line)"
+            echo "summary.json is run 44535888012's (with its tf line)"
           fi
       # the same study with END a week earlier (the files already kept), and the Python on it: how much the mean a
       # trade moves with the last minute's price (research/macdfade15-spec.md "How it is measured")
