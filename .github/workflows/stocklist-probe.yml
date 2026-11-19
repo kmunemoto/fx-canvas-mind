@@ -1,0 +1,156 @@
+# #92 (all shares): reads the public lists of listed shares the app could
+# take its all-shares list from, and prints what they hold, so the spec is
+# written from the files themselves: Tokyo's (JPX's 東証上場銘柄一覧, monthly,
+# Japanese and English names) and the US's (Nasdaq Trader's symbol directory,
+# nasdaqlisted.txt and otherlisted.txt, updated through each day). The
+# development container cannot reach these hosts; GitHub's runners can.
+#
+# Read-only: public URLs only, no account, no key and no secret. Writes
+# nothing to the repository and nothing to any database.
+name: Read the listed-shares lists
+
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - .github/workflows/stocklist-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Tools
+        run: pip install -q openpyxl
+      - name: Read the lists
+        run: |
+          python3 - <<'PY'
+          import collections, gzip, io, json, re, urllib.request
+          import openpyxl
+
+          UA = "Mozilla/5.0 (compatible; list-check)"
+          def get(url):
+              req = urllib.request.Request(url, headers={"User-Agent": UA})
+              with urllib.request.urlopen(req, timeout=60) as r:
+                  return r.read(), dict(r.headers)
+          def head(h):
+              return {k: h[k] for k in h if k.lower() in ("content-type", "content-length", "last-modified", "etag", "date")}
+
+          # the app's symbol rules (supabase/functions/live-chart/stocks.ts)
+          US_SYMBOL = re.compile(r"^[A-Z]{1,5}(-[A-Z]{1,2})?$")
+          JP_CODE = re.compile(r"^[0-9][0-9A-Z]{3}$")
+
+          def sheet_rows(body):
+              wb = openpyxl.load_workbook(io.BytesIO(body), read_only=True, data_only=True)
+              print("  sheets:", wb.sheetnames)
+              ws = wb[wb.sheetnames[0]]
+              rows = [list(r) for r in ws.iter_rows(values_only=True)]
+              return rows
+
+          print("=" * 100)
+          jp = {}
+          for lang, url in (("ja", "https://www.jpx.co.jp/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_j.xlsx"),
+                            ("en", "https://www.jpx.co.jp/english/markets/statistics-equities/misc/tvdivq0000001vg2-att/data_e.xlsx")):
+              print("JPX", lang, url)
+              try:
+                  body, h = get(url)
+              except Exception as e:
+                  print("  failed:", e)
+                  continue
+              print("  bytes:", len(body), "headers:", head(h))
+              rows = sheet_rows(body)
+              print("  rows (with header):", len(rows))
+              print("  header:", rows[0])
+              for r in rows[1:6]:
+                  print("  row:", r)
+              print("  last row:", rows[-1])
+              hdr = rows[0]
+              data = [r for r in rows[1:] if any(v is not None for v in r)]
+              # the column that holds the market / product kind (3rd column in the JA file)
+              for i, name in enumerate(hdr):
+                  vals = collections.Counter(str(r[i]) for r in data if i < len(r))
+                  if 1 < len(vals) <= 40:
+                      print(f"  column {i} {name!r}: {len(vals)} values")
+                      for v, n in vals.most_common():
+                          print(f"    {n:6d}  {v}")
+              codes = [str(r[1]).strip() for r in data]
+              bad = [c for c in codes if not JP_CODE.match(c)]
+              print("  codes:", len(codes), "not matching the app's Tokyo code rule:", len(bad), bad[:20])
+              jp[lang] = {str(r[1]).strip(): r for r in data}
+          if "ja" in jp and "en" in jp:
+              a, b = set(jp["ja"]), set(jp["en"])
+              print("JPX ja vs en codes: ja", len(a), "en", len(b), "both", len(a & b), "ja only", sorted(a - b)[:20], "en only", sorted(b - a)[:20])
+
+          print("=" * 100)
+          us = {}
+          for name in ("nasdaqlisted.txt", "otherlisted.txt"):
+              url = "https://www.nasdaqtrader.com/dynamic/SymDir/" + name
+              print("NASDAQ TRADER", url)
+              try:
+                  body, h = get(url)
+              except Exception as e:
+                  print("  failed:", e)
+                  continue
+              print("  bytes:", len(body), "headers:", head(h))
+              lines = body.decode("utf-8", errors="replace").splitlines()
+              hdr = lines[0].split("|")
+              print("  header:", hdr)
+              print("  footer:", lines[-1])
+              rows = [dict(zip(hdr, l.split("|"))) for l in lines[1:] if not l.startswith("File Creation Time")]
+              print("  data rows:", len(rows))
+              for r in rows[:3]:
+                  print("  row:", r)
+              for col in hdr:
+                  vals = collections.Counter(r.get(col, "") for r in rows)
+                  if 1 < len(vals) <= 20:
+                      print(f"  column {col!r}: " + ", ".join(f"{v}={n}" for v, n in vals.most_common()))
+              us[name] = rows
+
+          if us:
+              print("=" * 100)
+              print("US candidates (not a test issue, not an ETF)")
+              kinds = collections.Counter()
+              out = []
+              for name, rows in us.items():
+                  for r in rows:
+                      sym = r.get("Symbol") or r.get("ACT Symbol") or ""
+                      sname = r.get("Security Name", "")
+                      if r.get("Test Issue") == "Y" or r.get("ETF") == "Y":
+                          kinds["test or ETF"] += 1
+                          continue
+                      ysym = sym.replace(".", "-")
+                      low = sname.lower()
+                      kind = ("warrant" if "warrant" in low else "right" if re.search(r"\bright", low) else "unit" if re.search(r"\bunits?\b", low)
+                              else "preferred" if "preferred" in low or "depositary shares" in low and "preferred" in low else
+                              "note/debenture" if re.search(r"\bnotes?\b|debenture", low) else "adr" if "american depositary" in low or " ads" in low
+                              else "common" if "common" in low or "ordinary" in low or "class a" in low or "class b" in low else "other")
+                      kinds[kind] += 1
+                      ok = bool(US_SYMBOL.match(ysym))
+                      kinds[f"{kind} / app rule {'ok' if ok else 'no'}"] += 1
+                      if ok:
+                          out.append({"symbol": ysym, "en": sname})
+              for k, n in sorted(kinds.items()):
+                  print(f"  {n:6d}  {k}")
+              others = [r for rows in us.values() for r in rows if r.get("Test Issue") != "Y" and r.get("ETF") != "Y"]
+              print("  symbols with a dot or other mark (first 30):", [r.get("Symbol") or r.get("ACT Symbol") for r in others if not re.match(r"^[A-Z]+$", r.get("Symbol") or r.get("ACT Symbol") or "")][:30])
+              print("  'other' kind names (first 30):")
+              n = 0
+              for r in others:
+                  low = r.get("Security Name", "").lower()
+                  if not any(w in low for w in ("common", "ordinary", "class a", "class b", "warrant", "right", "unit", "preferred", "note", "debenture", "depositary")):
+                      print("    ", r.get("Symbol") or r.get("ACT Symbol"), "|", r.get("Security Name"))
+                      n += 1
+                      if n >= 30:
+                          break
+              raw = json.dumps(out, ensure_ascii=False).encode()
+              print("  US list as JSON (symbol, en), app rule ok:", len(out), "rows,", len(raw), "bytes,", len(gzip.compress(raw)), "gzip bytes")
+          if "ja" in jp:
+              ja = [{"symbol": c + ".T", "ja": str(r[2]).strip(), "en": str(jp.get("en", {}).get(c, [None, None, ""])[2] or "").strip()} for c, r in jp["ja"].items()]
+              raw = json.dumps(ja, ensure_ascii=False).encode()
+              print("  JP list as JSON (symbol, ja, en), every row:", len(ja), "rows,", len(raw), "bytes,", len(gzip.compress(raw)), "gzip bytes")
+          PY
