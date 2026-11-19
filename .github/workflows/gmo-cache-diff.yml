@@ -1,0 +1,88 @@
+# research/macdfade15min-prod-spec.md 4.5 step 4: two runs of the 15-minute study on the same code gave different
+# numbers (run 44077464383, read again by the branch's run 44537377516 from the branch's caches; and main's run
+# 44535888012, whose caches were main's or fetched afresh): 92 15-minute bars with no 1-minute data on three pairs in the
+# first, none in the second. This restores the two runs' saved caches side by side and prints which GMO day files
+# differ: their paths, GMO's status, the number of bars in each, and when GMO answered (responsetime). No price is
+# printed. Read only: it writes nothing to the repository and saves no cache.
+name: gmo-cache-diff
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - .github/workflows/gmo-cache-diff.yml
+  workflow_dispatch:
+    inputs:
+      a:
+        description: "The first cache's key (exact)"
+        required: false
+        default: "gmo-macdfade15-44537377516"
+      b:
+        description: "The second cache's key (exact)"
+        required: false
+        default: "gmo-macdfade15-44535888012"
+permissions:
+  contents: read
+  actions: read
+jobs:
+  diff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      A: ${{ github.event.inputs.a || 'gmo-macdfade15-44537377516' }}
+      B: ${{ github.event.inputs.b || 'gmo-macdfade15-44535888012' }}
+    steps:
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: ${{ env.A }}
+          fail-on-cache-miss: true
+      - run: mkdir -p "$RUNNER_TEMP/a" && mv research/.cache "$RUNNER_TEMP/a/cache"
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: ${{ env.B }}
+          fail-on-cache-miss: true
+      - run: mkdir -p "$RUNNER_TEMP/b" && mv research/.cache "$RUNNER_TEMP/b/cache"
+      - name: Which day files differ (paths, status, bars, responsetime; no price)
+        run: |
+          python3 -I - "$RUNNER_TEMP/a/cache" "$RUNNER_TEMP/b/cache" <<'PY'
+          import collections, hashlib, json, os, sys
+          a_root, b_root = sys.argv[1], sys.argv[2]
+          a_key, b_key = os.environ["A"], os.environ["B"]
+          def files(root):
+              out = {}
+              for d, _, fs in os.walk(root):
+                  for f in fs:
+                      p = os.path.join(d, f)
+                      out[os.path.relpath(p, root)] = p
+              return out
+          A, B = files(a_root), files(b_root)
+          print(f"A {a_key}: {len(A)} files; B {b_key}: {len(B)} files")
+          def info(p):
+              try:
+                  j = json.load(open(p))
+              except Exception as e:
+                  return f"unreadable ({type(e).__name__})"
+              data = j.get("data")
+              n = len(data) if isinstance(data, list) else None
+              return f"status {j.get('status')} bars {n} responsetime {j.get('responsetime')}"
+          only_a = sorted(set(A) - set(B))
+          only_b = sorted(set(B) - set(A))
+          both = sorted(set(A) & set(B))
+          differ = [k for k in both if hashlib.sha256(open(A[k], "rb").read()).digest() != hashlib.sha256(open(B[k], "rb").read()).digest()]
+          by_dir = lambda ks: collections.Counter(os.path.dirname(k) for k in ks)
+          print(f"in both {len(both)}, of them differing {len(differ)}; only in A {len(only_a)}; only in B {len(only_b)}")
+          for name, ks in (("only in A", only_a), ("only in B", only_b), ("differing", differ)):
+              print(f"== {name}: {len(ks)} by folder: {dict(sorted(by_dir(ks).items()))}")
+          print("== the differing files (A | B):")
+          for k in differ[:200]:
+              print(f"  {k}: A {info(A[k])} | B {info(B[k])}")
+          if len(differ) > 200:
+              print(f"  ... {len(differ) - 200} more not printed")
+          for name, ks, side in (("only in A", only_a, A), ("only in B", only_b, B)):
+              print(f"== {name} (first 60; 1-minute files first):")
+              ks2 = sorted(ks, key=lambda k: (("/1min/" not in k), k))
+              for k in ks2[:60]:
+                  print(f"  {k}: {info(side[k])}")
+          PY
