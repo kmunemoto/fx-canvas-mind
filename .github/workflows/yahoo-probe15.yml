@@ -2,19 +2,26 @@
 # 15-minute answer (interval=15m&range=60d, as live-chart/stocks.ts yahooChartUrl reads it) stamps a share's bars,
 # around the times the email judges them: one US share and two Tokyo shares.
 #
-# Each read prints, per share: the answer's size and row count, regularMarketTime, the meta's currentTradingPeriod,
-# and the last rows (UTC and the market's local time: open, high, low, close, volume, so a closing point of volume 0,
-# Tokyo's 11:30 row and its lunch nulls show). The first read also prints the last two sessions whole, in date order.
-# The last read prints each share's whole answer with range=5d (gzip, base64, one line) for the tests' fixtures
-# (research/ledger/), with its sha256.
+# This repository is public, so its Actions logs are too, and Yahoo's terms say 「You must not redistribute information
+# displayed on or provided by Yahoo Finance」 (help.yahoo.com/kb/SLN2310.html). So no price, no volume and no answer is
+# printed: only the rows' times and shapes (a row with a price or null; one price, open = high = low = close; volume 0
+# or not) and how prices compare (equal or not; inside a bar's low..high or not), and the answers' times (the meta's
+# regularMarketTime, currentTradingPeriod, tradingPeriods). The tests build their answers from these shapes with made-up
+# prices. (The first two runs, 44535921376 and 44536526466, printed prices and the whole 5-day answers.)
+#
+# Each read prints, per share: the row count, regularMarketTime, currentTradingPeriod.regular, and the last 6 rows'
+# shapes. The first read also prints the last two sessions whole, in date order, and how the answer's previousClose
+# (the close of the day before the latest) compares with that day's last bars. The last read prints each share's
+# range=5d answer's skeleton (one JSON line: the meta's times, the stamps, and per row: priced, one price, volume 0)
+# for the tests' fixtures.
 #
 # Inputs: `at`, a UTC time HH:MM to wait for first (empty: read at once; the job waits at most 5.5 hours); `reads`,
 # the seconds after `at` to read at, comma separated (default one read); `symbols`.
 #
-# 2026-11-19 (28ae95d's first run, 44535921376): Tokyo's morning ends with an 11:30 row of one price and some volume,
-# then null rows to 12:15, the afternoon's first bar stamped 12:30; New York's latest finished session ends with a
-# 16:00 point of volume 0. The first version chose "the last three sessions" by the weekday's name (three Wednesdays):
-# sessions are now taken in date order.
+# Seen so far (2026-11-19): Tokyo's morning ends with an 11:30 row of one price and some volume (in older sessions too),
+# then null rows to 12:15, the afternoon's first bar stamped 12:30; the latest finished session (only it) ends with a
+# closing point of one price and volume 0 (New York 16:00, Tokyo 15:30) at regularMarketPrice. The answer's
+# previousClose is not the close of that day's last 15-minute bar (Tokyo: outside that bar's low..high).
 name: yahoo-probe15
 on:
   push:
@@ -43,14 +50,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
-      - name: Read 15-minute bars around the given time
+      - name: Read 15-minute bars around the given time (shapes and times only)
         env:
           AT: ${{ github.event.inputs.at || '' }}
           READS: ${{ github.event.inputs.reads || '0' }}
           SYMBOLS: ${{ github.event.inputs.symbols || 'AAPL,7203.T,6758.T' }}
         run: |
           python3 - <<'PY'
-          import base64, datetime, gzip, hashlib, json, os, time, urllib.request
+          import datetime, json, os, time, urllib.request
           utc = datetime.timezone.utc
           now = lambda: datetime.datetime.now(utc)
           def fmt(s, off):
@@ -58,6 +65,19 @@ jobs:
           def get(sym, rng):
               url = f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=15m&range={rng}&includePrePost=false"
               return urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=30).read()
+          def shape(q, i):
+              o, h, l, c, v = (q[k][i] for k in ("open", "high", "low", "close", "volume"))
+              if None in (o, h, l, c):
+                  return "null"
+              one = "one price" if eq(o, h) and eq(h, l) and eq(l, c) else "range"
+              vol = "v 0" if v == 0 else "v >0" if v else "v null"
+              return f"{one}, {vol}"
+          # Yahoo's prices are binary floats (352.45001220703125 for 352.45): equal within half a tenth of a cent
+          EPS = 0.0005
+          def eq(a, b):
+              return a is not None and b is not None and abs(a - b) < EPS
+          def inside(q, i, x):
+              return q["low"][i] is not None and q["low"][i] - EPS <= x <= q["high"][i] + EPS
           syms = [s.strip() for s in os.environ["SYMBOLS"].split(",") if s.strip()]
           reads = sorted({int(x) for x in os.environ["READS"].split(",") if x.strip()})
           at = os.environ["AT"].strip()
@@ -82,36 +102,60 @@ jobs:
                       raw = get(sym, "60d")
                       r = json.loads(raw)["chart"]["result"][0]
                   except Exception as e:
-                      print(sym, "unreadable", e, flush=True)
+                      print(sym, "unreadable", type(e).__name__, flush=True)
                       continue
                   m = r["meta"]; ts = r.get("timestamp", []); q = r["indicators"]["quote"][0]
                   off = m.get("gmtoffset", 0)
                   rmt = m.get("regularMarketTime")
+                  rmp = m.get("regularMarketPrice")
                   reg = (m.get("currentTradingPeriod") or {}).get("regular") or {}
-                  print(f"== {sym}: {len(ts)} rows, {len(raw)} bytes; regularMarketTime {rmt and fmt(rmt, 0)} UTC ({rmt and fmt(rmt, off)} local) price {m.get('regularMarketPrice')}; currentTradingPeriod.regular {reg.get('start') and fmt(reg['start'], 0)} .. {reg.get('end') and fmt(reg['end'], 0)} UTC", flush=True)
-                  row = lambda i: f"  {fmt(ts[i], 0)} UTC | {fmt(ts[i], off)} local | o {q['open'][i]} h {q['high'][i]} l {q['low'][i]} c {q['close'][i]} v {q['volume'][i]}"
+                  print(f"== {sym}: {len(ts)} rows; regularMarketTime {rmt and fmt(rmt, 0)} UTC ({rmt and fmt(rmt, off)} local); currentTradingPeriod.regular {reg.get('start') and fmt(reg['start'], 0)} .. {reg.get('end') and fmt(reg['end'], 0)} UTC", flush=True)
+                  def row(i):
+                      s = f"  {fmt(ts[i], 0)} UTC | {fmt(ts[i], off)} local | {shape(q, i)}"
+                      c = q["close"][i]
+                      if c is not None and i > 0:
+                          j = i - 1
+                          while j >= 0 and q["close"][j] is None:
+                              j -= 1
+                          if j >= 0:
+                              s += f" | close = the priced row before's close: {eq(c, q['close'][j])}; inside its low..high: {inside(q, j, c)}"
+                      if c is not None and rmp is not None:
+                          s += f" | close = regularMarketPrice: {eq(c, rmp)}"
+                      return s
+                  days = []
+                  for t0 in ts:
+                      dk = datetime.datetime.fromtimestamp(t0 + off, utc).date()
+                      if not days or days[-1] != dk:
+                          days.append(dk)
                   if k == 0:
-                      days = []
-                      for t0 in ts:
-                          dk = datetime.datetime.fromtimestamp(t0 + off, utc).date()
-                          if not days or days[-1] != dk:
-                              days.append(dk)
                       keep = set(days[-2:])
                       print(f"  sessions {len(days)}; the last two whole ({', '.join(str(x) for x in days[-2:])}):", flush=True)
                       for i, t0 in enumerate(ts):
                           if datetime.datetime.fromtimestamp(t0 + off, utc).date() in keep:
                               print(row(i), flush=True)
+                      pc = m.get("previousClose")
+                      if pc is not None and len(days) >= 2:
+                          prev = [i for i, t0 in enumerate(ts) if datetime.datetime.fromtimestamp(t0 + off, utc).date() == days[-2] and q["close"][i] is not None]
+                          for i in prev[-2:]:
+                              print(f"  previousClose against {fmt(ts[i], off)} local ({shape(q, i)}): equal to its close {eq(pc, q['close'][i])}; inside its low..high {inside(q, i, pc)}", flush=True)
                   else:
                       print("  the last 6 rows:", flush=True)
                       for i in range(max(0, len(ts) - 6), len(ts)):
                           print(row(i), flush=True)
                   if k == len(reads) - 1:
                       try:
-                          raw5 = get(sym, "5d")
-                          z = base64.b64encode(gzip.compress(raw5, mtime=0)).decode()
-                          print(f"  RAW5D {sym} bytes {len(raw5)} sha256 {hashlib.sha256(raw5).hexdigest()} gzip+base64:", flush=True)
-                          print(z, flush=True)
+                          r5 = json.loads(get(sym, "5d"))["chart"]["result"][0]
+                          m5 = r5["meta"]; q5 = r5["indicators"]["quote"][0]; t5 = r5.get("timestamp", [])
+                          sk = {
+                              "symbol": sym,
+                              "meta": {key: m5.get(key) for key in ("gmtoffset", "exchangeTimezoneName", "regularMarketTime", "currentTradingPeriod", "tradingPeriods")},
+                              "timestamp": t5,
+                              "priced": [int(None not in (q5["open"][i], q5["high"][i], q5["low"][i], q5["close"][i])) for i in range(len(t5))],
+                              "one_price": [int(q5["close"][i] is not None and eq(q5["open"][i], q5["high"][i]) and eq(q5["high"][i], q5["low"][i]) and eq(q5["low"][i], q5["close"][i])) for i in range(len(t5))],
+                              "vol0": [int(q5["volume"][i] == 0) for i in range(len(t5))],
+                          }
+                          print(f"  SKELETON5D {sym}:", json.dumps(sk, separators=(",", ":")), flush=True)
                       except Exception as e:
-                          print(sym, "5d unreadable", e, flush=True)
+                          print(sym, "5d unreadable", type(e).__name__, flush=True)
                   time.sleep(1)
           PY
