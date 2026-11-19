@@ -1,8 +1,11 @@
-// The MACD fade judged at closed 15-minute bars (research/macdfade15min-prod-spec.md sections 2.1-2.2, 3.1 and 3.7; the
-// study it must equal: research/macdfade15-spec.md, research/macdfade15.ts with TF=15min). The owner, 2026-11-17:
-// 「もうシンプル96%の足できたら逆張りのメールちょうだい」, then 「メールを1時間足から15分足に変更」, then 「やっぱりメールの
-// 判断1時間足で」 (signal-alerts v40 judged it at closed 1-hour bars, research/macdfade1h-prod-spec.md); then, 2026-11-19,
-// 「メールの判断15分に変更して」 (v41). The code takes the newest 600 closes of any chart: only the charts and ids moved.
+// The MACD fade judged at closed bars of each pair's own chart (research/macdfade15min-prod-spec.md sections 2.1-2.2,
+// 3.1 and 3.7; the study it must equal: research/macdfade15-spec.md, research/macdfade15.ts with TF=15min and TF=1h).
+// The owner, 2026-11-17: 「もうシンプル96%の足できたら逆張りのメールちょうだい」, then 「メールを1時間足から15分足に変更」,
+// then 「やっぱりメールの判断1時間足で」 (signal-alerts v40 judged it at closed 1-hour bars, research/macdfade1h-prod-spec.md);
+// then, 2026-11-19, 「メールの判断15分に変更して」, and the same day the per-pair decision (v41): each pair's email on the
+// timeframe of its higher win rate, USD/JPY and AUD/USD on 15-minute bars, EUR/JPY, AUD/JPY and EUR/USD on 1-hour bars,
+// gold on 1-hour bars until it is measured another way, the shares on 15-minute bars. The code takes the newest 600
+// closes of any chart: only the charts and ids moved.
 //
 // THE RULE, at the close of bar n of a chart's closed bars (oldest first, their closes as the chart draws them), with
 // at least LEVEL_WINDOW (600) closed bars up to it:
@@ -20,10 +23,11 @@
 // skipped. At 0.95 this is v8's zone rule (macd-level.ts decideZoneOnWindow) exactly.
 //
 // Pure: no clock, no I/O. One function for the pairs, gold and the shares. Imports macd.ts and macd-level.ts only
-// (not macd-ride.ts). The ids' versions (3.7: macdx v12, stockmacd v5) and the charts' intervals are the function's
-// (indicators.ts, stocks.ts): fadeRuleId("macdx", MACDH_INTERVALS[0], 12) is
-// "macdx_12_26_9_w600_15min_fade96of120_in_v12", fadeRuleId("stockmacd", STOCKMACD_INTERVALS[0], 5) is
-// "stockmacd_12_26_9_w600_15min_fade96of120_in_v5" (v40's, on the 1-hour charts: ..._1h_fade96of120_in_v11 and
+// (not macd-ride.ts). The ids' versions and the charts' intervals are the function's (indicators.ts, stocks.ts; 3.7:
+// the version follows the chart): the two 'macdx' ids, through macdhRuleId, are fadeRuleId("macdx", "15min", 12),
+// "macdx_12_26_9_w600_15min_fade96of120_in_v12" (USD/JPY and AUD/USD), and fadeRuleId("macdx", "1h", 11), v40's
+// "macdx_12_26_9_w600_1h_fade96of120_in_v11" (EUR/JPY, AUD/JPY, EUR/USD and gold); fadeRuleId("stockmacd",
+// STOCKMACD_INTERVALS[0], 5) is "stockmacd_12_26_9_w600_15min_fade96of120_in_v5" (v40's, on the 1-hour chart:
 // ..._1h_fade96of120_in_v4).
 
 import { macd, MACD_DEFAULTS } from "./macd.ts";

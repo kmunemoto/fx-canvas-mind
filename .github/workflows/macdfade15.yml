@@ -265,8 +265,9 @@ jobs:
       # research/macdfade1h-prod-spec.md 7.2 (1h) and research/macdfade15min-prod-spec.md 7.2 and 4.5 (15min): the
       # shipped function on GMO's same files gives the study's entries (the files the study read or fetched into
       # research/.cache, read only here), and this run's summary.json is the run of record whose numbers fill
-      # FADE_MEASURED: on 1h run 44555599946's (research/macdfade15-spec.md "Result of the 1-hour re-run on whole GMO
-      # files": run 44099401423, whose numbers v40 ships, read the same three cut-short files), whole against its copy
+      # FADE_MEASURED[tf] (v41: one run per chart): on 1h run 44555599946's (research/macdfade15-spec.md "Result of
+      # the 1-hour re-run on whole GMO files": run 44099401423, whose numbers v40 ships, read the same three cut-short
+      # files), whole against its copy
       # research/ledger/macdfade1h-whole-summary.json; on 15min main's run 44535888012's (research/macdfade15-spec.md
       # "Result of the re-run on GMO's files read afresh": run 44077464383's files had three GMO 1-minute day files cut
       # short), checked once without the bytes ',\n  "tf": "15min"' (53f7003 added tf to meta) and once whole against
@@ -376,8 +377,9 @@ jobs:
         if: (env.TF == '1h' || env.TF == '15min') && env.SHARE == '0.96' && env.TP == '10'
         run: |
           if [ "$TF" = "1h" ]; then
-            # run 44555599946 (2026-11-19, on whole GMO files); v40's FADE_MEASURED is still run 44099401423's
-            # (60edab22…, three files cut short: the same fade and flow, another baseline) until the per-pair release
+            # run 44555599946 (2026-11-19, on whole GMO files), whose numbers v41 ships as FADE_MEASURED["1h"] (the
+            # EUR/JPY, AUD/JPY and EUR/USD mails); it replaced v40's run 44099401423 (60edab22…, three files cut short:
+            # the same fade and flow, another baseline), whose copy stays as the record of v40's numbers
             got=$(sha256sum < $OUT/summary.json | cut -d' ' -f1)
             want=d59b64c6212e594f0b3b4a89bb1683a6a5f98652208cafb59f6420bb352c833b
             echo "summary.json sha256 $got (run 44555599946's: $want)"

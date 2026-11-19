@@ -25,7 +25,8 @@
 //
 // v41 (research/macdfade15min-prod-spec.md 2.4 and 3.3): the same fade on the shares' 15-minute bars (Yahoo's `15m`
 // over `60d`, STOCKMACD_INTERVALS), the owner's 「メールの判断15分に変更して」 (2026-11-19; the shares too, knowing
-// that Yahoo's Tokyo prices come late). The regular session's bars open every 15 minutes: in Tokyo 9:00 … 11:15 JST
+// that Yahoo's Tokyo prices come late), kept so by the owner's per-pair decision of the same day (the shares:
+// 「15分足のまま（おすすめ）」; the pairs each on their own chart, indicators.ts MACDH_INTERVAL_OF). The regular session's bars open every 15 minutes: in Tokyo 9:00 … 11:15 JST
 // (the one opening 11:15 ends at the lunch break, 11:30) and 12:30 … 15:15 (the last ends at the closing auction,
 // 15:30); in New York 9:30 … 15:45 local (the last ends at 16:00). Seen in Yahoo's answer of 2026-11-19 (the
 // yahoo-probe15 run 44535921376): New York's rows 9:30 to 15:45 and, on the latest finished session, a 16:00 point of
@@ -292,7 +293,9 @@ const macdText = (sym: string, end: number | null): ((v: number | null) => strin
 // (tfLabel: 「15分足」 / "15-minute"); (8) rewritten: a US share's read judges only the newest bar closed by then, a
 // Tokyo share's is judged some 15 minutes after its close (Yahoo's delay, measured on the 1-hour reads of 2026-11-06;
 // not yet measured on 15-minute bars); (10) rewritten: the shares' 15-minute bars and the pane of the newest 120
-// 15-minute bars are the owner's choices too (2026-11-17 and 11-19). The source line no longer says that a session's
+// 15-minute bars are the owner's choices too (2026-11-17 and 11-19), written 「株を15分足で判定すること」 / "judging
+// shares on 15-minute bars" with no 「も」 / "too" (spec 4.4 item 10: under per pair four of the fade's six charts
+// are 1-hour, so "too" would say the fade's mails are on 15-minute bars as well). The source line no longer says that a session's
 // last bar is judged on its closing price: that holds only once parseYahooChart is fitted to Yahoo's 15-minute closing
 // points (spec 3.3 item 6, its "closing-price condition"), and on Yahoo's answer of 2026-11-19 it does not (Tokyo's
 // 11:30 closing-auction row has volume, so it stays a bar of its own).
@@ -339,7 +342,7 @@ export const renderStockMail = (s: IndicatorSignal, lang: Lang): Mail => {
         : `This email is judged and sent at a read after the bar closes (a read judges only the newest bar closed by then; a bar more than ${freshMin} minutes past its close is not sent; how long it takes to arrive has not been measured).`) +
         " The price when it arrives may differ from the close above (the difference has not been measured).",
       "Not measured on shares.",
-      `This rule is Sextant's own, not a published indicator. ${FADE_PCT}%, judging at the bar's close, judging shares on ${tf} bars too, the MACD pane of the newest ${ZONE_BARS} ${tf} bars, the fade side (shares included) and stating no take-profit or stop price are the app owner's choices. That pane is the same as the app's ${tf} chart's.`,
+      `This rule is Sextant's own, not a published indicator. ${FADE_PCT}%, judging at the bar's close, judging shares on ${tf} bars, the MACD pane of the newest ${ZONE_BARS} ${tf} bars, the fade side (shares included) and stating no take-profit or stop price are the app owner's choices. That pane is the same as the app's ${tf} chart's.`,
       `The bars and the price are Yahoo Finance's public data (not an official feed; it may stop), the same as the app's stock chart. Check the latest state in the app before you place an order:\n${APP_URL}`,
       "To stop these emails, open Settings → Email alerts in the app and untick the share under Stock MACD.\nThis is reference information, not investment advice. Every trading decision is your own.",
     ]);
@@ -363,7 +366,7 @@ export const renderStockMail = (s: IndicatorSignal, lang: Lang): Mail => {
       : `このメールは、足の確定の後の読み込みで判定して送ります（読み込みで判定するのは、その時に確定している一番新しい足だけです。確定から${freshMin}分を過ぎた足は送りません。実際に何分で届くかは測っていません）。`) +
       "届いた時の値段は、上の終値と違うことがあります（その差は測っていません）。",
     "株では測っていません。",
-    `この決まりは Sextant 独自のもので、公開されているインジケーターではありません。${FADE_PCT}%・足の確定で判定すること・株も${tf}で判定すること・MACD の枠を${tf}の新しい${ZONE_BARS}本にすること・逆張りの向き（株にも当てはめること）・利確と損切りの値段を書かないことは、アプリのオーナーが決めたものです。この枠は、アプリの${tf}のチャートの枠と同じです。`,
+    `この決まりは Sextant 独自のもので、公開されているインジケーターではありません。${FADE_PCT}%・足の確定で判定すること・株を${tf}で判定すること・MACD の枠を${tf}の新しい${ZONE_BARS}本にすること・逆張りの向き（株にも当てはめること）・利確と損切りの値段を書かないことは、アプリのオーナーが決めたものです。この枠は、アプリの${tf}のチャートの枠と同じです。`,
     `足と値段は Yahoo Finance の公開データ（公式の配信ではないため、止まることがあります）で、アプリの株のチャートと同じです。注文の前にアプリで最新の状態を確認してください。\n${APP_URL}`,
     "この通知を止めるには、アプリの「設定」→「メール通知」の「株の MACD」でチェックを外してください。\n本メールは参考情報であり、投資助言ではありません。取引の最終判断はご自身の責任で行ってください。",
   ]);

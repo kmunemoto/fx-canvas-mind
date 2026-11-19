@@ -202,6 +202,15 @@ describe("#391 when a share's bar closes (signal-alerts/stocks.ts; v41: its 15-m
     expect(stockBarBreak("AAPL", at("2026-10-30T19:30:00Z"))).toBeNull();
   });
 
+  it("a US half day (research/macdfade15min-prod-spec.md 7.1, review finding (2)): the bar opening 12:45 New York gives no break (stockBarBreak reads the regular hours), and it ends at the session's 13:00 end, so its mail says nothing of a session's end", () => {
+    // 2026-11-27, the Friday after Thanksgiving, taken as a half day from NYSE's usual calendar (not checked here); the
+    // pin needs only a 12:45 bar (17:45 UTC in New York's winter time)
+    expect(stockBarBreak("AAPL", at("2026-11-27T17:45:00Z"))).toBeNull();
+    expect(stockBarEnd("AAPL", at("2026-11-27T17:45:00Z"), at("2026-11-27T18:00:00Z"))).toBe(at("2026-11-27T18:00:00Z"));
+    // 13:00 New York is one of CLOSES (a regular quarter-hour close), read as any other
+    expect(CLOSES.us).toContain(13 * 60);
+  });
+
   // Intel's last hour of Friday 2026-10-30 on 15-minute bars, made in the shape of Yahoo's `15m` answer (rows 15:00 …
   // 15:45 New York, then a 16:00 point of volume 0 once the session has ended), Yahoo naming that day's session; and the
   // same hour while it was trading (the last bar forming, no 16:00 point)
@@ -386,6 +395,58 @@ describe("spec 3.3 item 6, the closing-price condition: not held by today's pars
     expect(got.bars.map((b) => b.datetime)).not.toContain("2026-11-16 02:45:00");
     // the afternoon's first bar is stamped 12:30 JST
     expect(got.bars.map((b) => b.datetime)).toContain("2026-11-16 03:30:00");
+  });
+
+  // research/macdfade15min-prod-spec.md 2.4 "Never judged" and 7.1 "A share" (added at its fourth review): Tokyo's 11:30
+  // bar (the morning's closing-auction row, a one-price bar of its own from 11:30 to 11:45 JST) is never mailed. The
+  // answers below are made in the probe's shapes (the 11:30 row of one price with volume, null rows 11:45 to 12:15,
+  // then the afternoon's rows), with made-up prices; Yahoo's real answer in the lunch break is not yet seen (3.3)
+  const tokyoAt = (o: { until: string; market: string }) => {
+    const body = toyota();
+    const r = body.chart.result[0];
+    const keep = r.timestamp.map((x) => x <= t(o.until));
+    const q = r.indicators.quote[0];
+    const cut = <T,>(xs: T[]) => xs.filter((_, k) => keep[k]);
+    r.timestamp = cut(r.timestamp);
+    r.indicators.quote[0] = { open: cut(q.open), high: cut(q.high), low: cut(q.low), close: cut(q.close), volume: cut(q.volume) };
+    r.meta.regularMarketTime = t(o.market);
+    return body;
+  };
+
+  it("Tokyo's 11:30 bar is never mailed: a read of the 11:30 close up to 12:00 JST with Yahoo's last trade at the auction does not take it as closed; a read of the 12:45 close once the 12:30 row is in takes it as the newest closed bar, not fresh: no entry, no mail", () => {
+    const auction = at("2026-11-16T02:30:00Z");
+    // 11:50 JST, in the 11:30 close's half hour: the answer holds the auction row and the null rows to 11:45, Yahoo's
+    // last trade the auction's (11:30)
+    const now1 = at("2026-11-16T02:50:00Z");
+    expect(stockCloseDue("7203.T", now1)).toBe(auction);
+    const got1 = stockBarsOf("7203.T", tokyoAt({ until: "2026-11-16T02:45:00Z", market: "2026-11-16T02:30:00Z" }), now1)!;
+    const bar1130 = got1.bars.find((b) => b.open_ms === auction)!;
+    expect(bar1130.end).toBe(at("2026-11-16T02:45:00Z"));
+    expect(bar1130.closed).toBe(false);
+    const s1 = stockSweepOf("7203.T", got1.bars, auction, undefined, now1);
+    // the newest closed bar is the 11:15 one (it ends at the lunch break, 11:30), and that close is done
+    expect(s1.newest!.open_ms).toBe(at("2026-11-16T02:15:00Z"));
+    expect(s1.done).toBe(true);
+    // up to 12:00 JST the same (the 11:30 close's reads end there)
+    const now2 = at("2026-11-16T03:00:00Z");
+    expect(stockCloseDue("7203.T", now2)).toBe(auction);
+    const s2 = stockSweepOf("7203.T", stockBarsOf("7203.T", tokyoAt({ until: "2026-11-16T03:00:00Z", market: "2026-11-16T02:30:00Z" }), now2)!.bars, auction, undefined, now2);
+    expect(s2.newest!.open_ms).toBe(at("2026-11-16T02:15:00Z"));
+    // 12:46 JST, the 12:45 close's read: the 12:30 row is in (Yahoo about 15 minutes behind, its last trade 12:31), so
+    // the 11:30 bar is closed and the newest closed one, an hour past its end: not fresh, no entry, no mail
+    const due = at("2026-11-16T03:45:00Z");
+    const now3 = at("2026-11-16T03:46:00Z");
+    expect(stockCloseDue("7203.T", now3)).toBe(due);
+    const got3 = stockBarsOf("7203.T", tokyoAt({ until: "2026-11-16T03:30:00Z", market: "2026-11-16T03:31:00Z" }), now3)!;
+    const s3 = stockSweepOf("7203.T", got3.bars, due, at("2026-11-16T02:15:00Z"), now3);
+    expect(s3.newest!.open_ms).toBe(auction);
+    expect(s3.judge).toBe(true);
+    expect(s3.fresh).toBe(false);
+    expect(s3.done).toBe(false);
+    expect(stockFadeClose("7203.T", s3.closed, now3)).toEqual({ fresh: false, entry: null });
+    // the run mails only a fresh entry (index.ts stockFade: not fresh, it returns before the price and the mail)
+    const fn = readFileSync("supabase/functions/signal-alerts/index.ts", "utf8");
+    expect(fn).toMatch(/const close = stockFadeClose\(sym, closed, nowMs\);[\s\S]{0,400}if \(!close\.fresh\) return true;/);
   });
 
   it("so the mail says nothing of a session's last bar being judged on its closing price (4.4 item 11), ja and en", () => {
@@ -584,9 +645,9 @@ const ITEM8_ARRIVE_EN = "The price when it arrives may differ from the close abo
 const ITEM9_JA = "株では測っていません。";
 const ITEM9_EN = "Not measured on shares.";
 const ITEM10_JA =
-  "この決まりは Sextant 独自のもので、公開されているインジケーターではありません。96%・足の確定で判定すること・株も15分足で判定すること・MACD の枠を15分足の新しい120本にすること・逆張りの向き（株にも当てはめること）・利確と損切りの値段を書かないことは、アプリのオーナーが決めたものです。この枠は、アプリの15分足のチャートの枠と同じです。";
+  "この決まりは Sextant 独自のもので、公開されているインジケーターではありません。96%・足の確定で判定すること・株を15分足で判定すること・MACD の枠を15分足の新しい120本にすること・逆張りの向き（株にも当てはめること）・利確と損切りの値段を書かないことは、アプリのオーナーが決めたものです。この枠は、アプリの15分足のチャートの枠と同じです。";
 const ITEM10_EN =
-  "This rule is Sextant's own, not a published indicator. 96%, judging at the bar's close, judging shares on 15-minute bars too, the MACD pane of the newest 120 15-minute bars, the fade side (shares included) and stating no take-profit or stop price are the app owner's choices. That pane is the same as the app's 15-minute chart's.";
+  "This rule is Sextant's own, not a published indicator. 96%, judging at the bar's close, judging shares on 15-minute bars, the MACD pane of the newest 120 15-minute bars, the fade side (shares included) and stating no take-profit or stop price are the app owner's choices. That pane is the same as the app's 15-minute chart's.";
 const BREAK_JA = "この足の終値では、次に市場が開くまで売買できません。";
 const BREAK_EN = "At this bar's close nothing can be traded until the market opens again.";
 // item 11 (stocks.ts's Yahoo source line, the app link, how to stop, the disclaimer), without the closing-price
@@ -820,9 +881,19 @@ describe("v41 the share's email, word for word (spec 4.2 and 4.4)", () => {
       expect(ja.endsWith(`\n\n${ITEM11_JA}\n\n${STOP_JA}`)).toBe(true);
       expect(en.endsWith(`\n\n${ITEM11_EN}\n\n${STOP_EN}`)).toBe(true);
     }
-    expect(ITEM10_JA.split("アプリのオーナーが決めたものです。")[0]).toContain("・株も15分足で判定すること・MACD の枠を15分足の新しい120本にすること・");
+    // research/macdfade15min-prod-spec.md 4.4 item 10 (corrected at its third review): no 「も」 / "too" (under per pair
+    // four of the fade's six charts are 1-hour); the item as the spec writes it, its lines joined
+    expect(ITEM10_JA.split("アプリのオーナーが決めたものです。")[0]).toContain("・株を15分足で判定すること・MACD の枠を15分足の新しい120本にすること・");
+    expect(ITEM10_JA).not.toContain("株も");
+    expect(ITEM10_EN).not.toContain(" too,");
+    const spec44 = readFileSync("research/macdfade15min-prod-spec.md", "utf8").split("\n");
+    const i10 = spec44.findIndex((l) => l.startsWith("10. (rewritten; :326 / en :302) 「"));
+    expect(i10).toBeGreaterThan(0);
+    const item10 = spec44.slice(i10, i10 + 6).map((l) => l.trim());
+    expect(item10.join("")).toContain(`「${ITEM10_JA}」`);
+    expect(item10.join(" ")).toContain(`"${ITEM10_EN}"`);
     expect(ITEM10_JA.split("アプリのオーナーが決めたものです。")[1]).toBe("この枠は、アプリの15分足のチャートの枠と同じです。");
-    expect(ITEM10_EN.split("are the app owner's choices.")[0]).toContain(", judging shares on 15-minute bars too, the MACD pane of the newest 120 15-minute bars,");
+    expect(ITEM10_EN.split("are the app owner's choices.")[0]).toContain(", judging shares on 15-minute bars, the MACD pane of the newest 120 15-minute bars,");
     expect(ITEM10_EN.split("are the app owner's choices.")[1]).toBe(" That pane is the same as the app's 15-minute chart's.");
     // not the pairs' and gold's item 10 (which names judging the email on 15-minute bars as the owner's)
     expect(ITEM10_JA).not.toContain("メールを15分足で判定すること");

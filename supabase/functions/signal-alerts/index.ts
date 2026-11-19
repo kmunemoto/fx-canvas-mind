@@ -78,6 +78,7 @@ import {
   INDICATOR_INTERVALS,
   INDICATOR_PAIRS,
   INDICATOR_RULES,
+  MACDH_INTERVAL_OF,
   MACDH_INTERVALS,
   MACDH_PAIRS,
   STALE_RETRY_MS,
@@ -132,8 +133,8 @@ import {
 } from "./indicators.ts";
 // v40 (docs §8.155): the MACD email as the fade at a closed 1-hour bar, the
 // code research/macdfade-prod-check.ts holds to the study's entries (v41: at
-// a closed 15-minute bar). (#397: v39's ride, _shared/macd-ride.ts, is no
-// longer imported here)
+// a closed bar of each pair's own chart, 15-minute or 1-hour). (#397: v39's
+// ride, _shared/macd-ride.ts, is no longer imported here)
 import { fadeCloseEntryAt } from "../_shared/macd-fade.ts";
 import {
   GOLD,
@@ -366,26 +367,38 @@ import type { Candle } from "../analyze/indicators.ts";
 // (public.macd_rides, macd_ride_state) are written no more (v9's morning
 // check and a rollback read them). The shares' email is replaced in this
 // version too (stocks.ts). The other rules are as they were.
-// v41 (research/macdfade15min-prod-spec.md; the study research/macdfade15-spec.md,
-// TF=15min, Actions run 44077464383): the same fade on the 15-minute charts,
-// the owner's 「メールの判断15分に変更して」 (2026-11-19), for the five pairs,
-// gold and the shares alike. v40's 1-hour email stops when v41 starts (a
-// replacement, not a second email). The pairs' 15-minute chart is read 0, 1
-// and 3 minutes after each quarter hour (gmoIntervalsDue), gold's from a
-// minute after each close until the next (twelveCloseDue), fresh 20 minutes
-// (freshFor("15min")); the price in is a pair's ask close for a BUY and bid
-// close for a SELL of GMO's 15-minute bar, kept from the same read in
-// fadeQuotes (hourQuotes stays the sharp rise's). Recorded under
-// macdx_12_26_9_w600_15min_fade96of120_in_v12 (indicators.ts). The shares:
-// Yahoo's 15-minute bars, their closes every 15 minutes of the regular
-// session (stocks.ts), recorded under
+// v41 (research/macdfade15min-prod-spec.md; the study research/macdfade15-spec.md
+// on both charts): the same fade, each pair on its own chart, the owner's
+// per-pair decision (2026-11-19: each pair's email on the timeframe of its
+// higher win rate; gold stays on 1-hour bars until it is measured another
+// way; the shares on 15-minute bars). USD/JPY and AUD/USD: the 15-minute
+// chart, read 0, 1 and 3 minutes after each quarter hour (gmoIntervalsDue),
+// fresh 20 minutes (freshFor("15min")), recorded under
+// macdx_12_26_9_w600_15min_fade96of120_in_v12; v40's 1-hour email of theirs
+// stops when v41 starts (a replacement, not a second email). EUR/JPY,
+// AUD/JPY, EUR/USD and gold: v40's 1-hour chart, reads and freshness,
+// recorded under v40's macdx_12_26_9_w600_1h_fade96of120_in_v11 (the same
+// rule on the same chart, so a 1-hour close judged by both versions at the
+// switch is mailed once a follower). One map says each pair's chart
+// (indicators.ts MACDH_INTERVAL_OF; macdhRuleId gives the chart's id); the
+// price in is a pair's ask close for a BUY and bid close for a SELL of GMO's
+// bar of its own chart, kept from the same read in fadeQuotes under
+// `${pair}|${interval}` (hourQuotes stays the sharp rise's). Each pair's
+// mail carries the numbers of its own chart's run of record only
+// (_shared/macd-fade-measured.ts: run 44535888012 on 15 minutes, 44555599946
+// on 1 hour). The shares: Yahoo's 15-minute bars, their closes every 15
+// minutes of the regular session (stocks.ts), recorded under
 // stockmacd_12_26_9_w600_15min_fade96of120_in_v5; a "stocks" run starts no
 // Yahoo read once it has spent STOCK_RUN_BUDGET_MS (30 seconds; the shares
 // left are read first by the next run), since it shares pg_net's one queue
-// with the other runs. 'macdx' and 'stockmacd' are read, offered and accepted
-// on the 15-minute chart only, so each '1h' subscription row gets a '15min'
-// twin before the release (spec 3.6, by hand, no migration). The other rules
-// are as they were. (The date below is set again at the release.)
+// with the other runs. 'macdx' is read, offered and accepted on each pair's
+// own chart only (the status call sends it as macdx.limited), 'stockmacd' on
+// the 15-minute chart only, so the '1h' rows of USD/JPY and AUD/USD under
+// 'macdx' and every '1h' 'stockmacd' row get a '15min' twin before the
+// release (spec 3.6, by hand, no migration); the other four's '1h' 'macdx'
+// rows stay. `set` and `set_many` send created_at with each tick, and the
+// test mail lists only the rows this version mails (spec 3.6). The other
+// rules are as they were. (The date below is set again at the release.)
 const FUNCTION_VERSION = "signal-alerts-v41-2026-11-23";
 
 const MIN = 60_000;
@@ -910,38 +923,47 @@ Deno.serve(async (req: Request) => {
       // rise's range below
       const twelveStored = new Map<string, { bars: Candle[]; fetchedAt: string }>();
       // #395: the 1-hour reads of this run, for the sharp rise and fall below
-      // (v40 read the MACD fade's price in here too; v41's is fadeQuotes)
+      // (v40 read the MACD fade's price in here too; v41's is fadeQuotes, below)
       const hourQuotes = new Map<string, QuoteCandle[]>();
-      // v41 (research/macdfade15min-prod-spec.md 2.3, 3.2 item 3): the reads
-      // of this run of the MACD fade's chart (MACDH_INTERVALS, the 15-minute
-      // chart): the judged bar's bid and ask closes, GMO's as given, are its
-      // price in, from the same read the chart's closes are made from. (Kept
-      // apart from hourQuotes, which only a 1-hour read fills: a 15-minute
-      // read's quotes would otherwise be dropped and every pair's entry end as
-      // no_price)
+      // v41 (research/macdfade15min-prod-spec.md 2.3, 3.2 item 5): this run's
+      // reads of each pair's own MACD fade chart (isMacdhChart: USD/JPY and
+      // AUD/USD on 15 minutes, EUR/JPY, AUD/JPY and EUR/USD on 1 hour), keyed
+      // `${pair}|${interval}`: the judged bar's bid and ask closes, GMO's as
+      // given, are its price in, from the same read the chart's closes are made
+      // from. Keyed by chart, so no other chart's read of the same pair (one
+      // followed under another rule, such as EUR/JPY's 15-minute chart under
+      // 'emarm') can stand in. (Kept apart from hourQuotes, the sharp rise's,
+      // which only a 1-hour read fills: with one map for both charts, the
+      // other chart's pairs would get no quote and every entry of theirs would
+      // end as no_price)
       const fadeQuotes = new Map<string, QuoteCandle[]>();
 
       // v40 (docs §8.155; research/macdfade1h-prod-spec.md 3.2): the MACD fade
       // on the chart of the five pairs and gold the rule is offered on (v40:
-      // the 1-hour chart; v41: the 15-minute chart, MACDH_INTERVALS,
+      // the 1-hour chart; v41: each pair's own chart, isMacdhChart through
+      // MACDH_INTERVAL_OF, the 15-minute chart of USD/JPY and AUD/USD and the
+      // 1-hour chart of EUR/JPY, AUD/JPY, EUR/USD and gold,
       // research/macdfade15min-prod-spec.md 3.2), for the charts somebody
       // follows under 'macdx' in this run (a chart nobody follows is not
-      // judged for it). (#397: v39's ride, rideAtClose and its minute's check,
-      // went with it)
+      // judged for it; a row on a pair's other chart is not a follower).
+      // (#397: v39's ride, rideAtClose and its minute's check, went with it)
       const fadeSubs = subs.filter((x) => x.rule === "macdx" && isMacdhChart(x.pair, x.interval));
       const fadePairs = [...new Set(fadeSubs.map((x) => x.pair))];
-      // At a close of the chart `interval` (v41: "15min"), with the chart's
+      // At a close of the chart `interval` (v41: the pair's own, "15min" or
+      // "1h"), with the chart's
       // closed bars in hand (`closed`, oldest first; `newest` the newest one's
       // open): (1) not fresh (it closed more than freshFor(interval) ago, or
       // not yet; a bar ends LIVE_STEP_MS[interval] after its open): nothing;
       // (2) the entry at that bar, fadeCloseEntryAt on its 600 closes: none,
       // nothing; (3) the price in, a pair's ask close for a BUY and bid close
-      // for a SELL of this run's read of that chart (fadeQuotes: the quote
-      // whose open is the bar's, as v39's email 1 paid), gold's the bar's
+      // for a SELL of this run's read of that chart (fadeQuotes under
+      // `${pair}|${interval}`: the quote whose open is the bar's, as v39's
+      // email 1 paid), gold's the bar's
       // close; none: no_price, and the bar is left unsettled; (4) the signal,
-      // under `interval` (the followers are matched on it), mailed to the
+      // under `interval` (the followers are matched on it) and the chart's id
+      // (signalRuleId: v12 on '15min', v40's v11 on '1h'), mailed to the
       // chart's followers who have no row for it yet (mailRide: one side a
-      // bar). Nothing is read or written
+      // bar; on '1h' a row v40 wrote for the bar counts). Nothing is read or written
       // each minute for it and no state is kept: the decision is the closed
       // bars' own, worked out again at each judging. The record goes into
       // `out` as it is made ({ fresh, entry, price, error?, other_side? }), so
@@ -966,7 +988,7 @@ Deno.serve(async (req: Request) => {
         if (entry === null) return;
         out.fade.entry = entry.side;
         const last = closed[closed.length - 1];
-        const quote = gold ? null : (fadeQuotes.get(pair) ?? []).find((x) => Date.parse(x.datetime) === newest) ?? null;
+        const quote = gold ? null : (fadeQuotes.get(`${pair}|${interval}`) ?? []).find((x) => Date.parse(x.datetime) === newest) ?? null;
         const price = gold ? last.close : quote ? ridePaidAt(entry.side, quote) : Number.NaN;
         if (!Number.isFinite(price)) {
           out.fade.error = "no_price";
@@ -989,7 +1011,7 @@ Deno.serve(async (req: Request) => {
         // zone rule's, docs §8.119; #384: v31 on the 15-minute chart; #386:
         // v33 on the 1-hour chart again). #397: from v39 the MACD email was a
         // ride; v40: the fade, judged below, after the other rules' mails
-        // (v41: on the 15-minute chart, the interval passed on)
+        // (v41: on each pair's own chart, the interval passed on)
         const sigs = indicatorSignals(pair, interval, closed, nowMs);
         // #385: AMD Po3's DIST, apart: its failure must never cost the others
         // their emails (docs §8.128)
@@ -1026,9 +1048,9 @@ Deno.serve(async (req: Request) => {
           // The fade's work on this bar did not finish (no price, an
           // exception): this instance does not hold the bar judged, so the
           // chart is read and judged again the next time it is due inside the
-          // bar's fresh window, as a fresh instance would (v41: minutes 1 and
-          // 3; gold each minute until the next close). Judging again sends
-          // nothing twice: the
+          // bar's fresh window, as a fresh instance would (v41: a 15-minute
+          // pair at minutes 1 and 3, a 1-hour pair at minutes 3 and 5, gold
+          // each minute to :29). Judging again sends nothing twice: the
           // other rules' mails and the fade's are claimed by their rows. A
           // follower left without a mail (a lookup that failed) does not make
           // the bar unsettled here: as for every other rule, that mail is
@@ -1181,8 +1203,9 @@ Deno.serve(async (req: Request) => {
           continue;
         }
         if (c.interval === "1h") hourQuotes.set(c.pair, quotes);
-        // v41: the MACD fade's chart's read, for its price in (spec 3.2 item 3)
-        if (c.interval === MACDH_INTERVALS[0]) fadeQuotes.set(c.pair, quotes);
+        // v41: the read of a pair's own MACD fade chart, for its price in,
+        // keyed by pair and chart (spec 3.2 item 5)
+        if (isMacdhChart(c.pair, c.interval)) fadeQuotes.set(`${c.pair}|${c.interval}`, quotes);
         const closed = historyRead(c.pair, c.interval, quotes, nowMs).candles;
         const newest = closed.length > 0 ? barOpenMs(closed[closed.length - 1].datetime) : Number.NaN;
         // a read cut short is not the chart's history (a year-keyed read
@@ -2102,8 +2125,12 @@ Deno.serve(async (req: Request) => {
           limited_intervals: TWELVE_ALERT_INTERVALS,
           // #275: the MACD peak-and-valley rule's charts: GMO's currency pairs
           // (#324: from v25 the 1-hour rule's, mailed in place of the 5-minute one,
-          // on the owner's five pairs; #345: and gold from v27)
-          macdx: { pairs: MACDH_PAIRS, intervals: MACDH_INTERVALS },
+          // on the owner's five pairs; #345: and gold from v27). v41
+          // (research/macdfade15min-prod-spec.md 3.2 item 6): one chart a pair
+          // (MACDH_INTERVAL_OF), sent as `limited` in the base block's shape, so
+          // the screen offers each pair its own chart only and draws "—" on the
+          // other; `intervals` is the column list (["15min", "1h"])
+          macdx: { pairs: MACDH_PAIRS, intervals: MACDH_INTERVALS, limited: Object.fromEntries(MACDH_PAIRS.map((p) => [p, [MACDH_INTERVAL_OF[p]]])) },
           // #291: the video's way's: gold's 1-minute chart
           sweepx: { pairs: SWEEPX_PAIRS, intervals: SWEEPX_INTERVALS },
           // #387: the EMA 20 / 200 way's: the six's 15-minute chart
@@ -2138,10 +2165,15 @@ Deno.serve(async (req: Request) => {
       const rule: RuleKey | IndicatorRule = indicator ? (body.rule as IndicatorRule) : isRuleKey(body.rule) ? body.rule : "rsi_sar";
       if (body.on) {
         if (!allowed) return json({ ok: false, error: "plan_required" }, 403);
+        // v41 (research/macdfade15min-prod-spec.md 3.6): created_at, the
+        // function's now, beside lang: a tick of a row that exists (the upsert
+        // merges) shows the tick's time too, so the reconcile after the
+        // release, bounded by the merge's time, never takes a v41 tick for a
+        // twin. Every rule's rows alike
         const res = await rest("signal_alert_subscriptions?on_conflict=user_id,pair,interval,rule", {
           method: "POST",
           headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-          body: JSON.stringify({ user_id: userId, pair: body.pair, interval: body.interval, rule, lang: isLang(body.lang) ? body.lang : "ja" }),
+          body: JSON.stringify({ user_id: userId, pair: body.pair, interval: body.interval, rule, lang: isLang(body.lang) ? body.lang : "ja", created_at: new Date(nowMs).toISOString() }),
         });
         if (!res.ok) {
           console.error("subscribe failed:", res.status, await res.text().catch(() => ""));
@@ -2175,10 +2207,13 @@ Deno.serve(async (req: Request) => {
       if (body.on) {
         if (!allowed) return json({ ok: false, error: "plan_required" }, 403);
         const lang = isLang(body.lang) ? body.lang : "ja";
+        // v41 (spec 3.6): created_at, the function's now, in every row beside
+        // lang, as `set` sends it
+        const createdAt = new Date(nowMs).toISOString();
         const res = await rest("signal_alert_subscriptions?on_conflict=user_id,pair,interval,rule", {
           method: "POST",
           headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-          body: JSON.stringify(list.map((c) => ({ user_id: userId, pair: c.pair, interval: c.interval, rule, lang }))),
+          body: JSON.stringify(list.map((c) => ({ user_id: userId, pair: c.pair, interval: c.interval, rule, lang, created_at: createdAt }))),
         });
         if (!res.ok) {
           console.error("subscribe failed:", res.status, await res.text().catch(() => ""));
@@ -2216,11 +2251,18 @@ Deno.serve(async (req: Request) => {
       if (!id) return json({ ok: false, error: "save_failed" }, 500);
       const subs = await readRows(`signal_alert_subscriptions?user_id=eq.${uid}&select=pair,interval,rule&order=created_at.asc`);
       const lang: Lang = isLang(body.lang) ? body.lang : "ja";
+      // v41 (research/macdfade15min-prod-spec.md 3.6): only the rows this
+      // version mails are listed: an indicator rule's row on a chart it is not
+      // judged on (a USD/JPY or a share's '1h' row beside its '15min' twin, an
+      // EUR/JPY '15min' row of 'macdx') is left out; the other rules' rows as
+      // before
       const outcome = await deliver(
         id,
         email,
         renderTestMail(
-          subs.map((s) => ({ pair: String(s.pair), interval: String(s.interval), rule: isRuleKey(s.rule) || isIndicatorRule(s.rule) ? s.rule : "rsi_sar" })),
+          subs
+            .filter((s) => !isIndicatorRule(s.rule) || isIndicatorChartFor(s.rule, s.pair, s.interval))
+            .map((s) => ({ pair: String(s.pair), interval: String(s.interval), rule: isRuleKey(s.rule) || isIndicatorRule(s.rule) ? s.rule : "rsi_sar" })),
           lang,
         ),
       );

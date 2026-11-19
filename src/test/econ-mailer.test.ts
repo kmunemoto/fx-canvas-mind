@@ -2,6 +2,9 @@ import { describe, it, expect, vi } from "vitest";
 import { mailDigests, eventOfRow, type MailerDeps } from "../../supabase/functions/econ-calendar/mailer.ts";
 import type { SendResult } from "../../supabase/functions/signal-alerts/logic.ts";
 
+// each pair's MACD email chart (signal-alerts v41, indicators.ts MACDH_INTERVAL_OF, written out here)
+const OWN_CHART: Record<string, string> = { "USD/JPY": "15min", "AUD/USD": "15min", "EUR/JPY": "1h", "AUD/JPY": "1h", "EUR/USD": "1h", "XAU/USD": "1h" };
+
 // #370: one morning's run of the big-events mail (docs §8.123) against a fake database
 
 const NOW = Date.parse("2026-10-21T21:13:00Z"); // Thu 22 Oct 06:13 JST
@@ -39,7 +42,9 @@ const ev = (country: string, at: string, title: string, impact: string, fetched_
 });
 
 const freshDb = (): Db => ({
-  subs: ["AUD/JPY", "AUD/USD", "EUR/JPY", "EUR/USD", "USD/JPY", "XAU/USD"].map((pair) => ({ user_id: OWNER, pair, interval: "15min", rule: "macdx", lang: "ja" })),
+  // each on its own MACD email chart (signal-alerts v41, research/macdfade15min-prod-spec.md 3.2 item 1): USD/JPY and
+  // AUD/USD on 15 minutes, the others on 1 hour
+  subs: ["AUD/JPY", "AUD/USD", "EUR/JPY", "EUR/USD", "USD/JPY", "XAU/USD"].map((pair) => ({ user_id: OWNER, pair, interval: OWN_CHART[pair], rule: "macdx", lang: "ja" })),
   mails: [],
   events: [
     ev("AUD", "2026-10-21T23:00:00+00:00", "RBA Gov Bullock Speaks", "Low"),
@@ -262,19 +267,36 @@ describe("mailDigests", () => {
     expect(db2.mails[0]).toMatchObject({ status: "failed", error: "no_email" });
   });
 
-  it("only a subscription the MACD email follows (#384: the 15-minute chart from signal-alerts v31; #386: the 1-hour chart again from v33; v41: the 15-minute chart again, research/macdfade15min-prod-spec.md 3.6) makes a recipient; the other pairs still give the currencies", async () => {
+  it("only a subscription the MACD email follows (#384: the 15-minute chart from signal-alerts v31; #386: the 1-hour chart again from v33; v41: each pair's own chart, research/macdfade15min-prod-spec.md 3.6 and 7.1) makes a recipient; the other pairs still give the currencies", async () => {
     const db = freshDb();
     db.subs = [
       { user_id: OWNER, pair: "USD/JPY", interval: "5min", rule: "macdx", lang: "ja" },
-      // the 1-hour chart is no longer the MACD email's (v41: a '1h' macdx row left over from v40 makes no recipient),
-      // nor is a pair it does not follow
+      // a pair's other chart is not the MACD email's (v41: USD/JPY's and AUD/USD's '1h' rows left over from v40 make no
+      // recipient, nor would a '15min' row of the 1-hour pairs or gold), nor is a pair it does not follow
       { user_id: OWNER, pair: "USD/JPY", interval: "1h", rule: "macdx", lang: "ja" },
+      { user_id: OWNER, pair: "AUD/USD", interval: "1h", rule: "macdx", lang: "ja" },
+      { user_id: OWNER, pair: "EUR/JPY", interval: "15min", rule: "macdx", lang: "ja" },
+      { user_id: OWNER, pair: "AUD/JPY", interval: "15min", rule: "macdx", lang: "ja" },
+      { user_id: OWNER, pair: "EUR/USD", interval: "15min", rule: "macdx", lang: "ja" },
+      { user_id: OWNER, pair: "XAU/USD", interval: "15min", rule: "macdx", lang: "ja" },
       { user_id: OWNER, pair: "HKD/JPY", interval: "15min", rule: "macdx", lang: "ja" },
+      { user_id: OWNER, pair: "HKD/JPY", interval: "1h", rule: "macdx", lang: "ja" },
       { user_id: OWNER, pair: "AUD/JPY", interval: "15min", rule: "ultra", lang: "ja" },
+      // the shares' MACD email never makes a recipient, on either chart
+      { user_id: OWNER, pair: "AAPL", interval: "15min", rule: "stockmacd", lang: "ja" },
+      { user_id: OWNER, pair: "AAPL", interval: "1h", rule: "stockmacd", lang: "ja" },
     ];
     const a = await run(db);
     expect(a.result).toMatchObject({ recipients: 0 });
-    db.subs.push({ user_id: OWNER, pair: "EUR/USD", interval: "15min", rule: "macdx", lang: "ja" });
+    // each pair's own chart makes one: '15min' for USD/JPY and AUD/USD, '1h' for EUR/JPY, AUD/JPY, EUR/USD and gold
+    for (const pair of ["USD/JPY", "AUD/USD", "EUR/JPY", "AUD/JPY", "EUR/USD", "XAU/USD"]) {
+      const one = freshDb();
+      one.subs = [...db.subs, { user_id: OWNER, pair, interval: OWN_CHART[pair], rule: "macdx", lang: "ja" }];
+      const r = await run(one);
+      expect(r.result, pair).toMatchObject({ recipients: 1 });
+      expect(r.sent, pair).toHaveLength(1);
+    }
+    db.subs.push({ user_id: OWNER, pair: "EUR/USD", interval: "1h", rule: "macdx", lang: "ja" });
     const b = await run(db);
     expect(b.sent).toHaveLength(1);
     expect(b.sent[0].text).toContain("対象の通貨: 米ドル・円・ユーロ・豪ドル・中国");
