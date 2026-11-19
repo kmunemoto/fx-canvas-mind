@@ -8,7 +8,11 @@ Revised the same day after a review of this revision (24 findings, on the code, 
 finding was checked against the code, ledgers and records it cites before anything here was changed; and again after a
 second review (17 findings, each checked once more against what it cites before a change; all 17 held and are in);
 and after a third review (16 findings, on the release's reads, rollback and statements, the texts and the checks; each
-checked once more against what it cites before a change; all 16 held, some as wording only, and are in).
+checked once more against what it cites before a change; all 16 held, some as wording only, and are in); and after a
+fourth review (11 findings, on the code, the texts, the release and the checks; each checked once more against what it
+cites before a change; all 11 held, four of them as nits, and are in); and after a fifth review (15 findings, on the
+code, the texts, the release and the checks; each checked once more against what it cites before a change; all 15
+held, five of them as nits, and are in).
 
 How it came to this: it was first written the same day on top of 3adec21 (which does not hold the file) for the owner's
 「メールの判断15分に変更して」 (every pair, gold and the shares on 15-minute bars), committed as 8b3184a, and revised in
@@ -190,11 +194,15 @@ As research/macdfade1h-prod-spec.md 2.2, word for word. (At 0.95 this is v8's zo
 | XAU/USD `1h` (Twelve Data's stored bars) | from 60 seconds after the close while within 30 minutes (`twelveCloseDue`, HEAD :1133-1140; `twelveChartDue`, :1150-1155): minutes 1 to 29 | 30 min | v40's, unchanged |
 | the shares `15min` (Yahoo) | 3.3 | 45 min | 3.3 |
 
-Every run starts a second into the minute (`startWaitMs`, HEAD indicators.ts:1123) and none runs in the weekend gate
-(below). The bar expected is the one that closed at the latest close of the chart's grid (`latestCloseMs`, HEAD
-indicators.ts:1067-1071); an answer GMO made before the close is not judged on (`staleForClose`, as v40); judged once
-an instance (`judgedBar`, keyed `${pair}|${interval}`: HEAD index.ts:1007, :1166); a fresh instance judges it again;
-fewer than 600 closed bars: `short`, not judged (HEAD index.ts:1190-1192).
+Every pairs' and gold's run starts a second into the minute (`startWaitMs`, HEAD indicators.ts:1123; HEAD index.ts:780-782)
+and none of them runs in the weekend gate (below; HEAD index.ts:784). The stocks run takes its clock as it is called, with
+no `startWaitMs` (HEAD index.ts:1572-1573), and is gated only by its own market's weekdays (`stockCloseDue`, HEAD
+stocks.ts:148-157), not by the weekend gate (its branch returns before the gate, HEAD index.ts:1867-1874, :1879); so New
+York's Friday 15:45 bar, closing 21:00 UTC in its winter, is still judged (counted from the code; corrected at the fourth
+review: this said "every run"). For the pairs and gold, the bar expected is the one that closed at the latest close of
+the chart's grid (`latestCloseMs`, HEAD indicators.ts:1067-1071); an answer GMO made before the close is not judged on
+(`staleForClose`, as v40); judged once an instance (`judgedBar`, keyed `${pair}|${interval}`: HEAD index.ts:1007,
+:1166); a fresh instance judges it again; fewer than 600 closed bars: `short`, not judged (HEAD index.ts:1190-1192).
 
 - **The 15-minute pairs (USD/JPY, AUD/USD):** the `15min` chart, read 0, 1 and 3 minutes after each quarter-hour close.
   An entry is mailed only while its bar closed at most 20 minutes ago; the read at minute 3 meets that unless the run
@@ -228,9 +236,18 @@ fewer than 600 closed bars: `short`, not judged (HEAD index.ts:1190-1192).
     more pushes a read into a minute where its chart is not due, and calls that keep running long back the queue up.
     Then: the 15-minute pairs' three reads of a quarter hour (0, 1, 3) can all be missed, and that quarter hour goes
     unjudged; **the 1-hour pairs' three reads of an hour (0, 3, 5) can all be missed too, and that hour goes unjudged**
-    (on 1-hour bars v40 had no stocks run read every minute); gold, looked at each minute to :29, only if the backlog
-    lasts that long. On 15-minute bars a Tokyo share is read every minute of the session (above; on 1-hour bars for
-    about 16 minutes after each of seven closes), so this can happen through Tokyo's hours (00:00 to 06:30 UTC).
+    (in Tokyo's hours as under v40; corrected at the fifth review: this said that on 1-hour bars v40 had no stocks run
+    read every minute. v40's stocks run read each followed Tokyo share every minute from each of its seven closes, 10:00,
+    11:00, 11:30, 13:00, 14:00, 15:00 and 15:30 JST, until that close was done, about 16 minutes after it, 9ca2054
+    stocks.ts:107-112, :118-127, with no budget, index.ts:1564-1571; docs/OPERATIONS.md:12316-12318 records it. So the
+    1-hour pairs' reads at :00, :03 and :05 of 01, 02, 04, 05 and 06 UTC shared the queue with an every-minute stocks run
+    under v40 too, and they do the same hours under v41, whose Tokyo reads fall from 00:15 to about 02:46 and from 03:45
+    to about 06:46 UTC, HEAD stocks.ts:130-133, :148-157, now bounded, 3.3 item 10. What v41 adds for them: New York's
+    reads at :00 UTC, at every quarter-hour close of its session, HEAD stocks.ts:131, where v40 read New York at :30 and
+    at its 16:00 close only, 9ca2054 stocks.ts:108; and Tokyo's reads in the minutes just before the hour); gold, looked
+    at each minute to :29, only if the backlog lasts that long. On 15-minute bars a Tokyo share is read every minute of
+    the session (above; on 1-hour bars for about 16 minutes after each of seven closes), so this can happen through
+    Tokyo's hours (00:00 to 06:30 UTC).
     Measured before the stocks run existed: the longest pg_net call of 2026-10-03 to 10-10 was 37.7 seconds, none over
     60 (docs §8.112). The stocks calls' lengths: not measured. So v41 bounds the stocks run (3.3 item 10) and the release
     watches for it (6.3 step 5a, 6.4).
@@ -255,13 +272,34 @@ fewer than 600 closed bars: `short`, not judged (HEAD index.ts:1190-1192).
   - A pair's or gold's close whose reads all fall in the weekend gate, Friday 21:00 to Sunday 22:00 UTC
     (`isPossiblyClosed`, market-hours.ts:35-43; the sweep returns at once, HEAD index.ts:784). All of a close's reads
     fall in its own bar's span after it (15-minute: 0, 1, 3 minutes; 1-hour: 0, 3, 5; gold: 1 to 29). So every bar
-    closing at or after Friday 21:00 UTC is not judged: on the 15-minute charts one bar a week in New York's summer
-    (closing 21:00) and five in its winter (closing 21:00 to 22:00, now); on the 1-hour charts and gold one bar in
-    summer (20:00-21:00) and two in winter (20:00-22:00), as v40. Any Sunday bar closing before 22:00 UTC is not judged
-    either. The study reads the gate the same way (research/macdfade15-spec.md "The entries") and counts such signals
-    apart (`notMailed`: 3 in the 15-minute run of record, 11 in the 1-hour one).
+    closing at or after Friday 21:00 UTC is not judged. On GMO's bars that is the week's last bar, in New York's summer
+    and winter alike: the 15-minute charts' bar 20:45-21:00, the 1-hour charts' bar 20:00-21:00. (Recounted at the
+    fifth review; this said five bars in winter on 15-minute, closing 21:00 to 22:00, and two on 1-hour, 20:00-22:00,
+    as v40's live note says, 9ca2054 ja.ts:2151 / en.ts:2046. In both runs of record `noMinute` is 0 on every pair, so
+    `judged` less `baseEntries`, the baseline entering every judged bar outside the gate, research/macdfade15-spec.md
+    :127-131, :136-140, :178-183, counts the judged bars inside the gate: 149 on every pair of the 1-hour run, 152 on
+    every pair of the 15-minute run, python on the ledger copies. The Fridays from 2024-01-05 to 2026-11-06 number 149,
+    102 in New York's summer time and 47 in its winter. Two winter bars would make at least 196, five at least 337; a
+    GMO bar of Friday 21:00-22:00 would have been loaded, `isMarketClosed` shutting Friday only from 22:00,
+    market-hours.ts:19, :148-153. The 15-minute run's 3 more are not identified.) Gold's bars (Twelve Data, in neither
+    run) are not counted. Any Sunday bar closing before 22:00 UTC is not judged either. The study reads the gate the
+    same way (research/macdfade15-spec.md "The entries") and counts such signals apart (`notMailed`: 3 in the
+    15-minute run of record, 11 in the 1-hour one).
   - Gold's daily break: as v40 (one 1-hour bar a day, read, judged and kept in the 600-bar window; research/macdfade1h-
     prod-spec.md 2.4). The first version's four 15-minute break bars do not apply.
+  - **Tokyo's 11:30 bar is never mailed** (added at the fourth review): the morning's closing-auction row, a one-price bar
+    of its own from 11:30 to 11:45 JST (2.1, 3.3 item 6), in the chart and in the 600-bar window. It is closed only once
+    Yahoo's last trade time is at or past 11:45 or a later bar is in the answer (HEAD stocks.ts:203). The reads of the
+    11:30 close run to 12:00 at the latest (`stockCloseDue`, HEAD stocks.ts:148-157, `STOCK_POLL_MS`) and stop once that
+    close is done (the 11:15 bar in, HEAD stocks.ts:257, index.ts:1625, :1676); the next reads are the 12:45 close's. So
+    unless a read from 11:45 to 12:00, before that close is done, sees Yahoo's last trade time at or past 11:45 in the
+    lunch break, the bar is first judged at the 12:45 close's reads, once the afternoon's first row is in, an hour or
+    more after its end: not fresh (`stockBarFresh`, 45 minutes, HEAD stocks.ts:219-221), so no entry
+    (`stockFadeClose`, :234; index.ts:1600) and no mail, every session. Counted from HEAD's code; Yahoo's answer in the
+    lunch break (its regularMarketTime) is not yet seen (3.3 "Not yet seen"). The notes say so (`stockmacdNotes` [2],
+    section 5). Mailing that bar, or joining it to the 11:15 bar, would be the owner's choice: asked in "Questions for
+    the owner" 2 (corrected at the fifth review: "not asked here"); until the owner answers, v41 is built as this file
+    says (the bar not mailed, the notes saying so).
   - Also never judged: a 15-minute pair whose newest closed bar is not in GMO's answer by minute 3, a 1-hour pair's by
     minute 5; a pair read `short`; gold's bar not in Twelve Data after its two reads, or on a UTC day whose Twelve Data
     count is spent (`day_spent`); a share's bar overtaken by the next closed bar before any read judged it (only the
@@ -378,7 +416,7 @@ v40 on `1h`.
 ### 3.3 Shares: `stockFade` on 15-minute bars (stocks.ts; index.ts:1521-1630)
 
 **Built already in 001a3df (HEAD), not to be made again; rechecked against this section at the build:** items 1 to 5,
-7, 8 and 10 below. Their line numbers below are v40's (the code before the build, kept as the record of what changed);
+7 (but for 4.4 item 10's owner sentence, below), 8 and 10 below. Their line numbers below are v40's (the code before the build, kept as the record of what changed);
 HEAD's lines, read for this revision: item 1 HEAD stocks.ts:58 (`STOCKMACD_INTERVALS = ["15min"]`); item 2 HEAD
 stocks.ts:183 (`parseYahooChart(sym, body, STOCKMACD_INTERVALS[0], nowMs)`), :233 and :255 (`isStockmacdChart(sym,
 STOCKMACD_INTERVALS[0])`), HEAD index.ts:1608 (`fadeSignal("stockmacd", sym, STOCKMACD_INTERVALS[0], …)`) and :1636
@@ -386,8 +424,10 @@ STOCKMACD_INTERVALS[0])`), HEAD index.ts:1608 (`fadeSignal("stockmacd", sym, STO
 (`CLOSES`); item 4 :164-167 (`stockBarEnd`); item 5 :265-269 (`stockBarBreak`); item 7 :321 (`tfLabel(lang,
 s.interval)`, imported at :47); item 10 HEAD stocks.ts:144 (`STOCK_RUN_BUDGET_MS = 30_000`), HEAD index.ts:1619-1632
 (oldest read first, `skipped: "budget"`) and :1697 (`took_ms`). **Left:** item 6's parser change, only if the probe's
-timed reads call for it (item 6's texts are decided: removed, as HEAD's build has them; item 6), and the half-day pin
-of 7.1 (review finding (2)). Item 9 is unchanged code.
+timed reads call for it (item 6's texts are decided: removed, as HEAD's build has them; item 6), the half-day pin
+of 7.1 (review finding (2)), and 4.4 item 10's owner sentence without 「も」 / "too": HEAD stocks.ts:366 / en :342 still
+hold `株も${tf}で判定すること` / `judging shares on ${tf} bars too`, and its eight pins (4.4 item 10) hold the old
+sentence, so the tests pass with it (added at the fifth review). Item 9 is unchanged code.
 
 **Before building, fit these to a real Yahoo `15m` answer** (research/macdfade15-prod-spec.md 3.3 said the same).
 The probe .github/workflows/yahoo-probe15.yml (read only: AAPL, 7203.T and 6758.T) decides the items marked "(probe)"
@@ -561,7 +601,8 @@ under v40.
     −5.42..+5.81: inside)" without "pips a trade" (:549), and both new sections write "null.json `…`" without "sha256"
     (:477-478, :536). The texts per chart (:433/:442 and :571/:581 hold 「1時間足の最初の1分」 / "the 1-hour bar's first
     minute"; they and the notes' replacements :584-599 also take 4.5's rewritten 〔baseWhat〕, entry parenthesis and
-    weekend sentence and 〔mailedOn〕, word for word; :590/:599 the notes' pairs sentence; :792-793 the AUD/JPY sentence
+    weekend sentence, 〔mailedOn〕 and the per-pair chance sentence (added at the fifth review), word for word; :590/:599
+    the notes' pairs sentence; :792-793 the AUD/JPY sentence
     with -0.77 becomes -0.75, AUD/JPY being a 1-hour pair); the refusals (:849 `{ ...FADE_MEASURED, tf: "15min" }` → /not 1h/ becomes a refusal of a chart with no
     run or of `m.tf !== tf`); :863 / :873 pin the bar word per chart; :890's count of texts changes with two notes
     paragraphs. The import pin (:185, `["./pair-names.ts"]`) stays. New: the pin of 4.5 that each pair's chart in the
@@ -597,7 +638,8 @@ under v40.
   - src/test/stockmacd-alerts.test.tsx: as the first version (rebuilt on 15-minute answers, the run's budget, the
     closing-price texts absent, 3.3 item 6), and **review finding (2)**: spec 7.1 asked for `stockBarBreak` on a US half
     day and no test pins it (the pins at :195-202 hold New York's 15:45 bar, Tokyo's 11:15 and 15:15, and plain
-    bars): a pin that the 12:45 New York bar of a half day gives `null` (7.1).
+    bars): a pin that the 12:45 New York bar of a half day gives `null` (7.1). And, only if 3.3 item 6's parser change is
+    made, src/test/stocks.test.tsx's `15min` parser cases of 7.1 "A share" (added at the fourth review).
   - src/test/signal-alert-settings.test.tsx: the `macdx` fixtures (:372, :1079) gain the per-pair `limited` (and one
     without it draws the cross product, as today); the offer and grid pins per pair (made in step 2's PR on main's
     copy, above, and carried into the function's branch with main); the notes count (:550-551, 13 → 14);
@@ -623,8 +665,10 @@ under v40.
       the 1-hour run's minutes; 約4日 / 約3日 / 約2時間 are too common to forbid):
       `/約?(545|666|477|617)\s?日|(545|666|477|617) days|4,?489|687,?037|888,?900/`
     - the per-pair comparison the owner's choice rests on (section 1; 4.1 forbids its reason without its companions): the
-      win rates, the 15-minute counts that are not elsewhere, Fisher's p:
-      `/99\.18|98\.91|98\.90|99\.00|98\.56|98\.61|98\.67|98\.73|98\.04|97\.44|1,?207|1,?217|1,?224|0\.51|0\.72/`
+      signal's win rates and no signal's, every pair's 15-minute counts (tp and trades), Fisher's p (corrected at the
+      fifth review: it held only USD/JPY's and AUD/USD's trades and USD/JPY's tp of the ten 15-minute counts, and none
+      of no signal's win rates; the 1-hour per-pair counts, three digits, are too common to forbid):
+      `/99\.18|98\.91|98\.90|99\.00|98\.56|98\.61|98\.67|98\.73|98\.04|97\.44|99\.42|99\.14|99\.12|98\.75|98\.70|98\.48|98\.51|98\.31|1,?167|1,?180|1,?184|1,?185|1,?200|1,?201|1,?207|1,?217|1,?224|0\.51|0\.72/`
     - plus the release's own docs section if it is not 8.156.
     Checked by this writer with python on HEAD: none of the four patterns matches anything in the sales-page texts
     (`lp`, ja.ts :1997-2047, en.ts :1897-1944, the FAQ among them); the 1-hour pattern finds 20 distinct numbers in
@@ -632,7 +676,8 @@ under v40.
     in en.ts:2043), so they catch real numbers. The first two patterns hold the 15-minute run's raw minutes, which no
     text prints, and not the days that the texts print; the third adds those. The four patterns were run again on the
     texts written out in section 5 (the FAQ answers, `lp.honestBody`, 「他のツールと何が違いますか？」, the card intro):
-    no match (python, at the review). Still, no pattern list can hold every number a text could leak; they hold the
+    no match (python, at the review). The fifth review's additions to the fourth pattern were run the same way on HEAD's
+    `lp` (ja.ts :1997-2047, en.ts :1897-1944), on HEAD's ja.ts and en.ts whole, and on section 5: no match (python). Still, no pattern list can hold every number a text could leak; they hold the
     numbers of record named here. (The first version's list at this place, "3.31 … 0.90", was the first run's and is
     gone.)
 
@@ -662,6 +707,21 @@ under v40.
   select rule, pair, interval, count(*) from public.signal_alert_subscriptions
    where rule in ('macdx', 'stockmacd') group by 1, 2, 3 order by 1, 2, 3;
   ```
+- **Each statement lists what it changed, in the same statement** (added at the fourth review: both versions accept ticks
+  and unticks on the four 1-hour charts, and v40 on the `'1h'` rows of USD/JPY, AUD/USD and the shares, between the
+  count before and the count after, so an exact before/after equality could fail for a correct statement). Every insert
+  and delete below (the twins, (a1), (a2), the later delete, and 6.4's rebuild delete and insert, (b1), (b2) and
+  `'15min'` delete) is sent wrapped so that it reports its own rows (no user ids):
+
+  ```sql
+  with c as (〔the statement, without its ;〕 returning rule, pair, interval)
+  select rule, pair, interval, count(*) from c group by 1, 2, 3 order by 1, 2, 3;
+  ```
+  (`on conflict … do nothing` returns only the rows inserted.) The check of a statement is that list: only rows of the
+  narrowed set, and only of the interval it names (`'15min'` for the twins, (a1), (a2) and 6.4's `'15min'` delete;
+  `'1h'` for the later delete, the rebuild's delete and insert, (b1) and (b2)); never a row of the four 1-hour charts.
+  The counts before and after stay as context: a change in them that the list does not show is followers' ticks or
+  unticks between the reads, written down as such (docs §8.156), not a failed statement. 7.1's local run pins each list.
 - **The twins, before the function's merge** (6.3 step 3; T0 = the statement's time, recorded when sent):
 
   ```sql
@@ -671,9 +731,12 @@ under v40.
      and ((rule = 'macdx' and pair in ('USD/JPY', 'AUD/USD')) or rule = 'stockmacd')
   on conflict (user_id, pair, interval, rule) do nothing;
   ```
-  After it: for (`macdx`, USD/JPY), (`macdx`, AUD/USD) and each `stockmacd` pair the `'15min'` count equals the `'1h'`
-  count; (`macdx`, EUR/JPY | AUD/JPY | EUR/USD | XAU/USD, `'1h'`) equal their counts before; no `'15min'` `macdx` row
-  appears on those four. (Whether any `'15min'` `macdx` row is there today: production not read; the count before shows
+  After it: its own list (above) shows only `'15min'` rows of (`macdx`, USD/JPY), (`macdx`, AUD/USD) and `stockmacd`, and
+  no row of EUR/JPY, AUD/JPY, EUR/USD or XAU/USD. As context, the counts after it: for (`macdx`, USD/JPY), (`macdx`,
+  AUD/USD) and each `stockmacd` pair the `'15min'` count equals the `'1h'` count; (`macdx`, EUR/JPY | AUD/JPY | EUR/USD |
+  XAU/USD, `'1h'`) equal their counts before; no `'15min'` `macdx` row appears on those four; a difference the list does
+  not explain is a follower's tick or untick between the reads, written down (corrected at the fourth review: these
+  counts were the check). (Whether any `'15min'` `macdx` row is there today: production not read; the count before shows
   it, and one found there is told to the owner before anything is sent.)
   - v40 ignores the twins: its filters take `'1h'` only (index.ts:776-778 through `isMacdhChart`; :1525 through
     `isStockmacdChart`; v40's lines). v41 ignores the `'1h'` rows of USD/JPY, AUD/USD and the shares the same way once
@@ -777,7 +840,17 @@ under v40.
   as the first writer read it): no text change.
 - These statements (the twins, the reconcile, the later delete, and 6.4's) are sent by hand **with the owner's
   confirmation** (the Supabase connector asks the owner; a connector timeout is not proof that nothing ran, so the counts
-  are read back; or the owner runs it in the SQL Editor). Each has been run first on a local PostgreSQL (7.1, 6.1); in
+  are read back; or the owner runs it in the SQL Editor). **A send that timed out can also run later** (added at the
+  fifth review: scripts/morning-check/README.md:353, of three sends that timed out the second or the third ran after its
+  timeout, when and which not known; the read-back shows only what has run so far). So a statement is not sent again
+  while an earlier prompt of it may still be answered, and the step that rests on it waits until none may: the owner
+  declines every open prompt of it first, or, if that cannot be told, closes them and runs the statement in the SQL
+  Editor; this is written in docs §8.156. Above all **the twins before the merge** (a twin run late, after v41's deploy,
+  brings back a twin unticked under v41, with `created_at` after M, which (a1) cannot remove, and v41 mails against the
+  untick until step 9) and **the rebuild before the revert** (a rebuild run late, after V, deletes `'1h'` rows ticked
+  under v40 with no `'15min'` row and brings back `'1h'` rows unticked under v40; (b1) and (b2) repair neither, 6.4;
+  its delete is bounded by R for that, 6.4). Whether a prompt the connector stopped waiting for can still be answered,
+  and how the owner closes one, is not known here. Each has been run first on a local PostgreSQL (7.1, 6.1); in
   production each delete is first sent as its matching `select rule, pair, interval, created_at` (no user ids) of the
   rows it would remove, read against the cases this section and 6.4 expect, and only then sent; the literals M, T0, R
   and V are written as ISO 8601 UTC with `Z` (added at the third review: the after-count of the reconcile accepts any
@@ -863,8 +936,8 @@ The timeframe comes from `tfLabel` (logic.ts), so it is the signal's own chart:
 
 **EUR/JPY, AUD/JPY, EUR/USD and gold (`1h`): v40's email, word for word** (research/macdfade1h-prod-spec.md 4.3; v40's
 code at 9ca2054 indicators.ts:1421-1486), with one difference: a pair's item 9 is 4.5's `1h` paragraph (run
-44555599946's numbers, the docs section of the release, the 〔mailedOn〕 sentence, and the three phrases 4.5 rewrites
-for the per-pair form; so item 9 is no longer v40's word for word). Gold's item 9 stays
+44555599946's numbers, the docs section of the release, the 〔mailedOn〕 sentence, the three phrases 4.5 rewrites
+for the per-pair form, and 4.5's per-pair chance sentence; so item 9 is no longer v40's word for word). Gold's item 9 stays
 v40's word for word ("Not measured on gold … The numbers measured on the five pairs are in the app's settings notes."
 / 「金では測っていません…5ペアで測った数字は、アプリの設定の注にあります。」, HEAD en :1485, ja :1511): still true, the
 notes holding both charts' numbers.
@@ -1057,7 +1130,12 @@ macd-fade-measured.ts:181-217). The table's "−" is this file's typography; the
   own no-signal; EUR/JPY +4.30 (+3.28), AUD/JPY +4.44 (−0.75) and EUR/USD +3.11 (+2.61) on `1h`, all above theirs. They
   were picked after looking (section 1, CLAUDE.md), and AUD/JPY's gap of +5.19 is one of the gaps outside the walks'
   range that chance gives about 2 times in 11 (:550-552); no text presents these as a finding. Each mail states only
-  its own pair's sentence, as the study printed it.
+  its own pair's sentence, as the study printed it, and right after it **the per-pair chance sentence** (added at the
+  fifth review: 〔chance〕 speaks of the five-pair gaps only, HEAD macd-fade-measured.ts:232-246, and comes right before
+  the pair's sentence, :314-315, :337-338, so the pair's own gap, AUD/JPY's +5.19 among them, stood with no chance
+  wording). It gives no reason for the pair's chart (4.1). ja 「ペアごとの合図なしとの差は、偶然で出る差より大きいとは示せていません（値動きに傾きのない作り物の値段10本の幅の外には、偶然だけでも11回に約2回は出ます）。」
+  en "Each pair's difference from no signal has not been shown to be larger than chance gives (chance alone puts a gap outside the range of ten made-up price walks with no trend about 2 times in 11)."
+  The same sentence follows the notes' pairs sentence (notes [7] and [8]), on both charts.
 - Mail count: about 40 entries a week over the five pairs on 15-minute bars (6,006 in 2 years and 10 months) against
   about 10 on 1-hour bars (1,490). Per pair on its chart (the study's counts): USD/JPY 1,217 and AUD/USD 1,224 on
   15-minute bars, EUR/JPY 300, AUD/JPY 288 and EUR/USD 316 on 1-hour bars. Under v41 (each pair on its chart): about
@@ -1074,9 +1152,9 @@ macd-fade-measured.ts:181-217). The table's "−" is this file's typography; the
   two of the 1-hour one's, are not judged on that chart by any mail.)
 - The 〔open〕 = 0, 〔tp〕 = 0 and 〔trades〕 = 0 variants: as research/macdfade1h-prod-spec.md 4.5, word for word.
 
-ja, `15min` (〔mailedOn〕 its `15min` sentence): 「測った数字（5ペア、〔from〕以後、〔to〕より前に確定した15分足、スプレッド込み、docs §〔sec〕）。〔mailedOn〕過去の GMO の足を読み直して測ったもので、メールの読み込みが失敗した時などは入っていません（その回数は測っていません）。このメールの決まりで足の終値で入り、+10 pips で利確・損切りなしで持ったとして測りました（オーナーの持ち方です。メールには利確の値段を書いていません）: 合図は〔trades〕回、うち〔tp〕回が+10 pips に届きました。〔open〕回は〔to〕の時点でまだ届いておらず、その含み損益は合わせて〔openPipsSum〕 pips（マイナスが損）、いちばん悪いもので〔openPipsWorst〕 pips、いちばん長いもので〔openLongest〕持ったままでした（その後は追っていません）。1回あたり平均〔mean〕 pips（届いていないものは、その時の含み損益で数えました）。途中の含み損は中央値〔maeMedian〕 pips、最大〔maeMax〕 pips。+10 pips に届くまでの時間は中央値〔tpMedian〕、10回に1回は〔tpP90〕より長く、いちばん長いもので〔tpMax〕でした。足の終値で入るので指値ではなく、入らなかった注文はありません（週末の止まっている時間に確定した足のもの〈下〉を除き、この決まりの合図は、そのペアのメールをこの時間足で判定するかどうかに関わらず、すべて入ったとして数えました）。損切りをしないので、+10 pips に届く割合は作りの上で高く出ます。同じ合図で逆向き（上で買い・下で売り）に入ると1回あたり〔flowMean〕 pips、合図なしで〔baseWhat〕入ると〔baseMean〕 pips でした（合図なしは、同じ持ち方〈+10 pips で利確・損切りなし〉ですが、足の終値ではなく15分足の最初の1分に入ったもので、同じ入りではありません）。〔chance〕〔pair〕だけでは平均〔pairMean〕 pips（合図なしでは〔pairBaseMean〕 pips）です。平均がマイナスだったペア: 〔negPairs〕。ほかに〔notMailed〕回、週末の止まっている時間に確定した足に合図がありましたが、その足はどのペアのメールでも判定しないので、上の数字に入れていません。」
+ja, `15min` (〔mailedOn〕 its `15min` sentence): 「測った数字（5ペア、〔from〕以後、〔to〕より前に確定した15分足、スプレッド込み、docs §〔sec〕）。〔mailedOn〕過去の GMO の足を読み直して測ったもので、メールの読み込みが失敗した時などは入っていません（その回数は測っていません）。このメールの決まりで足の終値で入り、+10 pips で利確・損切りなしで持ったとして測りました（オーナーの持ち方です。メールには利確の値段を書いていません）: 合図は〔trades〕回、うち〔tp〕回が+10 pips に届きました。〔open〕回は〔to〕の時点でまだ届いておらず、その含み損益は合わせて〔openPipsSum〕 pips（マイナスが損）、いちばん悪いもので〔openPipsWorst〕 pips、いちばん長いもので〔openLongest〕持ったままでした（その後は追っていません）。1回あたり平均〔mean〕 pips（届いていないものは、その時の含み損益で数えました）。途中の含み損は中央値〔maeMedian〕 pips、最大〔maeMax〕 pips。+10 pips に届くまでの時間は中央値〔tpMedian〕、10回に1回は〔tpP90〕より長く、いちばん長いもので〔tpMax〕でした。足の終値で入るので指値ではなく、入らなかった注文はありません（週末の止まっている時間に確定した足のもの〈下〉を除き、この決まりの合図は、そのペアのメールをこの時間足で判定するかどうかに関わらず、すべて入ったとして数えました）。損切りをしないので、+10 pips に届く割合は作りの上で高く出ます。同じ合図で逆向き（上で買い・下で売り）に入ると1回あたり〔flowMean〕 pips、合図なしで〔baseWhat〕入ると〔baseMean〕 pips でした（合図なしは、同じ持ち方〈+10 pips で利確・損切りなし〉ですが、足の終値ではなく15分足の最初の1分に入ったもので、同じ入りではありません）。〔chance〕〔pair〕だけでは平均〔pairMean〕 pips（合図なしでは〔pairBaseMean〕 pips）です。ペアごとの合図なしとの差は、偶然で出る差より大きいとは示せていません（値動きに傾きのない作り物の値段10本の幅の外には、偶然だけでも11回に約2回は出ます）。平均がマイナスだったペア: 〔negPairs〕。ほかに〔notMailed〕回、週末の止まっている時間に確定した足に合図がありましたが、その足はどのペアのメールでも判定しないので、上の数字に入れていません。」
 
-en, `15min`: "Measured (five pairs, 15-minute bars that closed from 〔from〕 up to, not including, 〔to〕, spread paid, docs §〔sec〕). 〔mailedOn〕 The measurement re-reads GMO's past bars; times this email's reads failed and the like are not in it (how often: not measured). Entered by this email's rule at the bar's close and held with a take profit of +10 pips and no stop (the owner's way of holding; this email states no take-profit price): 〔trades〕 signals, of which 〔tp〕 reached +10 pips. 〔open〕 had not reached it by 〔to〕; their unrealised result was 〔openPipsSum〕 pips in all (a minus is a loss), the worst 〔openPipsWorst〕 pips, the longest held 〔openLongest〕 (not followed after that). The mean was 〔mean〕 pips a trade (those not reached counted at their unrealised result then). The largest loss on the way: median 〔maeMedian〕 pips, largest 〔maeMax〕 pips. Time to +10 pips: median 〔tpMedian〕, longer than 〔tpP90〕 one time in ten, longest 〔tpMax〕. The entry is at the bar's close, not a limit order, so no order went unfilled (every signal of this rule, but those on bars that closed in the weekend pause (below), is counted as entered, whether or not that pair's email is judged on this timeframe). With no stop, the share reaching +10 pips comes out high by construction. Entering the other way on the same signals (a BUY at the top, a SELL at the bottom) gave 〔flowMean〕 pips a trade, and entering with no signal 〔baseWhat〕 gave 〔baseMean〕 pips (held the same way, +10 pips and no stop, but entered at the 15-minute bar's first minute, not at its close, so not the same entry). 〔chance〕 On 〔pair〕 alone the mean was 〔pairMean〕 pips (with no signal, 〔pairBaseMean〕 pips). Pairs whose mean was below zero: 〔negPairs〕. Besides these, 〔notMailed〕 signals fell on bars that closed in the weekend pause; no pair's email judges those bars, so they are not in the numbers above."
+en, `15min`: "Measured (five pairs, 15-minute bars that closed from 〔from〕 up to, not including, 〔to〕, spread paid, docs §〔sec〕). 〔mailedOn〕 The measurement re-reads GMO's past bars; times this email's reads failed and the like are not in it (how often: not measured). Entered by this email's rule at the bar's close and held with a take profit of +10 pips and no stop (the owner's way of holding; this email states no take-profit price): 〔trades〕 signals, of which 〔tp〕 reached +10 pips. 〔open〕 had not reached it by 〔to〕; their unrealised result was 〔openPipsSum〕 pips in all (a minus is a loss), the worst 〔openPipsWorst〕 pips, the longest held 〔openLongest〕 (not followed after that). The mean was 〔mean〕 pips a trade (those not reached counted at their unrealised result then). The largest loss on the way: median 〔maeMedian〕 pips, largest 〔maeMax〕 pips. Time to +10 pips: median 〔tpMedian〕, longer than 〔tpP90〕 one time in ten, longest 〔tpMax〕. The entry is at the bar's close, not a limit order, so no order went unfilled (every signal of this rule, but those on bars that closed in the weekend pause (below), is counted as entered, whether or not that pair's email is judged on this timeframe). With no stop, the share reaching +10 pips comes out high by construction. Entering the other way on the same signals (a BUY at the top, a SELL at the bottom) gave 〔flowMean〕 pips a trade, and entering with no signal 〔baseWhat〕 gave 〔baseMean〕 pips (held the same way, +10 pips and no stop, but entered at the 15-minute bar's first minute, not at its close, so not the same entry). 〔chance〕 On 〔pair〕 alone the mean was 〔pairMean〕 pips (with no signal, 〔pairBaseMean〕 pips). Each pair's difference from no signal has not been shown to be larger than chance gives (chance alone puts a gap outside the range of ten made-up price walks with no trend about 2 times in 11). Pairs whose mean was below zero: 〔negPairs〕. Besides these, 〔notMailed〕 signals fell on bars that closed in the weekend pause; no pair's email judges those bars, so they are not in the numbers above."
 
 `1h`: the same two texts with 「確定した15分足」 → 「確定した1時間足」, 「15分足の最初の1分」 → 「1時間足の最初の1分」; "15-minute bars that
 closed" → "1-hour bars that closed", "the 15-minute bar's first minute" → "the 1-hour bar's first minute"; 〔mailedOn〕
@@ -1100,7 +1178,8 @@ its baseline 175,050 holds 2 × 35,010 = 70,020; the ledger copies, python, at t
 - the weekend sentence: v40's 「…このメールでは判定しないので、上の数字に入れていません。」 / "this email does not judge those
   bars" → 「…その足はどのペアのメールでも判定しないので、上の数字に入れていません。」 / "no pair's email judges those bars"
   (the weekend gate is the same on both charts, 2.4).
-The `15min` text has the same three. Tests pin the new wording word for word (7.1). And in en only, the sentence after
+The `15min` text has the same three. Both also have the per-pair chance sentence after the 〔pair〕 sentence (above;
+added at the fifth review), in the mail and the notes versions. Tests pin the new wording word for word (7.1). And in en only, the sentence after
 〔mailedOn〕: v40's "It re-reads GMO's past bars; …" (HEAD macd-fade-measured.ts:326, right after the "Measured (…)"
 sentence its "It" meant) → "The measurement re-reads GMO's past bars; …", in both charts' mail and notes versions
 (corrected at the third review: with 〔mailedOn〕 between them, "It" would read as the emails or the paragraph; ja has no
@@ -1110,7 +1189,8 @@ subject there, 「過去の GMO の足を読み直して測ったもので」, H
 paragraph per chart. With the three phrases rewritten, its changes are now: ja 「このメールの決まりで」 → 「メールの決まりで」;
 en "times this email's reads failed" → "times the email's reads failed", "Entered by this email's rule" → "Entered by the
 email's rule", "this email states no take-profit price" → "the email states no take-profit price"; the 〔pair〕 sentence
-becomes all five pairs' means of that chart's run, as that item writes it. Its other items (「このメールでは判定しないので」 /
+becomes all five pairs' means of that chart's run, as that item writes it, and the per-pair chance sentence follows it
+unchanged. Its other items (「このメールでは判定しないので」 /
 "this email does not judge those bars" and 〔baseWhat〕's 「このメールが判定する」 / "this email judges") have nothing left
 to change: the rewritten phrases hold no 「このメール」 / "this email". 〔mailedOn〕 is in both versions as written (it says
 「メール」 / "the email", not 「このメール」). A test pins each word for word.
@@ -1201,15 +1281,24 @@ The sentence holds 「−」 as a word, 「この決まり − 合図なし」, 
   - `stockmacdNotes` (ja:2189-2197 / en:2084-2092):
     - [0] (ja:2190 / en:2085) 「の1時間足だけで判定します」 → 「の15分足だけで判定します」; en "Judged on the 1-hour chart
       of 8 US stocks" → "Judged on the 15-minute chart of 8 US stocks". Nothing else changes.
-    - [1] (ja:2191 / en:2086) 「見るのは1時間足の確定ごとです」 → 「見るのは15分足の確定ごとです」; en "looked at at each
-      1-hour close" → "looked at at each 15-minute close". Nothing else changes.
+    - [1] (ja:2191 / en:2086) 「見るのは1時間足の確定ごとです」 → 「見るのは15分足の確定ごとです」; en "The rule is the currency
+      pairs' MACD fade, looked at at each 1-hour close." → "The rule is the same as the currency pairs' MACD fade; a stock
+      is looked at at each 15-minute close." Nothing else changes. (Corrected at the fourth review: this changed only
+      "1-hour" to "15-minute", as HEAD en.ts:2087 holds, which reads as the currency pairs' fade looked at on 15-minute
+      closes, untrue for EUR/JPY, AUD/JPY, EUR/USD and gold; the ja, 「…と同じで、見るのは…」, gives the shares' closes in a
+      clause of its own. Its word-for-word pin, HEAD src/test/signal-alert-settings.test.tsx:1055, changes with it.)
     - [2] (ja:2192 / en:2087) the closes (fitted to the probe, 3.3), the Tokyo sentence as 4.4 item 8, the US sentence,
       and 〔closing〕, which is **empty**, ja and en: the first version's 〔closing〕 (ja 「（取引時間の最後の足は、引けの値段が
       出てから判定します）」, en " (the session's last bar once the closing price is out)") is not written, since the
       closing-price condition of 3.3 item 6 cannot hold at Tokyo's 11:15 bar (decided at the second review; HEAD ja:2193 /
-      en:2088 already hold no 〔closing〕). ja (the slot left in the text, empty):
-      「足と値段は Yahoo Finance の公開データで、チャートの株の足と同じです（公式の配信ではないため、止まることがあります）。足が確定してから送ります。米国株はニューヨークの 9:45〜16:00 の15分ごと、日本株は 9:15〜11:30 と 12:45〜15:30 の15分ごとに足が確定し、Yahoo の最後の約定の時刻がそれを過ぎたら判定します〔closing〕。確定から45分を過ぎた足は送りません。東証の値段は Yahoo では約15分遅れて届きます（2026-11-06 に、1時間足の読み込みで測りました）。そのため、日本株のメールは足が確定してから15分ほど後に判定して送ります（15分足で実際に何分後になるかは、まだ測っていません）。米国株は、1時間足の時に、確定の数秒後に送っていました（2026-11-05 の2通。15分足では、まだ見ていません）。受信箱に届くまでの時間は確かめていません。」
-      en: "The bars and the price are Yahoo Finance's public data, the same as the app's stock chart (not an official feed; it may stop). Mailed once the bar has closed: US bars close every 15 minutes from 9:45 to 16:00 New York time, Japanese ones every 15 minutes from 9:15 to 11:30 and from 12:45 to 15:30 Tokyo time; a bar is judged once Yahoo's last trade is past its close〔closing〕. A bar that closed more than 45 minutes ago is not mailed. Yahoo's Tokyo prices come about 15 minutes late (measured on 2026-11-06, on the 1-hour reads), so Japanese stocks' emails are judged and sent some 15 minutes after the bar closed (how many minutes on 15-minute bars has not been measured yet); US stocks' were sent a few seconds after the close on 1-hour bars (the two on 2026-11-05; not yet seen on 15-minute bars). How long they take to reach the inbox has not been checked."
+      en:2088 already hold no 〔closing〕). After the 45-minute sentence, the sentence on Tokyo's 11:30 bar (added at the
+      fourth review: the closes listed leave out that bar, which the chart draws and the 600-bar window holds but no read
+      mails, 2.4 "Never judged"; counted from the code, the lunch-time answer not yet seen). It sits inside the quote, so
+      the regex of 3.5 still takes the whole item, and after the two sentences HEAD src/test/stockmacd-alerts.test.tsx
+      :403-404 pins together; the literal pins HEAD src/test/signal-alert-settings.test.tsx:1029-1030 and :1062-1063
+      change with it. ja (the slot left in the text, empty):
+      「足と値段は Yahoo Finance の公開データで、チャートの株の足と同じです（公式の配信ではないため、止まることがあります）。足が確定してから送ります。米国株はニューヨークの 9:45〜16:00 の15分ごと、日本株は 9:15〜11:30 と 12:45〜15:30 の15分ごとに足が確定し、Yahoo の最後の約定の時刻がそれを過ぎたら判定します〔closing〕。確定から45分を過ぎた足は送りません。日本株の前場の引け（11:30）の値段は、Yahoo では1本の足（11:30〜11:45）になり、チャートと MACD の600本に入りますが、その足ではメールを送りません。その足を判定できるのは 12:45 からの午後の読み込みで、確定から45分を過ぎているためです（コードから数えたもので、昼休みの間の Yahoo の答えは、まだ見ていません）。東証の値段は Yahoo では約15分遅れて届きます（2026-11-06 に、1時間足の読み込みで測りました）。そのため、日本株のメールは足が確定してから15分ほど後に判定して送ります（15分足で実際に何分後になるかは、まだ測っていません）。米国株は、1時間足の時に、確定の数秒後に送っていました（2026-11-05 の2通。15分足では、まだ見ていません）。受信箱に届くまでの時間は確かめていません。」
+      en: "The bars and the price are Yahoo Finance's public data, the same as the app's stock chart (not an official feed; it may stop). Mailed once the bar has closed: US bars close every 15 minutes from 9:45 to 16:00 New York time, Japanese ones every 15 minutes from 9:15 to 11:30 and from 12:45 to 15:30 Tokyo time; a bar is judged once Yahoo's last trade is past its close〔closing〕. A bar that closed more than 45 minutes ago is not mailed. Tokyo's morning closing price (11:30) is a bar of its own on Yahoo (11:30 to 11:45); it is in the chart and in the MACD's 600 bars, but no email is sent on that bar. It can be judged only at the afternoon's reads, from 12:45, more than 45 minutes after it closed (counted from the code; Yahoo's answer during the lunch break has not been seen yet). Yahoo's Tokyo prices come about 15 minutes late (measured on 2026-11-06, on the 1-hour reads), so Japanese stocks' emails are judged and sent some 15 minutes after the bar closed (how many minutes on 15-minute bars has not been measured yet); US stocks' were sent a few seconds after the close on 1-hour bars (the two on 2026-11-05; not yet seen on 15-minute bars). How long they take to reach the inbox has not been checked."
     - [3] (ja:2193 / en:2088) the owner's sentence as 4.4 item 10; the sentence before it and the one after it stay. ja:
       「利確の値段も損切りの値段もありません。これはこの決まりの作りで、損切りをしないことを勧めるものではありません。この決まりは Sextant 独自のもので、公開されているインジケーターではありません。96%・足の確定で判定すること・株を15分足で判定すること・MACD の枠を15分足の新しい120本にすること・逆張りの向き（株にも当てはめること）・利確と損切りの値段を書かないことは、アプリのオーナーが決めたものです。この枠は、アプリの15分足のチャートの枠と同じです。取引時間の最後の足の終値は、次の取引時間の始まりまで売買できないことがあります（測っていません）。」
       en: "There is no take-profit price and no stop price. That is how this rule is built; it is not advice to hold without a stop. This rule is Sextant's own, not a published indicator. 96%, judging at the bar's close, judging shares on 15-minute bars, the MACD pane of the newest 120 15-minute bars, the fade side (shares included) and stating no take-profit or stop price are the app owner's choices. That pane is the same as the app's 15-minute chart's. The close of a session's last bar may not be tradable until the next session opens (not measured)."
@@ -1257,10 +1346,14 @@ The sentence holds 「−」 as a word, 「この決まり − 合図なし」, 
     - [11] (HEAD [10]) the owner's sentence, ja:
       「利確の値段も損切りの値段もありません。これはこの決まりの作りで、損切りをしないことを勧めるものではありません。この決まりは Sextant 独自のもので、公開されているインジケーターではありません。96%・足の確定で判定すること・ペアごとの時間足（ドル/円・豪ドル/ドルは15分足、ユーロ/円・豪ドル/円・ユーロ/ドルと金は1時間足）・15分足の MACD の枠を新しい120本にすること・逆張りの向き・利確と損切りの値段を書かないことは、アプリのオーナーが決めたものです。MACD の枠（新しい120本）は、アプリのその時間足のチャートの枠と同じです。通知は注文の指示ではありません。届いたサインの成績（+10 pips に届いたかどうかも）は、記録も表示もしていません。」
       en: "There is no take-profit price and no stop price. That is how this rule is built; it is not advice to hold without a stop. This rule is Sextant's own, not a published indicator. 96%, judging at the bar's close, each pair's timeframe (15-minute bars for USD/JPY and AUD/USD, 1-hour bars for EUR/JPY, AUD/JPY, EUR/USD and gold), the 15-minute MACD pane of the newest 120 bars, the fade side and stating no take-profit or stop price are the app owner's choices. The MACD pane (the newest 120 bars) is the same as the app's chart's on that timeframe. An alert is not an instruction to trade. The alerts' results (whether one reached +10 pips included) are not recorded or shown."
-    - [12] (HEAD [11]) the weekend's bars, both counts (v41's 15-minute counts and v40's 1-hour ones, as written in the two
-      texts, not recounted here), ja:
-      「週末は、判定しない時間を広めに取っています。金曜 21:00 UTC（日本時間 土曜 6:00）以後、日曜 22:00 UTC（日本時間 月曜 7:00）より前に確定する足は判定しないので、週末の前の最後の足は判定されません（ドル/円・豪ドル/ドルの15分足は、米国の夏時間は金曜 20:45〜21:00 UTC の1本、冬時間は金曜 20:45〜22:00 UTC の5本。ユーロ/円・豪ドル/円・ユーロ/ドルと金の1時間足は、夏時間は金曜 20:00〜21:00 UTC の足、冬時間は金曜 20:00〜22:00 UTC の2本）。」
-      en: "The time over the weekend when nothing is judged is drawn wide: a bar that closes at or after Friday 21:00 UTC (Saturday 6:00 Japan time) and before Sunday 22:00 UTC (Monday 7:00 Japan time) is not judged, so the last bar before the weekend is not judged either (on the 15-minute chart of USD/JPY and AUD/USD, in US summer time the one bar 20:45–21:00 UTC on Friday, in winter time the five bars 20:45–22:00 UTC; on the 1-hour chart of EUR/JPY, AUD/JPY, EUR/USD and gold, in summer time the bar 20:00–21:00 UTC on Friday, in winter time the two bars 20:00–22:00 UTC)."
+    - [12] (HEAD [11]) the weekend's bars, as recounted at the fifth review (2.4 "Never judged": on GMO's bars the week's
+      last bar in both seasons; the winter counts this item gave before, five 15-minute bars and two 1-hour bars, as
+      v40's live note, 9ca2054 ja.ts:2151 / en.ts:2046, describe bars GMO's charts do not have; docs §8.156 records that
+      v40's live note had the same error; gold's bars are not counted, and [13] says what was seen of them). If the
+      15-minute run's 3 unidentified bars (2.4) prove to be Friday bars after 21:00, this item is corrected, this file
+      first. Its pin, HEAD src/test/signal-alert-settings.test.tsx:602, changes with it. ja:
+      「週末は、判定しない時間を広めに取っています。金曜 21:00 UTC（日本時間 土曜 6:00）以後、日曜 22:00 UTC（日本時間 月曜 7:00）より前に確定する足は判定しないので、週末の前の最後の足は判定されません（GMO の足では、ドル/円・豪ドル/ドルの15分足は金曜 20:45〜21:00 UTC の足、ユーロ/円・豪ドル/円・ユーロ/ドルの1時間足は金曜 20:00〜21:00 UTC の足で、米国の夏時間も冬時間も同じです。金の足は数えていません）。」
+      en: "The time over the weekend when nothing is judged is drawn wide: a bar that closes at or after Friday 21:00 UTC (Saturday 6:00 Japan time) and before Sunday 22:00 UTC (Monday 7:00 Japan time) is not judged, so the last bar before the weekend is not judged either (on GMO's bars: on the 15-minute chart of USD/JPY and AUD/USD the bar 20:45–21:00 UTC on Friday, on the 1-hour chart of EUR/JPY, AUD/JPY and EUR/USD the bar 20:00–21:00 UTC on Friday, the same in US summer and winter time. Gold's bars have not been counted)."
     - [13] (HEAD [12]) gold's break: v40's text word for word (9ca2054 ja.ts:2152 / en.ts:2047). HEAD's 15-minute wording
       goes.
   - FAQ 「どの通貨ペアに対応していますか？」 (HEAD ja:2035 / en:1932): ja 「MACD の逆張りのサインをドル/円・ユーロ/円・豪ドル/円・
@@ -1336,9 +1429,16 @@ The sentence holds 「−」 as a word, 「この決まり − 合図なし」, 
 - **The shares are fitted** (6.3 step 1b): the probe's shapes and times are written in 3.3 (no price, 3.3), and 3.3
   items 3-6 match them (or are changed to match them, with this file corrected first). 3.3 item 6's texts are decided
   (removed, 4.4, section 5); its parser change is made only if the probe's timed reads call for it (3.3 item 6).
-- **The study check passed on both charts at the function PR's final head commit** (7.2): a `tf` `15min` run and a
-  `tf` `1h` run of macdfade15.yml whose head SHA equals that commit, both run ids and the SHA written in the PR, each
-  run's summary.json its chart's run of record. A push runs the workflow on `TF=1h` only (.github/workflows/macdfade15.yml:82,
+- **The study check passed on both charts at the function PR's last commit that touches a file the check runs** (7.2;
+  corrected at the fifth review: this asked for the PR's final head commit, and its last sentence then asked for new
+  runs only after a commit touching such a file, two different rules): a `tf` `15min` run and a `tf` `1h` run of
+  macdfade15.yml whose head SHA equals that commit, both run ids and the SHA written in the PR, each run's summary.json
+  its chart's run of record. The files the check runs are research/macdfade-prod-check.ts's imports followed through
+  (on HEAD, relative imports only, 35 files under research/ and supabase/functions/, signal-alerts' indicators.ts and
+  stocks.ts and `_shared/macd-fade-measured.ts` among them, neither signal-alerts/index.ts nor src/lib/i18n; listed by
+  this writer at the fifth review) and the workflow's push paths (:38-62). The commits after that SHA are listed in the
+  PR with their files, and none touches such a file; so a commit that changes only the release date (`FUNCTION_VERSION`
+  in index.ts, 3.7; 〔switch〕 in ja.ts / en.ts, section 5 [0]) needs no new run. A push runs the workflow on `TF=1h` only (.github/workflows/macdfade15.yml:82,
   its push paths :38-62 include research/macdfade-prod-check.ts, `_shared/macd-fade.ts` and `signal-alerts/indicators.ts`),
   and only on the branch claude/app-confirmation-jvmk03 (:35-37); so the 1-hour run can be the push's at that commit
   when the PR's head branch is that branch and the commit touches a push path; otherwise it is a dispatch. The 15-minute
@@ -1353,7 +1453,9 @@ The sentence holds 「−」 as a word, 「この決まり − 合図なし」, 
 - The tests and static checks of 7.1 pass on the function's branch (section 5's texts in it: 3.5 "Tests, by PR").
 - **The subscription statements were run on a local PostgreSQL before step 3** (7.1, "The subscription statements"):
   every statement of 3.6 and 6.4, with the rows each leaves as those sections say (added at the third review).
-- **The twins are in** (3.6; 6.3 step 3): the counts read back, the four 1-hour charts' `macdx` counts unchanged.
+- **The twins are in** (3.6; 6.3 step 3): the statement's own list shows only `'15min'` rows of the narrowed set and no
+  row of the four 1-hour charts (3.6); the counts read back as context (a change in the four 1-hour charts' `macdx`
+  counts between the reads is followers' ticks, written down, not a failed precondition; corrected at the fourth review).
 - No v40 state to wait for: v40 keeps no open trade and no state row (research/macdfade1h-prod-spec.md 3.2).
 - **A merge alone ships it** (deploy-functions.yml:21-27: a push to main touching `supabase/functions/**`; :76: the
   default list, econ-calendar not in it). So every PR before the function's has nothing under `supabase/functions/**`.
@@ -1364,6 +1466,18 @@ The sentence holds 「−」 as a word, 「この決まり − 合図なし」, 
   deploy-functions.yml:86-87, showing signal-alerts and live-chart updated): the loop deploys the slugs one by one under
   `set -euo pipefail` (:62-84), so a run that stops on an earlier slug leaves the old bundles live (corrected at the
   third review: "runs" only, before).
+  **If the deploy does not reach signal-alerts** (added at the fourth review: no step was given): the run fails before
+  signal-alerts' slug (seventh of the eight, :76; a failure on any earlier slug, or the token step, :51-56, stops it), or
+  no run deploys the merge's SHA, and no run record says v41. Then v40 serves the minute runs and the screen throughout.
+  The default list is dispatched once more, only while v41's first answer can still land by H:18; otherwise, or if that
+  run fails too, the merge is reverted at once (its message written by hand), so that no later push touching
+  `supabase/functions/**` (:21-27), or a dispatch, deploys v41 unattended at a minute outside 6.2's window. In that case
+  6.4's reconcile, rebuild, (b1) and (b2) are not sent: under v40 throughout, the `'1h'` rows are current (v40's ticks
+  and unticks change `'1h'` rows only, 3.6) and the `'15min'` rows are only the twins. The twins are removed with 6.4's
+  narrowed `'15min'` delete, after its matching select (3.6), counted, with the owner's confirmation, and written in docs
+  §8.156; econ-calendar is not redeployed (step 6 was not reached; its live bundle is v40's, which never read the twins,
+  3.6). A run that stops after signal-alerts, at live-chart, leaves v41 live: that is 6.3 step 5b's case (live-chart
+  dispatched by name once more; 6.4 only if that fails too, corrected at the fifth review).
 
 ### 6.2 Timing
 
@@ -1400,7 +1514,13 @@ What the timing decides differs by chart. Let H be an hour, and "first answer" t
 - If the first answer lands at H:00, USD/JPY and AUD/USD have a gap of three bars; from H:01 to H:03, one overlapping
   bar (or that gap, if v40's H:00 read did not judge the hour); at H:04 or H:05, a lost read; if after H:18, a gap of one
   bar or more; and at any first answer from H:04 on, a gap of four bars if none of v40's reads of the H:00 close judged
-  the hour. Either is written down (docs §8.156) and told to the owner; nothing else is done.
+  the hour. With H = 14 a late first answer reaches the shares too (added at the fourth review): in New York's winter
+  its session opens at 14:30 UTC and v40's first 1-hour close of it is 15:30 UTC, and v41 judges only the newest
+  closed bar at a read (2.4). A first answer up to 14:59 leaves them clean (v41 judges the 14:30 bar at the 14:45
+  close's reads); from 15:00 on, the New York bars from 14:30 up to v41's first judged bar are judged by neither, a gap
+  of one 15-minute bar, one more for each later quarter (if v40 judged its 15:30 close before v41 answered, its bar
+  14:30-15:30 covers them, and v41's first bar inside it is an overlap instead). Counted from the code. Either is
+  written down (docs §8.156) and told to the owner; nothing else is done.
 - Recorded from the run's records (`net._http_response`): v40's last answer and v41's first; for USD/JPY and AUD/USD the
   end of the last 1-hour bar v40 judged (`end_1h_ms`) and the open of the first 15-minute bar v41 judged (`live_ms`, for
   the morning check, 7.3); for EUR/JPY, AUD/JPY, EUR/USD and gold, v40's last judged 1-hour bar and v41's first (docs
@@ -1427,12 +1547,13 @@ What the timing decides differs by chart. Let H be an hour, and "first answer" t
    publishes is v40's texts with this change; the function's branch then takes main. Merged and published to Lovable well before step 4 (the day before if the release day
    allows); Lovable's state reported as given (e.g. `pending`), not checked further (CLAUDE.md). Against v40 it draws v40's
    one 1時間 column, as today.
-2a. **The study check on the function's branch** (7.2), at the PR's final head commit: a dispatch of macdfade15.yml with
+2a. **The study check on the function's branch** (7.2), at the commit 6.1 names (the PR's last commit that touches a
+   file the check runs): a dispatch of macdfade15.yml with
    `tf` `15min`, and a `tf` `1h` run (the push's at that commit, or a dispatch); both run ids and the head SHA written in
    the PR. A failure, or a summary.json other than its chart's run of record, stops the release.
 3. **The twins** (3.6, narrowed to USD/JPY, AUD/USD and the shares), with the owner's confirmation, just before the merge
-   (T0 recorded); the counts read before and after, per rule, pair and interval, the four 1-hour charts' `macdx` counts
-   unchanged.
+   (T0 recorded); its own list of rows only `'15min'` rows of the narrowed set, none of the four 1-hour charts (3.6); the
+   counts read before and after, per rule, pair and interval, as context (3.6).
 4. **The function's PR** (sections 3-4: index.ts, indicators.ts, stocks.ts, live-chart/stocks.ts if the probe needs it,
    macd-fade-measured.ts, macd-fade.ts's comments; **section 5's texts**, src/lib/i18n/ja.ts and en.ts, in place of
    001a3df's all-15-minute texts, with 〔switch〕 written as the merge's UTC date, section 5; the tests, 3.5), merged per
@@ -1474,7 +1595,8 @@ What the timing decides differs by chart. Let H be an hour, and "first answer" t
      `waiting`, `twelve_unavailable`, `day_spent`, `unavailable`, `maintenance`, `short`, and a chart with no `macdx`
      follower on its own interval (above). **Not explained** (6.4's triggers count them; 2.4 lists some among "Never
      judged" too, but they are v41's own side): a close of a followed chart none of whose minutes has a read of the
-     chart in the records (the queue, 2.4), `deadline` on every read of it (the run spent its budget before the chart: 2.4 counts the `macdx` charts' reads as no heavier than v40's or the build's, but with
+     chart in the records (the queue, 2.4; but for the 1-hour pairs' Tokyo closes that 6.4 excepts, added at the fifth
+     review), `deadline` on every read of it (the run spent its budget before the chart: 2.4 counts the `macdx` charts' reads as no heavier than v40's or the build's, but with
      other rules' followers minutes 0 and 3 can carry up to 2 more GMO chart reads than v40; run lengths not measured), a
      failed run, a `fade` that ended `failed` (v41's own code), and `no_price` on any `macdx` entry, the 15-minute pairs'
      included (corrected at the third review: `failed` was not listed, and `no_price` was counted on the 1-hour pairs
@@ -1510,14 +1632,23 @@ What the timing decides differs by chart. Let H be an hour, and "first answer" t
    `error_msg`); `took_ms` and any `skipped: "budget"` written down; and in the same span **every followed chart's closes
    judged** (a chart with a `macdx` row on the pair's own interval, step 5): USD/JPY's and AUD/USD's every quarter hour,
    EUR/JPY's, AUD/JPY's and EUR/USD's every hour (a read at :00, :03 or :05) and gold's every hour (a `fade` field
-   without `error` for each bar, `judged_after_ms` as the reads give). On 1-hour bars v40 never
-   shared the queue with a stocks run read every minute, so the 1-hour charts are watched as closely as the 15-minute
-   ones. Each finding goes to docs §8.156; a failure is 6.4's.
+   without `error` for each bar, `judged_after_ms` as the reads give). The 1-hour charts are watched as closely as the
+   15-minute ones; in Tokyo's hours their reads at :00, :03 and :05 shared the queue with an every-minute stocks run
+   under v40 too, with no budget (2.4; corrected at the fifth review: this said v40 never did), so a 1-hour pair's close
+   missed there only behind a stocks call is written down and is no trigger (6.4). Each finding goes to docs §8.156; a
+   failure is 6.4's.
 5b. **live-chart and the reconcile.** live-chart is deployed in the same push and loads indicators.ts and
    macd-fade-measured.ts (HEAD indicators.ts:41), and the shared Yahoo parser if 3.3 item 6 changes it. Right after the
-   deploy: the app's chart opened on a pair's 15-minute and 1-hour chart and on a stock's 15-minute chart shows bars, and
-   the deploy's log shows live-chart deployed; if not, 6.4 at once (which sends the reconcile first, 6.4). Then, as soon
-   as that check passes, the reconcile of 3.6 (narrowed; (a1) bounded by M; with the owner's confirmation), its counts
+   deploy: the app's chart opened on a pair's 15-minute and 1-hour chart and on a stock's 15-minute chart shows bars
+   (when 3.3 item 6's parser change was made, a Tokyo stock's too, its last bars looked at: the 11:30 bar of its own and
+   the session's last bar as 7.1's parser cases say; added at the fourth review), and the deploy's log shows live-chart
+   deployed. If the log does not show live-chart deployed (the run stopped at its slug, the last of the default list,
+   deploy-functions.yml:76, so the old live-chart stays live, :62-84, with v41 live), `live-chart` is dispatched by name
+   once more at once, as step 6 does for econ, and checked again (the run's conclusion, its "Report what is live" step,
+   :86-87, and the chart check above). **6.4 at once** (which sends the reconcile first, 6.4) only if a deployed
+   live-chart does not show bars, or that second dispatch fails too (corrected at the fifth review: a live-chart not
+   deployed went to 6.4 at once, though the old live-chart still serves the chart and one dispatch can fix it). Then, as
+   soon as that check passes, the reconcile of 3.6 (narrowed; (a1) bounded by M; with the owner's confirmation), its counts
    read before and after. **Before step 6** (3.6, the econ order).
 6. **econ-calendar** deployed by name right after 5b (it bundles `isMacdhChart`, econ-calendar/mailer.ts:13; it is not in
    the default list). Its recipients are then A ∪ B15 (3.6). Never HEAD's econ (all six on 15 minutes). **Checked
@@ -1540,7 +1671,8 @@ What the timing decides differs by chart. Let H be an hour, and "first answer" t
    recounted.
 9. **Later, with the owner's confirmation, and only after step 6:** after the first morning check of the new form that
    reads clean, the `'1h'` rows of `macdx` on USD/JPY and AUD/USD and of `stockmacd` are deleted (3.6, the narrowed
-   statement), counted before and after; the four 1-hour charts' `macdx` rows are not touched. Before it, step 6's
+   statement), counted before and after; its own list of rows (3.6) only `'1h'` rows of the narrowed set: the four 1-hour
+   charts' `macdx` rows are not touched. Before it, step 6's
    checks have passed, and the econ answer of a Japanese morning after step 6's deploy (its `recipients`, a count,
    econ-calendar/mailer.ts:96-107, read from the run's record) equals a count of A ∪ B15 (3.6) read from the
    subscription table near that run (counts only, no ids); a difference that the ticks between the two reads do not
@@ -1570,8 +1702,28 @@ for a slow deploy. If v40's first answer lands outside H:06 to H:14 (added at th
 such list were given): at H:00 to H:05, v40 reads the 1-hour close at H:00 (HEAD indicators.ts:1056) and judges the
 hour v41 has covered with its 15-minute bars, an overlap of up to four bars on USD/JPY and AUD/USD; at H:15, none (v41's
 last answer, at H:14 or before, never read the H:15 close); at H:16 to H:18, an overlap of one bar if v41 answered at
-H:15 or later; later, one more for each quarter v41 still judged. Each is written down (docs §8.156) and told to the
-owner. The revert's message is written by hand; check that the deploy runs and succeeds (as 6.1).
+H:15 or later; later, one more for each quarter v41 still judged. With H = 14, a v40 first answer after 14:45 UTC
+(New York's winter) overlaps on the shares too (added at the fourth review): v41 has judged New York's 15-minute bars
+from 14:30 at each quarter close from 14:45 to its last answer, and v40 judges the 1-hour bar 14:30-15:30 at 15:30, its
+first close of that session: an overlap of one 15-minute bar for each quarter close from 14:45 that v41 still judged
+(counted from the code). Each is written down (docs §8.156) and told to the owner. The revert's message is written by
+hand; check that the deploy runs and succeeds (as 6.1).
+- **Only for a v41 that served the screen** (added at the fourth review; corrected at the fifth: its last sentence sent
+  6.3 step 5's "v41 judges nothing at all" and 5b's live-chart case to 6.1's branch, though on both v41 served the
+  screen, against 5b's "sends the reconcile first" and 6.1's last sentence): the reconcile, the rebuild, (b1) and (b2)
+  below rest on v41 having served the screen from its deploy on (the rebuild: "under v41 an untick leaves the `'1h'` row
+  and a tick makes none"; (b1)'s bound V: "before V only v41 serves the screen"). The path is decided by the run's
+  records, not by the step that sent the session here. **If any record of any of signal-alerts' modes says v41** (the
+  minute runs' summaries carry `version`, HEAD index.ts:783, :1574, :1876, and `gold-ticks` answers with it at once,
+  :1862; a v41 that loads also serves the screen's `status` and `set`, :2088, :2126-2200), the full path below is
+  taken: the reconcile if not yet sent, the rebuild, the revert, (b1) and (b2). 6.3 step 5's case and 5b's are always on
+  it (step 5 is reached only once v41 answers). A run that throws inside answers `internal_error` with no version (the
+  outer catch, HEAD index.ts:2231-2233), but a loaded v41's other modes still say v41. **Only if no record ever says
+  v41** (the deploy stopped before signal-alerts' slug, 6.1, so v40 served throughout; or v41 was deployed but fails at
+  load, so it answered no request, the screen's included, and no row changed under it) does 6.1's branch apply instead:
+  the merge reverted at once, without waiting for the owner (no statement goes before it), then the twins removed by
+  the narrowed `'15min'` delete after its matching select, with the owner's confirmation; no reconcile, nothing rebuilt,
+  no (b1) or (b2). Under v40 those statements would act against v40's own ticks and unticks.
 - **First, if 3.6's reconcile has not been sent** (a revert "at once" from step 5 or 5b can come before it): (a1) and (a2)
   of 3.6 are sent before anything below, with the owner's confirmation, counted before and after; (a1) is bounded by M
   (the function merge's time), which exists whether or not v41 ever answered (there may be no T1). Without it the
@@ -1580,13 +1732,17 @@ owner. The revert's message is written by hand; check that the deploy runs and s
   row; its insert would bring back the `'1h'` row of a twin whose `'1h'` row was unticked under v40 after T0, so v40
   mails a follower who unticked.
 - **The `'1h'` rows of USD/JPY's and AUD/USD's `macdx` and of `stockmacd` are rebuilt from their `'15min'` rows before
-  the revert** (R = the statement's time), whether or not step 9 has run, with the owner's confirmation, counted before
-  and after. Under v41 an untick leaves the `'1h'` row and a tick makes none (3.6), so those `'1h'` rows are out of date:
+  the revert** (R = the time written into the statement just before it is sent, as 3.6 writes M, T0 and V; it was "the
+  statement's time" before the fifth review), whether or not step 9 has run, with the owner's confirmation, counted
+  before and after, and no earlier prompt of it still open when the revert goes (3.6). Under v41 an untick leaves the
+  `'1h'` row and a tick makes none (3.6), so those `'1h'` rows are out of date:
 
   ```sql
-  -- '1h' rows of these follows unticked under v41
+  -- '1h' rows of these follows unticked under v41. Bounded by R (added at the fifth review): before V no tick makes a
+  -- '1h' row of these (v41's set refuses '1h' for them), so every row to delete is older than R; a run of this
+  -- statement after V (a send that timed out, 3.6) then spares the '1h' rows v40's ticks make
   delete from public.signal_alert_subscriptions h
-   where h.interval = '1h'
+   where h.interval = '1h' and h.created_at < '〔R〕'
      and ((h.rule = 'macdx' and h.pair in ('USD/JPY', 'AUD/USD')) or h.rule = 'stockmacd')
      and not exists (select 1 from public.signal_alert_subscriptions t
                       where t.user_id = h.user_id and t.pair = h.pair and t.rule = h.rule and t.interval = '15min');
@@ -1650,13 +1806,15 @@ owner. The revert's message is written by hand; check that the deploy runs and s
      and ((rule = 'macdx' and pair in ('USD/JPY', 'AUD/USD')) or rule = 'stockmacd');
   ```
   **The order is: reconcile (if not yet sent) → rebuild → revert (V) → T2 → b1 / b2 → econ by name (checked) → the
-  morning check of the window's last GMO day → the `'15min'` delete.** Deleting while econ still runs the per-pair
+  morning check of the window's last GMO day → the `'15min'` delete**, each step only once no earlier prompt of the
+  statement before it is still open (3.6; added at the fifth review). Deleting while econ still runs the per-pair
   bundle drops people whose only `macdx` rows were USD/JPY or AUD/USD; deploying econ before b1 / b2 drops anyone who
   ticked one of those two between R and T2 and has no other `macdx` row (until b2). The `macdx` rows of
   EUR/JPY, AUD/JPY, EUR/USD and gold are not touched by any of these. A later attempt starts again from 3.6's twins.
-- **Triggers.** Revert **at once, whatever the minute**: v41 judges nothing (its runs fail every time), or live-chart
-  fails after the deploy (6.3 step 5b). Revert **in the window above**, on a chart with a `macdx` row on the pair's own
-  interval (6.3 step 5; a chart nobody follows is not judged for the fade and is no trigger): USD/JPY or AUD/USD has two
+- **Triggers.** Revert **at once, whatever the minute**: v41 judges nothing (its runs fail every time), or a deployed
+  live-chart does not show bars, or live-chart's second dispatch fails too (6.3 step 5b; corrected at the fifth review:
+  "live-chart fails after the deploy", which took in a live-chart not deployed). Revert **in the window above**, on a
+  chart with a `macdx` row on the pair's own interval (6.3 step 5; a chart nobody follows is not judged for the fade and is no trigger): USD/JPY or AUD/USD has two
   quarter-hour closes within one hour, each with no read that judged it, or **EUR/JPY, AUD/JPY, EUR/USD or gold has a
   1-hour close that none of v41's reads judged** (v41 changes `fadeAtClose`'s price for them too: 3.2 item 5) — in each
   case no read of that bar has a `fade` record without `error` (a `fade` that ended `failed` or `no_price` judged
@@ -1665,22 +1823,41 @@ owner. The revert's message is written by hand; check that the deploy runs and s
   that the reads of 6.3 steps 5 and 5a cover (every hour from v41's first answer to the end of 5a's Tokyo span, the
   records being read at most about 5 hours apart, 6.3 step 5; after it, only what the morning check shows, 6.3 step 5)
   (the queue of 2.4: the stocks calls' `took_ms` and timeouts read first; no read in the close's minutes, or `deadline`
-  on every read, counts against v41; closes whose records expired before any read are not checked and are no trigger,
-  6.3 step 5); or any pair's `macdx` entry ends `no_price` (corrected at the third review: "no `fade` record", which a
+  on every read, counts against v41, but for a close of EUR/JPY, AUD/JPY or EUR/USD at 01:00, 02:00, 04:00, 05:00 or
+  06:00 UTC on a Tokyo trading day whose reads were held only by a stocks call that started in the close's own minutes,
+  :00 to :05 (the stocks run's records: its minute, `took_ms`, a timeout): v40's stocks run read every minute then too,
+  with no budget (2.4), so a revert to v40 would not cure it; it is written down, not a trigger (added at the fifth
+  review); closes whose records expired before any read are not checked and are no trigger, 6.3 step 5); or any pair's
+  `macdx` entry ends `no_price` (corrected at the third review: "no `fade` record", which a
   read ending `failed` still leaves, "a quarter-hour close that none of its reads judged twice within one hour", which
   read as one close judged twice, and `no_price` on the 1-hour pairs only);
   or the shares fail on their own (every followed share's reads `yahoo_*`, `bars` below 600, or a New York or Tokyo
   session's bars never `judged`, 6.3 step 5a). Each is written down with its records (docs §8.156) and told to the
   owner.
+  **When the owner cannot confirm at once** (added at the fourth review: the reads run by scheduled task at night too,
+  6.3 step 5, but the statements before the revert are sent with the owner's confirmation, 3.6): an at-once revert on
+  the full path waits for the owner's confirmation of the reconcile (if not yet sent) and the rebuild, and never goes
+  before the rebuild (once v40 serves the screen, a v40 tick makes a `'1h'` row with no `'15min'` row, which the
+  rebuild's delete would remove). At night it waits until the owner answers. So do (b1) and (b2) after T2, and the
+  matching select before (b1)'s delete (3.6): their limits (above: a v40 tick on an existing `'1h'` row deleted by (b1);
+  (b2) bringing back a `'1h'` row unticked under v40) grow with every minute from T2 to their send, and that span is
+  written in docs §8.156 beside the wait. The session tells the owner at once (a push notification) and writes the wait,
+  from the trigger to each confirmation, in docs §8.156; if v41's runs fail every time, no rule's mail goes out
+  meanwhile (6.3 step 1a). 6.1's branch (no record says v41, above) does not wait: no statement goes before its revert.
+  (Corrected at the fifth review: this offered to ask at the release whether the session may send the reconcile and the
+  rebuild alone. Every statement here goes through the connector's prompt to the owner or the owner's SQL Editor, 3.6,
+  and nothing in this file gives a way to send one without the owner, so a yes at the release would not have removed
+  the prompt; the offer is dropped.)
 - Then: section 5's texts came in the function's PR (6.3 step 4), so the revert takes them back too; the reverted main
   is published to Lovable (state reported as given; the grid PR of step 2 stays: against v40 it draws v40's column);
   the Routine's prompt replaced by the rollback prompt (7.3, written and kept ready, 6.1) for the GMO days the window
   touches, and by the v11 prompt from the day after the window (corrected at the third review: this said "the v11
   Routine prompt put back", which sends v11's three statements only and holds no window, so it cannot make the reading
   below). **The v41 window** (from v41's first answer to v40's first answer again, both from the run's records) is
-  written down. On the days it touches, v11 reads USD/JPY's and AUD/USD's 1-hour bars inside the window as not v11's (the
-  other four charts are v11's throughout, the window included), and `pairs-v12` every 15-minute bar after it as not
-  v12's (7.3). From the day after the window, the five-pair `pairs-v11` again.
+  written down. On the days it touches, v11 reads USD/JPY's and AUD/USD's 1-hour bars from END_1H to v40's first judged
+  1-hour bar again as not v11's (the other four charts are v11's throughout, the window included), and `pairs-v12` every
+  15-minute bar opened after v41's last judged 15-minute bar as not v12's (7.3; corrected at the fifth review: "inside
+  the window" and "after it"). From the day after the window, the five-pair `pairs-v11` again.
 
 ## 7. Checks
 
@@ -1723,19 +1900,32 @@ fake tables, **each pair on its own chart**:
   its table has no user_id, `created_at` or unique key (scripts/morning-check/bench/schema-v11.sql:11). One made-up row
   per case those sections name: a twin; a `'1h'` row unticked under v40 after T0; a `'1h'` row ticked under v40 after T0
   or in the minute before it; a fresh v41 tick; a v41 re-tick through the all-symbols box carrying `created_at`; a v41
-  untick of a twin; and rows of the four 1-hour charts, which no statement may touch. The rows left after each statement
-  are pinned. The literals M, T0, R and V are written as ISO 8601 UTC with `Z` (e.g. `'2026-11-24T09:08:00Z'`), in
-  this run and in production. In production each delete is first sent as its matching `select rule, pair, interval,
-  created_at` (no user ids) of the rows it would remove, read against the cases expected, and only then sent (3.6).
+  untick of a twin; and rows of the four 1-hour charts, which no statement may touch. And 6.4's own cases, placed after
+  R (added at the fourth review: every case above falls before the rollback, and after the rebuild the two sets match,
+  so (b1) and (b2) would act only on rows where they change nothing, and one built without `h.created_at < V` or without
+  the R − 1 minute bound would pass): a `'15min'` row unticked under v41 between R and V ((b1) deletes its `'1h'` row);
+  a `'15min'` row ticked under v41 between R and V, and an existing `'15min'` row re-ticked then ((b2) inserts the
+  `'1h'` row); a v40 tick after the revert's deploy that makes a new `'1h'` row, `created_at` after V ((b1) keeps it); a
+  v40 tick then on an existing `'1h'` row whose `'15min'` row was unticked under v41 ((b1) deletes it: its documented
+  limit, pinned as such); the (b2) limit cases of 6.4; and a run with step 9's delete sent before the rebuild (the
+  rebuild's insert brings back a `'1h'` row for every `'15min'` row of the narrowed set). The rows left after each
+  statement, and the list each statement reports of its own rows (3.6), are pinned. The literals M, T0, R and V are
+  written as ISO 8601 UTC with `Z` (e.g. `'2026-11-24T09:08:00Z'`), in this run and in production. In production each
+  delete is first sent as its matching `select rule, pair, interval, created_at` (no user ids) of the rows it would
+  remove, read against the cases expected, and only then sent (3.6).
 - **The upserts' `created_at`** (3.6): the upsert request of `set` (on) and of `set_many` (on), as the fake fetch
   receives it, holds `created_at` (the run's now) in every row of its body, beside `lang`, with
   `resolution=merge-duplicates` as today.
 - **A share:** `CLOSES`, `stockBarEnd` and `stockBarBreak` on 15-minute bars (US, Tokyo lunch, Tokyo close, a US half
   day), from fixtures with the probe's stamps and shapes (made-up prices); a Tokyo bar arriving 15 minutes late: judged at
   the next close's reads and mailed (fresh at 45); a bar overtaken before any read judged it: not judged; read again in
-  its window: one email a follower. The closing-price texts (3.3 item 6, decided at the second review): the mail's
-  sentence and the note's 〔closing〕 absent, ja and en (HEAD pins this today: src/test/stockmacd-alerts.test.tsx:402,
-  src/test/signal-alert-settings.test.tsx:1228-1232).
+  its window: one email a follower. Tokyo's 11:30 bar (2.4 "Never judged"; added at the fourth review): on the probe's
+  shapes (the 11:30 row of one price with volume, null rows 11:45 to 12:15, then the afternoon's rows; made-up prices,
+  as the fixture at HEAD src/test/stockmacd-alerts.test.tsx:345-376), a read of the 11:30 close up to 12:00 with Yahoo's last
+  trade time at the auction does not take the 11:30 bar as closed, and a read of the 12:45 close once the 12:30 row is
+  in takes it as the newest closed bar, not fresh: no entry, no mail. The closing-price texts (3.3 item 6, decided at
+  the second review): the mail's sentence and the note's 〔closing〕 absent, ja and en (HEAD pins this today:
+  src/test/stockmacd-alerts.test.tsx:402, src/test/signal-alert-settings.test.tsx:1228-1232).
   **Review finding (2):** HEAD pins `stockBarBreak` on New York's 15:45 bar, Tokyo's 11:15 and 15:15 and plain bars
   (src/test/stockmacd-alerts.test.tsx:195-202) but not on a US half day, which the first version of this item asked for.
   The pin: the bar opening 12:45 New York on a half day gives `null` (`stockBarBreak` reads the regular hours, HEAD
@@ -1744,13 +1934,22 @@ fake tables, **each pair on its own chart**:
   time; 2026-11-27, the Friday after Thanksgiving, is taken as a half day from NYSE's usual calendar, not checked here;
   the pin needs only a 12:45 bar), with `stockBarEnd` of that bar 13:00 New York, so the mail of that bar says nothing of
   a session's end (`stockmacdNotes` [5]).
+  **If 3.3 item 6's parser change is made** (added at the fourth review: no test was named for it; it is in
+  live-chart/stocks.ts and shared by the mail and the chart): src/test/stocks.test.tsx, whose `parseYahooChart` cases are
+  on `1h`, `5min`, `1min`, `1day` and `1month` only today (:75-171), gains `15min` cases from fixtures of the probe's
+  shapes (made-up prices), with Yahoo naming the next session: Tokyo's 15:30 volume-0 last point joins the 15:15 bar, and
+  New York's 16:00 joins the 15:45 bar; Tokyo's 11:30 row, with volume and not the answer's last, stays a bar of its own
+  (as HEAD src/test/stockmacd-alerts.test.tsx:378-389 pins through `stockBarsOf`); a volume-0 last point exactly one bar
+  after the row before at a time that is not a close or lunch time (a forming bar's first print mid-session) stays a bar
+  of its own; the bars before the last are unchanged in every case.
 - The stocks run's budget (3.3 item 10): with Yahoo reads made slow (a fake fetch), no read starts once 30 seconds have
   passed; the shares left are in `reads` as `skipped: "budget"` and are the first read by the next run; `took_ms` is in
   the summary; with fast reads every followed share is read as today.
 - **The measured paragraph:** each run built from its ledger copy and pinned value by value (4.5); `fadeMeasuredLine`
   refuses a chart with no run, `m.tf !== tf` and a pair not measured; the bar's word per chart; the 〔chance〕 branch of
   each chart word for word; 〔mailedOn〕's four texts (two charts, ja and en) word for word, and the three phrases 4.5
-  rewrote for the per-pair form (the entry's parenthesis, 〔baseWhat〕, the weekend sentence) and en's "The measurement
+  rewrote for the per-pair form (the entry's parenthesis, 〔baseWhat〕, the weekend sentence), the per-pair chance
+  sentence right after the pair's sentence (4.5; added at the fifth review), and en's "The measurement
   re-reads GMO's past bars" word for word in both charts' mail and notes versions; the pin of `FADE_MAILED_ON` and of each pair's run to
   `MACDH_INTERVAL_OF` (4.5); `_shared/macd-fade-measured.ts` imports nothing from `signal-alerts/` (the pin at
   src/test/macd-fade.test.ts:185 stays); the 〔open〕 = 0 and 〔tp〕 = 0 variants from summaries made for the test.
@@ -1787,7 +1986,8 @@ are read whole; if that cache is gone (GitHub drops a cache unused for 7 days), 
 `1h`, sha256 `60edab22…` as today" is gone: since e660119 the 1-hour record is run 44555599946's; :379-380's comment that
 v40's `FADE_MEASURED` is still run 44099401423's is rewritten in the function PR.)
 
-At the function PR's final head commit both are run (6.1, 6.3 step 2a): a `tf` `15min` dispatch, and a `tf` `1h` run (the
+At the function PR's last commit that touches a file the check runs both are run (6.1, 6.3 step 2a): a `tf` `15min`
+dispatch, and a `tf` `1h` run (the
 push's, the default `TF`, :82, when that commit touches a push path, :38-62, and the PR's head branch is
 claude/app-confirmation-jvmk03, the only branch the push trigger lists, :35-37; otherwise a dispatch). The shipped entry
 rule and price function (`fadeCloseEntryAt`, `ridePaidAt`) then equal the study's on each chart. Which chart each pair
@@ -1815,7 +2015,10 @@ release check.
 
 - **`pairs-v12`: USD/JPY and AUD/USD only.** src/syms-pairs-v12.part:17-19 holds all five pairs; it keeps the two rows
   `('USD_JPY', 'USD/JPY', 1, …)` and `('AUD_USD', 'AUD/USD', 5, …)` as they are and drops the other three. Nothing else
-  of the v12 text changes but the RUN count below: every CTE is scoped by `syms` (its files, mails, other rows, `late1h`, `swb`: back1-v12.part:74,
+  of the v12 statement changes but the RUN count below, and the pairs-only comments say two pairs (added at the fourth
+  review: src/header-pairs-v12.part:1 says "the FIVE PAIRS" and src/syms-pairs-v12.part:1 "FRONT (five pairs)"; both
+  parts are pairs-v12's only, src/build.sh:95-96, and the `.min.sql` drops comment lines, src/assemble.py:39-46, so only
+  pairs-v12.sql changes by it): every CTE is scoped by `syms` (its files, mails, other rows, `late1h`, `swb`: back1-v12.part:74,
   :87, :88-95 with :92, :99-106, :110-116). For those two, everything it counts stays right: their mails under the v12 id
   on `'15min'` (:74), their `'15min'` `macdx` subscriptions (:87), their other `macdx` rows on `'1h'` or `'15min'`
   (:91: v40's v11 `'1h'` rows of the switch day expected, any later one a finding), `late1h`, the gap and overlap. The
@@ -1854,8 +2057,19 @@ release check.
   have no zero to start from. With the narrowed simulation a clean bench day shows 0, and the scenario pins 0 → 1.
   bench/scen12.py: the switch-day scenarios use `SP = "EUR/JPY"` (:267), which no longer switches, so `SP` becomes `"AUD/USD"`; the picks `pair != "USD/JPY"` (:77-79) take AUD/USD; a scenario for the new RUN count;
   the counts of README v12.4 (2,194 lines, 1,618 ok, the 27 teeth) and the structure check's "five times each in the
-  pairs' files" (README :102) become the two-pair build's. The gold half of check12 and teeth12 may stay in run12.sh (its
-  text is unchanged) but is not a release check.
+  pairs' files" (README :102) become the two-pair build's. **The weekend scenarios must still run** (added at the fifth
+  review): p33 and p34 run only when the first seed has a `weekend_window` entry of a pair other than USD/JPY
+  (scen12.py:85, `if PW:` :318) and p37 only when it has an entry on a Friday bar opened 20:00 to 20:30 (`PF`, `if PF:`
+  :324-326); a skipped scenario is no failure (scen12.py exits 1 only on a FAIL, :421) and teeth12.py prints
+  `NOT CAUGHT` with no exit code (:103-105), while README :99 says two of the 27 teeth (the weekend window an hour later,
+  and the close time an hour after the open in the weekend window, "caught by p37 only") were caught only by these
+  scenarios on seed 1 (run12.sh hands seed 1 to both by default). With the simulation cut to USD/JPY and AUD/USD, seed 1
+  has neither kind (the review's port, and its run of the real sim12.ts on seeds 1 and 3; not run by this writer). So
+  scen12.py fails, not skips, when `PW` or `PF` is missing; teeth12.py exits 1 when a change is not caught; the first
+  seed is one whose two-pair walk has both kinds, confirmed with the real sim12.ts (by the review's port seeds 3, 5 and 7
+  do), or fixture rows give the two cases; and the README's two-pair counts are written only once p33, p34 and p37 run
+  and all 27 changes are caught. The gold half of check12 and teeth12 may stay in run12.sh (its text is unchanged) but
+  is not a release check.
 - **Review finding (4):** README v12.4 (:98) says "The five pairs (37)" and "The shares (`stocks-v12`, 17": scen12.py
   holds 68 `scen("` calls, pairs 38 (p00 to p37), gold 14 (g00 to g13), shares 16 (s00 to s15) (counted by this writer
   with grep). So the record of the five-pair bench of 2026-11-19 is corrected to "(38)" and "16" (the total 68 and gold's
@@ -1921,23 +2135,43 @@ release check.
   ready, 6.1; its values in 〔…〕 at a rollback, 6.4). Added at the third review: 6.4 said "the v11 Routine prompt put
   back", which sends v11's three statements only and holds no window, and the switch-day prompt cannot serve, for after
   K_SWITCH it sends v12's statements only and holds no window end (README :142). What it holds:
-  - The values: the v41 window's start and end for USD/JPY and AUD/USD (v41's first judged 15-minute bar, and v40's
-    first judged 1-hour bar again, from the run's records, 6.4), and the GMO day keys the window touches.
+  - The values, for each of USD/JPY and AUD/USD, from the run's records (6.2, 6.4): END_1H and LIVE as the switch-day
+    prompt holds them (`end_1h_ms`, the end of the last 1-hour bar v40 judged before the switch; `live_ms`, the open of
+    v41's first judged 15-minute bar); v41's last judged 15-minute bar; v40's first judged 1-hour bar again; K_SWITCH;
+    and the GMO day keys the window touches. (Corrected at the fifth review: the values were only the window's start,
+    v41's first judged 15-minute bar, and its end, v40's first judged 1-hour bar again.)
   - Step 2, per GMO day K: on a day the window touches, `pairs-v11`, `gold-v11`, `stocks-v11`, `pairs-v12` and
     `stocks-v12`; after the window, v11's three only (the five-pair `pairs-v11`, 6.4).
-  - The readings: `pairs-v11`'s USD/JPY and AUD/USD lines of 1-hour bars inside the window are not v11's (a `missing`
-    there, and a SUMMARY `CHECK` from those lines only, is not an error); the other three pairs' lines and gold's as on
-    any v11 day. `pairs-v12`'s lines of 15-minute bars opened after the window's end are not v12's (`missing` there is
-    expected: its statements have a start and no end); `macdx_1h_rows_after_end_1h` and `other_macdx_1h_rule_rows` from
-    v40's 1-hour rows after the window are expected (README :45); `stocks-v11`'s `other_stockmacd_rule_rows` (v41's
-    15-minute share rows) and `stocks-v12`'s (v40's 1-hour share rows) on the window's days are expected.
+  - The readings: `pairs-v11`'s USD/JPY and AUD/USD lines of 1-hour bars opened at or after END_1H and before v40's
+    first judged 1-hour bar again are not v11's (a `missing` there, and a SUMMARY `CHECK` from those lines only, is not
+    an error; read from END_1H, not from v41's first judged 15-minute bar: in 6.2's four-bar gap the 1-hour bar before
+    LIVE was judged by neither version; corrected at the fifth review); the other three pairs' lines and gold's as on any
+    v11 day. `pairs-v12`'s lines of 15-minute bars opened after v41's last judged 15-minute bar are not v12's (`missing`
+    there is expected: its statements have a start and no end; corrected at the fifth review: "after the window's end",
+    read against v40's first judged 1-hour bar again, left the bar opened at H:00, which v41 never judged, 6.4, as
+    v12's); `macdx_1h_rows_after_end_1h` and `other_macdx_1h_rule_rows` from v40's 1-hour rows after the window are
+    expected (README :45), and on a day that holds both kinds, v40's 1-hour rows before END_1H in
+    `other_macdx_1h_rule_rows` too; `stocks-v11`'s `other_stockmacd_rule_rows` (v41's 15-minute share rows) and
+    `stocks-v12`'s (v40's 1-hour share rows) on the window's days are expected, and so are both RUN subscription counts,
+    `stocks-v11`'s `stockmacd_subscriptions_not_1h` (the `'15min'` share rows, stocks-v11.part:113) and `stocks-v12`'s
+    `stockmacd_subscriptions_not_15min` (the `'1h'` share rows 6.4 rebuilt, stocks-v12.part:114), on every day the
+    prompt runs: both sets exist from the rebuild to 6.4's `'15min'` delete, which waits for the window's last day's run
+    (added at the fifth review).
+  - **K_SWITCH, when the window holds it and the switch-day prompt has not read it** (a revert before the first 00:16
+    UTC run after the switch; added at the fifth review): K_SWITCH is also read with the switch-day prompt's step 4
+    readings ("The switch day's reading" above): bars before LIVE `before_go_live`; `switch_gap_bars` and
+    `switch_overlap_bars` told; `history_files_missing` expected; `pairs-v11` answering `NO_DATA` for a pair whose
+    1-hour day file of the day is not stored, said as that prompt says it; `stocks-v11`'s RUN
+    `stockmacd_subscriptions_not_1h` expected.
   - The switch-day prompt's step 5 sentence for any day a v12 statement was not sent.
   - The `'15min'` delete of 6.4 waits for the run of the window's last GMO day (6.4).
 - **The 15-minute files:** as the first version said, for USD/JPY and AUD/USD only: the sweep stores each ended 15-minute
   GMO day file it reads; since v33 only other rules' 15-minute followers and the live chart's reads stored them, so days
   may be missing before v41's first read, and `history_files_missing` is expected on the switch day.
 - README: the v12 section's title and lead (README :1, :3, :11-17: "the five pairs, gold and the shares" becomes the
-  per-pair form), v12.1 to v12.7 as above, §10's constants and §12's rebuild (`pairs1h-v11`), build.sh's lines; v12.5's
+  per-pair form), v12.1 to v12.7 as above (README :42's "after step 9 it should be 0" gains "unless a rollback has
+  rebuilt the `'1h'` share rows: then expected until 6.4's `'15min'` delete", and :45's window is read as the rollback
+  prompt reads it; added at the fifth review), §10's constants and §12's rebuild (`pairs1h-v11`), build.sh's lines; v12.5's
   md5 for the changed `pairs-v12` and the new `pairs1h-v11` files, and `gold-v12`'s checked unchanged.
 
 ## 8. Not measured, not checked
@@ -1947,7 +2181,9 @@ release check.
   comparison the owner's choice rests on (research/macdfade15-spec.md :557-589). On 15-minute bars the fade did worse a
   trade than no signal (−0.91, below ten walks' range) and than the other way (−0.78, inside); on 1-hour bars about the
   same as no signal (+0.05) and above the other way (+5.34), both inside. Ten walks give a range, not a test. Every pair's
-  win-rate gap between the charts is within chance (Fisher p 0.51..1.00).
+  win-rate gap between the charts is within chance (Fisher p 0.51..1.00). The bars in the weekend gate, recounted at the
+  fifth review from the two ledger copies (2.4 "Never judged"): 149 a pair on 1-hour bars and 152 on 15-minute bars over
+  149 Fridays, so one a week in both seasons; the 15-minute run's 3 more not identified, gold's not counted.
 - **In the repository:** both summary.json files. **Not:** their null.json and rows.csv (their sha256 are recorded in
   research/macdfade15-spec.md :475-481, :534-540).
 - **Not measured:**
@@ -1983,6 +2219,9 @@ release check.
   - Yahoo's 15-minute answer around a close and through the next session (3.3 "Not yet seen"), and so whether 3.3 item
     6's parser change is needed for the stray closing points. The closing-price sentences are removed (3.3 item 6: on
     the shapes seen they cannot hold at Tokyo's 11:15 bar).
+  - That Tokyo's 11:30 bar is never mailed (2.4 "Never judged", `stockmacdNotes` [2]): counted from HEAD's code; Yahoo's
+    answer in the lunch break, and its regularMarketTime then, not yet seen (3.3 "Not yet seen"). (Added at the fourth
+    review.)
   - Which rows will be ticked or unticked between the twins and v41's first answer, or under v41 before a rollback (3.6
     and 6.4 reconcile them for USD/JPY, AUD/USD and the shares; the counts are read then).
   - Whether a re-run of either study on the branch gives its run of record (7.2 stops if not; both rest on run
@@ -2002,6 +2241,13 @@ release check.
     cannot hold them, scripts/morning-check/bench/schema-v11.sql:11). The rollback prompt (7.3): its contents are listed,
     its text not written. The `--sub` slot of 7.3's new RUN count: not tried. Whether the Supabase connector asks the
     owner before a read-only query (6.3 step 5): not known. (Added at the third review.)
+  - econ-calendar/index.ts: not read by any writer of this file (added at the fourth review). So (a) whether it reads a
+    subscription's `created_at` is not known: 3.6's `created_at` in every rule's upserts rests on "nothing else reads
+    it", a grep that left that file out (econ-calendar/mailer.ts:82 selects no `created_at`, checked at this review);
+    and (b) whether the econ run's record (`net._http_response`) carries `mailDigests`' `recipients`
+    (econ-calendar/mailer.ts:95-107 builds it) is not known; docs/OPERATIONS.md shows no such record (no match for
+    `recipients` or `mailDigests`). 6.3 step 9 and 6.4's `'15min'` delete wait on that count. The build reads the file;
+    if the record lacks the count, this file says how step 9 and 6.4 get it before either delete is sent.
   - The answers of 2026-11-19 in the owner's own words: the per-pair words above are verbatim as relayed by the
     workflow; the dialog's two answers and the earlier "Scope: all" were relayed, the dialog not seen here.
 - **Read by this writer for the per-pair revision** (on e660119, 2026-11-19): this file whole; research/macdfade15-spec.md
@@ -2043,13 +2289,40 @@ release check.
   :9-13; supabase/migrations/20260925120000_signal_alerts.sql :9-18 and 20260925180000_signal_alert_rules.sql :18-26;
   research/macdfade-prod-check.ts :20-66. Run: `git show`, `git diff --stat`, `grep`, `sed`, and python to make the
   edits. No test, no build, no production, no connector.
+- **At the fourth review (2026-11-19), read and run to check each finding** (HEAD e1faa2e, whose code equals e660119's;
+  this file in the working tree): HEAD index.ts :775-790, :1565-1580, :1650-1685, :1860-1882, :2126-2136, :2168-2176 and
+  single lines found by grep (:1600, :1625, :1676); HEAD stocks.ts :100-275; live-chart/stocks.ts :95-110, :130-168;
+  _shared/market-hours.ts :30-45; econ-calendar/mailer.ts :76-110; .github/workflows/deploy-functions.yml :1-88; HEAD
+  ja.ts :2189-2193 and en.ts :2084-2088, 9ca2054 en.ts :2086; src/test/signal-alert-settings.test.tsx :1025-1029, :1050-1063 and
+  grep of the `stockmacdNotes` [2] pins; src/test/stockmacd-alerts.test.tsx :328-405 and greps; src/test/stocks.test.tsx
+  (grep of `parseYahooChart`); scripts/morning-check/src/header-pairs-v12.part:1-2, syms-pairs-v12.part:1-2, build.sh
+  :90-100, assemble.py :36-48; docs/OPERATIONS.md (grep: `recipients`, `mailDigests`). Run: `git log`, `git status`,
+  `git diff`, `grep`, `sed`, and a python check of the tests' reads of section 5's [2] (the regexes of 3.5, the pins
+  :403-404, the forbidden-number patterns). econ-calendar/index.ts not read. No test, no build, no database, no
+  production, no connector.
+- **At the fifth review (2026-11-19), read and run to check each finding** (HEAD e1faa2e; this file in the working
+  tree): 9ca2054 stocks.ts :95-135 and index.ts :1540-1600; HEAD stocks.ts :120-160, :340-344, :364-368; HEAD
+  index.ts :1615-1640, :1835-1876, :2047-2092 (grep and short reads), :2126, :2231-2233; HEAD indicators.ts
+  :1045-1075; HEAD macd-fade-measured.ts :228-248, :308-342; _shared/market-hours.ts :1-60, :140-160;
+  docs/OPERATIONS.md :12312-12320; research/macdfade15-spec.md :120-150, :172-186, :544-556, :577-590; 9ca2054 ja.ts
+  :2151-2152 / en.ts :2046-2047; src/test/signal-alert-settings.test.tsx :596-606 and greps of the 4.4 item 10 pins;
+  .github/workflows/deploy-functions.yml :1-90; .github/workflows/macdfade15.yml :30-100, :180-190;
+  research/macdfade-prod-check.ts :28-45; scripts/morning-check README.md :40-46, :95-99, :351, :353,
+  src/stocks-v11.part:113, src/stocks-v12.part:114, bench/scen12.py :75-86, :315-330, :415-421, bench/teeth12.py (grep),
+  bench/run12.sh :1-45. Run: python on the two ledger copies (`judged`, `baseEntries`, `noMinute`, the pairs' means),
+  a count of the Fridays in the study's period (zoneinfo), the import graph of research/macdfade-prod-check.ts (relative
+  imports), the fourth forbidden-number pattern on HEAD's ja.ts and en.ts and on section 5; `git show`, `git status`,
+  `grep`, `sed`. Not run: gen12.py, sim12.ts or any bench (the two-pair seed claims of 7.3 are the review's); no test, no
+  build, no database, no production, no connector.
 
 ## Questions for the owner
 
-None open from this revision. The choices this file makes itself, and why, are in 4.5 (each mail shows its own chart's
-five-pair numbers and names the pairs mailed on that chart) and 4.1 / section 5 (the texts say the owner chose each
-pair's timeframe and give no reason, since a reason would need every pair's numbers on both charts and the finding that
-every gap is within chance beside it).
+One open from this revision, question 2 below (corrected at the fifth review: this said none, though 2.4 named Tokyo's
+11:30 bar as the owner's choice, not asked). The choices this file makes itself, and why, are in 4.5 (each mail shows
+its own chart's five-pair numbers and names the pairs mailed on that chart) and 4.1 / section 5 (the texts say the
+owner chose each pair's timeframe and give no reason, since a reason would need every pair's numbers on both charts and
+the finding that every gap is within chance beside it). (The fourth review's offer, to ask at the release whether the
+session may send the reconcile and the rebuild alone in an at-once rollback, is dropped, 6.4, so it is not a question.)
 
 1. **(Asked 2026-11-19 with the first 15-minute run's numbers; answered by the per-pair decision of section 1.)** The
    question said the 15-minute numbers were worse than the 1-hour ones (15-minute fade +2.41 a trade against no signal
@@ -2058,3 +2331,12 @@ every gap is within chance beside it).
    same. The owner then chose each pair's chart by the higher win rate (section 1). As put to the owner (Japanese,
    CLAUDE.md; the first run's numbers, kept as asked):
    「15分足の数字は、1時間足より悪い数字でした。15分足で測ると、MACD の逆張り（5ペア、2024年1月1日〜2026年11月10日 21:00 UTC に確定した足、スプレッド込み、+10 pips で利確・損切りなし）は、合図が6,006回、うち5,926回が +10 pips に届き、1回あたり平均 +2.41 pips でした。届かずに残った取引は80回で、その含み損益は合わせて -44,784.5 pips、いちばん悪いもので -1,913.4 pips、いちばん長いもので約666日持ったままでした。途中の含み損は中央値 11.9 pips、最大 2,975.8 pips。+10 pips に届くまでの時間は中央値 約2時間、10回に1回は約4日より長く、いちばん長いもので約545日でした。足の終値で入るので、入らなかった注文は0回です。損切りをしないので、+10 pips に届く割合は作りの上で高く出ます。合図なしで入ると1回あたり +3.31 pips、同じ合図で逆向きに入ると +3.19 pips でした。向き別では、売り（上の端）が1回あたり -1.35 pips、買い（下の端）が +6.29 pips でした。合図なしとの差（-0.90 pips）は、作り物の値段10本で出た幅より下でした。確かめ〈検定〉ではありませんが、悪い側を指しています。1時間足では、合図なしとほぼ同じでした（+3.26 pips と +3.20 pips）。メールと画面には、これをそのまま書きます。この仕様は、言われたとおり15分足で進めます。この数字を見て、1時間足のままにしたい場合は教えてください。」
+
+2. **Tokyo's 11:30 bar (open; added at the fifth review).** 2.4 "Never judged": on 15-minute bars the morning's
+   closing-auction row is a bar of its own, 11:30 to 11:45 JST, in the chart and the 600-bar window, and no mail is
+   ever sent on it. Counted from HEAD's code; Yahoo's answer in the lunch break has not been seen (3.3 "Not yet seen").
+   The owner chose 「15分足のまま（おすすめ）」 for the shares; whether the owner was told of this bar then is not known
+   here (the dialog not seen, section 1). To be put to the owner (Japanese, CLAUDE.md); until answered, v41 is built as
+   this file says (2.4). The answer is written in docs §8.156, and an answer other than leaving it unmailed changes this
+   file first (3.3, 4.4, section 5):
+   「株を15分足にすると、東証の前場の引け（11:30）の値段は、Yahoo では 11:30〜11:45 の1本の足になります。この足はチャートと MACD の600本には入りますが、この足ではメールが出ません。Yahoo の東証の値段は約15分遅れて届くので、この足が確定したと分かるのは早くても 11:45 ごろで、昼休みの間にそれが分からなければ、判定は 12:45 からの午後の読み込みになり、確定から45分を過ぎているため送りません。これはコードから数えたもので、昼休みの間の Yahoo の答えは、まだ見ていません。このまま、この足ではメールを送らない形でよいですか。送る形（この足でも送る、11:15 の足とまとめる）は、まだ作り方を決めていません。」
