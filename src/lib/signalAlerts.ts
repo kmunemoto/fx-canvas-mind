@@ -153,11 +153,15 @@ export interface AlertSettings {
   // it GMO's currency pairs on 5 minutes; #345: and gold from v27), null from
   // a server that does not send them;
   // #291: and the video's way's (gold, 1 minute), likewise
+  // v41 per pair (research/macdfade15min-prod-spec.md section 5): the MACD fade's block also says which of its
+  // timeframes each pair is offered on (`limited`, read as the base block's is): USD/JPY and AUD/USD on 15 minutes,
+  // EUR/JPY, AUD/JPY, EUR/USD and gold on 1 hour; a server that does not send it (v40 and before) leaves it empty,
+  // and then every pair is offered on every timeframe of the block, as before
   indicator: {
     pairs: string[];
     intervals: string[];
     limited: Record<string, string[]>;
-    macdx: { pairs: string[]; intervals: string[] } | null;
+    macdx: { pairs: string[]; intervals: string[]; limited: Record<string, string[]> } | null;
     sweepx: { pairs: string[]; intervals: string[] } | null;
     // #387: the EMA 20 / 200 way's (the six, 15 minutes), likewise
     emarm: { pairs: string[]; intervals: string[] } | null;
@@ -279,6 +283,10 @@ export const normalizeAlertSettings = (value: unknown): AlertSettings | null => 
   const ind = rec(s.indicator);
   const limited: Record<string, string[]> = {};
   for (const [p, ivs] of Object.entries(rec(ind?.limited) ?? {})) limited[p] = strings(ivs);
+  // v41 per pair: the MACD fade's own `limited`, read the same way
+  const macdx = rec(ind?.macdx);
+  const macdxLimited: Record<string, string[]> = {};
+  for (const [p, ivs] of Object.entries(rec(macdx?.limited) ?? {})) macdxLimited[p] = strings(ivs);
   return {
     allowed: s.allowed,
     emailConfigured: s.email_configured,
@@ -290,7 +298,7 @@ export const normalizeAlertSettings = (value: unknown): AlertSettings | null => 
         pairs: strings(ind.pairs),
         intervals: strings(ind.intervals),
         limited,
-        macdx: rec(ind.macdx) ? { pairs: strings(rec(ind.macdx)!.pairs), intervals: strings(rec(ind.macdx)!.intervals) } : null,
+        macdx: macdx ? { pairs: strings(macdx.pairs), intervals: strings(macdx.intervals), limited: macdxLimited } : null,
         sweepx: rec(ind.sweepx) ? { pairs: strings(rec(ind.sweepx)!.pairs), intervals: strings(rec(ind.sweepx)!.intervals) } : null,
         emarm: rec(ind.emarm) ? { pairs: strings(rec(ind.emarm)!.pairs), intervals: strings(rec(ind.emarm)!.intervals) } : null,
         stockmacd: rec(ind.stockmacd) ? { pairs: strings(rec(ind.stockmacd)!.pairs), intervals: strings(rec(ind.stockmacd)!.intervals) } : null,
@@ -311,9 +319,15 @@ export const isFollowing = (settings: AlertSettings, pair: string, interval: str
 // #275: with `rule` "macdx", the MACD peak-and-valley rule's, which has its
 // own charts (the server sends them); #291: "sweepx", the video's way's
 // (#385: "amdpo3" on Q-Trend's and ULTRA's; #387: "emarm", its own)
+// v41 per pair (research/macdfade15min-prod-spec.md section 5): "macdx" on a pair's own timeframe only, where the
+// server limits it (`macdx.limited`); with no limit, every timeframe of the block, as before
 export const indicatorChartOffered = (settings: AlertSettings, pair: string, interval: string, rule?: AlertRule): boolean => {
   const ind = settings.indicator;
-  if (rule === "macdx") return !!ind?.macdx && ind.macdx.pairs.includes(pair) && ind.macdx.intervals.includes(interval);
+  if (rule === "macdx") {
+    if (!ind?.macdx || !ind.macdx.pairs.includes(pair) || !ind.macdx.intervals.includes(interval)) return false;
+    const only = ind.macdx.limited[pair];
+    return !only || only.includes(interval);
+  }
   if (rule === "sweepx") return !!ind?.sweepx && ind.sweepx.pairs.includes(pair) && ind.sweepx.intervals.includes(interval);
   if (rule === "emarm") return !!ind?.emarm && ind.emarm.pairs.includes(pair) && ind.emarm.intervals.includes(interval);
   if (rule === "stockmacd") return !!ind?.stockmacd && ind.stockmacd.pairs.includes(pair) && ind.stockmacd.intervals.includes(interval);

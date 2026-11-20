@@ -18,12 +18,14 @@
 # macdfade15-spec.md "On 1-hour bars (TF=1h)"); the 15-minute run (TF=15min) is the workflow_dispatch input's other
 # value. The syn job's period is New York's winter on 1h, when the walks have a Friday bar the weekend gate keeps.
 #
-# The study check (research/macdfade1h-prod-spec.md 7.2): after each walk's study in syn and after the Python in real,
-# research/macdfade-prod-check.ts runs the code the email ships (_shared/macd-fade.ts fadeCloseEntryAt, signal-alerts/
-# indicators.ts ridePaidAt) on the same files and holds its entries against the study's rows.csv and summary.json;
-# the real job also stops unless summary.json is run 44099401423's (the numbers in FADE_MEASURED). Those steps run for
-# the 1-hour email's rule only (TF 1h, share 0.96, take profit 10); a dispatch with other values measures something
-# else and skips them.
+# The study check (research/macdfade1h-prod-spec.md 7.2; on 15-minute bars research/macdfade15min-prod-spec.md 7.2):
+# after each walk's study in syn and after the Python in real, research/macdfade-prod-check.ts runs the code the email
+# ships (_shared/macd-fade.ts fadeCloseEntryAt, signal-alerts/indicators.ts ridePaidAt) on the same files and holds its
+# entries against the study's rows.csv and summary.json; the real job also stops unless summary.json is the run of
+# record (1h: run 44555599946's, read on whole GMO files, whole against its ledger copy
+# research/ledger/macdfade1h-whole-summary.json; 15min: main's run 44535888012's, with the tf line taken out and whole
+# against the ledger copy; that run's cache is restored last on both, below). Those steps run for the email's rule only (TF 1h or 15min, share 0.96, take profit 10); a dispatch with
+# other values measures something else and skips them.
 #
 # GitHub's runners reach GMO's public price API, which the development container cannot. Read-only: public files
 # fetched, a report printed; it writes nothing to the repository and holds no secret.
@@ -114,10 +116,10 @@ jobs:
         run: |
           deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/macdfade15.ts
           sha256sum $OUT/rows.csv $OUT/summary.json
-      # research/macdfade1h-prod-spec.md 7.2: the shipped function on the same files gives the study's entries (the
-      # files read only, nothing written)
+      # research/macdfade1h-prod-spec.md 7.2 (1h) and research/macdfade15min-prod-spec.md 7.2 (15min): the shipped
+      # function on the same files gives the study's entries (the files read only, nothing written)
       - name: The shipped function against walk 1's study (research/macdfade-prod-check.ts)
-        if: env.TF == '1h' && env.SHARE == '0.96' && env.TP == '10'
+        if: (env.TF == '1h' || env.TF == '15min') && env.SHARE == '0.96' && env.TP == '10'
         env:
           MODE: walkfiles
           OUT: research/out/macdfade15-walk1
@@ -131,7 +133,7 @@ jobs:
           deno run --v8-flags=--max-old-space-size=8192 --allow-read=. --allow-write=research/out --allow-env research/macdfade15.ts
           sha256sum $OUT/rows.csv $OUT/summary.json
       - name: The shipped function against walk 2's study (research/macdfade-prod-check.ts)
-        if: env.TF == '1h' && env.SHARE == '0.96' && env.TP == '10'
+        if: (env.TF == '1h' || env.TF == '15min') && env.SHARE == '0.96' && env.TP == '10'
         env:
           MODE: walkfiles
           OUT: research/out/macdfade15-walk2
@@ -162,7 +164,7 @@ jobs:
           sha256sum $OUT/rows.csv $OUT/summary.json
           python3 -I research/macdfade15-check.py --cache $OUT/gmo --out $OUT
       - name: The shipped function against the untidy walk 1's study (research/macdfade-prod-check.ts)
-        if: env.TF == '1h' && env.SHARE == '0.96' && env.TP == '10'
+        if: (env.TF == '1h' || env.TF == '15min') && env.SHARE == '0.96' && env.TP == '10'
         env:
           MODE: walkfiles
           OUT: research/out/macdfade15-mess1
@@ -230,6 +232,18 @@ jobs:
           path: research/.cache
           key: gmo-macdfade15-none
           restore-keys: gmo-macdfade15-
+      # 15min (research/macdfade15-spec.md "Result of the re-run on GMO's files read afresh"): the 15-minute run of record
+      # is main's run 44535888012. The branch's caches hold three GMO 1-minute day files of 2025-06-20 cut short (59 bars
+      # instead of 1,440: AUD_JPY bid, EUR_USD bid, USD_JPY ask; gmo-cache-diff run 44546585012); that run's own cache,
+      # restored last by its exact key (main's caches are readable from a branch), puts the whole files over them. If it
+      # is gone (GitHub drops a cache unused for 7 days), the short files stay and the check below stops the job.
+      # 1h too (2026-11-19, the owner's 「ペアごとに15分足と1時間足の勝率の高い方」): the 1-hour run reads the same
+      # 1-minute files, so it is measured on the whole ones as well.
+      - if: env.TF == '15min' || env.TF == '1h'
+        uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: gmo-macdfade15-44535888012
       - name: The study (its numbers go to files; none printed here)
         env:
           MODE: real
@@ -248,23 +262,22 @@ jobs:
           key: gmo-macdfade15-${{ github.run_id }}
       - name: The Python on the same files and rows (research/macdfade15-check.py)
         run: python3 -I research/macdfade15-check.py --cache research/.cache --out $OUT
-      # research/macdfade1h-prod-spec.md 7.2: the shipped function on GMO's same files gives the study's entries (the
-      # files the study read or fetched into research/.cache, read only here), and this run's summary.json is run
-      # 44099401423's, whose numbers fill FADE_MEASURED (4.5); either failing stops the job
-      - name: The shipped function against the study (research/macdfade-prod-check.ts); summary.json must be run 44099401423's
-        if: env.TF == '1h' && env.SHARE == '0.96' && env.TP == '10'
+      # research/macdfade1h-prod-spec.md 7.2 (1h) and research/macdfade15min-prod-spec.md 7.2 and 4.5 (15min): the
+      # shipped function on GMO's same files gives the study's entries (the files the study read or fetched into
+      # research/.cache, read only here), and this run's summary.json is the run of record whose numbers fill
+      # FADE_MEASURED[tf] (v41: one run per chart): on 1h run 44555599946's (research/macdfade15-spec.md "Result of
+      # the 1-hour re-run on whole GMO files": run 44099401423, whose numbers v40 ships, read the same three cut-short
+      # files), whole against its copy
+      # research/ledger/macdfade1h-whole-summary.json; on 15min main's run 44535888012's (research/macdfade15-spec.md
+      # "Result of the re-run on GMO's files read afresh": run 44077464383's files had three GMO 1-minute day files cut
+      # short), checked once without the bytes ',\n  "tf": "15min"' (53f7003 added tf to meta) and once whole against
+      # its copy research/ledger/macdfade15-summary.json; either failing stops the job
+      - name: The shipped function against the study (research/macdfade-prod-check.ts)
+        if: (env.TF == '1h' || env.TF == '15min') && env.SHARE == '0.96' && env.TP == '10'
         env:
           MODE: real
         run: |
-          got=$(sha256sum < $OUT/summary.json | cut -d' ' -f1)
-          want=60edab22302e5fe755c70b38f87b8b28fa27389ccc1bb10c1a0c0c88c448a9e2
-          echo "summary.json sha256 $got (run 44099401423's: $want)"
           deno run --v8-flags=--max-old-space-size=12288 --allow-read=. --allow-env research/macdfade-prod-check.ts
-          if [ "$got" != "$want" ]; then
-            echo "summary.json is not run 44099401423's: the numbers in FADE_MEASURED are not this run's (research/macdfade1h-prod-spec.md 7.2): stop"
-            exit 1
-          fi
-          echo "summary.json is run 44099401423's"
       # the same study with END a week earlier (the files already kept), and the Python on it: how much the mean a
       # trade moves with the last minute's price (research/macdfade15-spec.md "How it is measured")
       - name: The study and the Python again, with END a week earlier
@@ -307,6 +320,50 @@ jobs:
           OUT_END1W=$OUT-end1w deno run --allow-read=. --allow-env research/macdfade15.ts
           echo "tf ${TF} share ${SHARE} tp ${TP}"
           sha256sum $OUT/rows.csv $OUT/summary.json $OUT/null.json $OUT-end1w/rows.csv $OUT-end1w/summary.json
+      # 2026-11-19 (the owner: 「ペアごとに…勝率が高い方に」): each pair's fade and flow trades by period, from rows.csv, so
+      # the choice of a pair's chart can be read against halves and years of the period. Counts and pips only, no price.
+      - name: Each pair by period (rows.csv; no price)
+        run: |
+          python3 -I - "$OUT/rows.csv" "$START" "$END" <<'PY'
+          import csv, sys, datetime
+          path, start, end = sys.argv[1], sys.argv[2], sys.argv[3]
+          iso = lambda x: datetime.datetime.fromisoformat(x.replace("Z", "+00:00"))
+          s0, s1 = iso(start), iso(end)
+          mid = s0 + (s1 - s0) / 2
+          rows = list(csv.DictReader(open(path)))
+          print(f"rows {len(rows)}; period {start} .. {end}; halves split at {mid.isoformat()}")
+          def periods(t):
+              out = ["all", "half1" if t < mid else "half2", str(t.year)]
+              return out
+          acc = {}
+          for r in rows:
+              t = iso(r["open"])
+              for per in periods(t):
+                  k = (r["dir"], r["pair"], per)
+                  a = acc.setdefault(k, {"n": 0, "tp": 0, "open": 0, "pips": 0.0, "openPips": 0.0, "worst": None, "mae": 0.0})
+                  a["n"] += 1
+                  pips = float(r["pips"])
+                  a["pips"] += pips
+                  a["mae"] = max(a["mae"], float(r["mae"]))
+                  if r["result"] == "tp":
+                      a["tp"] += 1
+                  else:
+                      a["open"] += 1
+                      a["openPips"] += pips
+                      a["worst"] = pips if a["worst"] is None else min(a["worst"], pips)
+          results = sorted({r["result"] for r in rows})
+          print("result values:", results)
+          order = ["all", "half1", "half2"] + sorted({k[2] for k in acc if k[2] not in ("all", "half1", "half2")})
+          for d in ("fade", "flow"):
+              for pair in ("USD/JPY", "EUR/JPY", "AUD/JPY", "EUR/USD", "AUD/USD"):
+                  for per in order:
+                      a = acc.get((d, pair, per))
+                      if not a:
+                          continue
+                      win = 100 * a["tp"] / a["n"]
+                      worst = "-" if a["worst"] is None else f"{a['worst']:.1f}"
+                      print(f"{d:4} {pair:7} {per:5} trades {a['n']:5d} tp {a['tp']:5d} win {win:6.2f}% open {a['open']:3d} pips mean {a['pips'] / a['n']:+7.2f} open sum {a['openPips']:10.1f} worst {worst} mae max {a['mae']:.1f}")
+          PY
       # summary.json whole, as one line of base64 (the artifact host is refused by the development container's proxy):
       # copied from this log into research/ledger/ and held against the sha256 above before anything is filled from it
       # (research/macdfade1h-prod-spec.md 4.5)
@@ -314,3 +371,45 @@ jobs:
         run: |
           echo "summary.json sha256 $(sha256sum < $OUT/summary.json | cut -d' ' -f1) bytes $(wc -c < $OUT/summary.json)"
           echo "SUMMARY_JSON_BASE64 $(base64 -w0 $OUT/summary.json)"
+      # the run of record (moved last on 2026-11-19, so that a new measurement still prints its numbers, its pairs by
+      # period and its summary.json before this stops the job)
+      - name: summary.json must be the run of record
+        if: (env.TF == '1h' || env.TF == '15min') && env.SHARE == '0.96' && env.TP == '10'
+        run: |
+          if [ "$TF" = "1h" ]; then
+            # run 44555599946 (2026-11-19, on whole GMO files), whose numbers v41 ships as FADE_MEASURED["1h"] (the
+            # EUR/JPY, AUD/JPY and EUR/USD mails); it replaced v40's run 44099401423 (60edab22…, three files cut short:
+            # the same fade and flow, another baseline), whose copy stays as the record of v40's numbers
+            got=$(sha256sum < $OUT/summary.json | cut -d' ' -f1)
+            want=d59b64c6212e594f0b3b4a89bb1683a6a5f98652208cafb59f6420bb352c833b
+            echo "summary.json sha256 $got (run 44555599946's: $want)"
+            if [ "$got" != "$want" ]; then
+              echo "summary.json is not run 44555599946's: GMO's files are not that run's (its cache gone, or GMO changed a file), these are new numbers (research/macdfade15-spec.md \"Result of the 1-hour re-run on whole GMO files\"): stop"
+              exit 1
+            fi
+            ledger=$(sha256sum < research/ledger/macdfade1h-whole-summary.json | cut -d' ' -f1)
+            echo "research/ledger/macdfade1h-whole-summary.json sha256 $ledger"
+            if [ "$got" != "$ledger" ]; then
+              echo "summary.json is not the ledger copy byte for byte: stop"
+              exit 1
+            fi
+            echo "summary.json is run 44555599946's"
+          else
+            got=$(sha256sum < $OUT/summary.json | cut -d' ' -f1)
+            stripped=$(python3 -I -c 'import sys; b = open(sys.argv[1], "rb").read(); t = b",\n  \"tf\": \"15min\""; assert b.count(t) == 1, "the tf line is not there once"; sys.stdout.write(__import__("hashlib").sha256(b.replace(t, b"")).hexdigest())' $OUT/summary.json)
+            want=74a4a230a291d68a8e8169ea293a5428f46863ffc0ed86804522f4f509cc888b
+            echo "summary.json sha256 $got; without its tf line $stripped (run 44535888012's: $want)"
+            if [ "$stripped" != "$want" ]; then
+              echo "summary.json without its tf line is not run 44535888012's: GMO's files are not that run's (its cache gone, or GMO changed a file), these are new numbers (research/macdfade15min-prod-spec.md 4.5 step 4): stop"
+              exit 1
+            fi
+            if [ -f research/ledger/macdfade15-summary.json ]; then
+              ledger=$(sha256sum < research/ledger/macdfade15-summary.json | cut -d' ' -f1)
+              echo "research/ledger/macdfade15-summary.json sha256 $ledger"
+              if [ "$got" != "$ledger" ]; then
+                echo "summary.json is not the ledger copy byte for byte (research/macdfade15min-prod-spec.md 7.2): stop"
+                exit 1
+              fi
+            fi
+            echo "summary.json is run 44535888012's (with its tf line)"
+          fi

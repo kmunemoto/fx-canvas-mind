@@ -1,0 +1,10 @@
+-- stocks-v12.sql  -  the morning check of the MACD fade e-mails on the 15-minute chart for the SHARES (rule stockmacd_12_26_9_w600_15min_fade96of120_in_v5, signal-alerts v41).
+-- ONE read-only statement (WITH ... SELECT) for mcp__Supabase__execute_sql. Replace the two markers START_MS and END_MS (each written once, in double curly braces, in the first CTE) by the epoch
+-- milliseconds of the range: the same GMO day as pairs-v12 / gold-v12, (X-2d) 21:00 UTC .. (X-1d) 21:00 UTC, END_MS = START_MS + 86400000; a row belongs to the range by its
+-- bar's OPEN (bar_time). Nothing else is to be edited. It has no go-live constant: it reads rows only, and before v41 there are none under its rule id.
+-- The shares' bars are not stored, so NOTHING IS RECOUNTED: an entry production missed, a mail at a bar with no entry, a wrong side or a wrong price cannot be seen here
+-- (research/macdfade15min-prod-spec.md 7.3: rows against mails only). What is checked are the rows of public.signal_alerts themselves, per bar: one side a bar (other_side),
+-- one entry in every row of the bar (entries_differ), no stop and no target (stop_or_target), interval 15min, closed_at within 15 minutes after the open (stockBarEnd), and,
+-- as for the pairs, rows not sent (not_sent) and more rows than followers (dup). It is stocks-v11.sql with the new id, the '15min' subscriptions and those two bounds.
+-- It reads no user_id / event_id / e-mail address and writes nothing.
+-- Result: the same columns as pairs-v12.sql: row_type (RUN | SUMMARY | LINE), instrument, bar_open_utc, side, verdict, data (json). See README.md (section v12).

@@ -1,24 +1,28 @@
-// The study check of the MACD fade on 1-hour bars (research/macdfade1h-prod-spec.md section 7.2): the shared function
-// the email runs gives the study's entries. The study (research/macdfade15.ts with TF=1h, its rule
-// research/macdfade15-spec.md "On 1-hour bars (TF=1h)", checked by its own Python research/macdfade15-check.py) is
+// The study check of the MACD fade (research/macdfade1h-prod-spec.md section 7.2 on 1-hour bars; on 15-minute bars
+// research/macdfade15min-prod-spec.md section 7.2, the email from signal-alerts v41): the shared function the email
+// runs gives the study's entries. The study (research/macdfade15.ts, TF=1h or TF=15min, its rule
+// research/macdfade15-spec.md, checked by its own Python research/macdfade15-check.py) is
 // written apart from the shared code; this ties the code the function runs to it: _shared/macd-fade.ts
 // fadeCloseEntryAt for the entry, and signal-alerts/indicators.ts ridePaidAt for the price (the bar's ask close for a
 // BUY, its bid close for a SELL, track-outcomes/quotes.ts fillSide, as GMO wrote them).
 //
 // Run after the study, with the same environment (research/macdfade15.ts :50-59):
-//   TF        must be 1h (not given or empty is the study's 15min: refused)
+//   TF        1h or 15min, given (not given or empty is refused: the bar length must be said)
 //   MODE      walkfiles: the walk's GMO files under $OUT/gmo (written, and with MESS=1 made untidy, by the study);
 //             real: research/.cache (the study read or fetched them there). Never fetched here: a missing file fails.
-//   OUT       the study's output folder (rows.csv, summary.json); the study's default for 1h research/out/macdfade1h
-//   START, END, LOAD_FROM   the study's (defaults 2024-01-01T00:00:00Z, 2026-11-10T21:00:00Z, 2023-10-01T00:00:00Z)
+//   OUT       the study's output folder (rows.csv, summary.json); the study's default research/out/macdfade1h for 1h,
+//             research/out/macdfade15 for 15min
+//   START, END, LOAD_FROM   the study's (defaults 2024-01-01T00:00:00Z, 2026-11-10T21:00:00Z, and LOAD_FROM
+//             2023-10-01T00:00:00Z for 1h, 2023-12-01T00:00:00Z for 15min, as .github/workflows/macdfade15.yml)
 //   SHARE is not read: the function's share is FADE_SHARE, and the study's summary.json must say it ran at it.
 //
-// The five pairs' 1-hour bars are loaded exactly as the study loads them (research/macdfade15.ts loadFiles and
-// chartOf, :85-95, :1057-1069): loadTf(src, pair, "1h", LOAD_FROM, END, st, weekendOutOf("inside")) → quotesOf →
-// historyRead(pair, "1h", quotes, END), each chart bar with its own quote. For every bar n whose close T = open + 1
-// hour is in [START, END): fewer than 600 bars up to it counted short; else fadeCloseEntryAt on the 600 closes ending
-// at n; an entry is mailed when one of the function's reads at T + 0, 3 and 5 minutes (a second into the minute,
-// :78-79) is not in isPossiblyClosed, else counted not mailed; a mailed entry's price is ridePaidAt(side, bar n's
+// The five pairs' bars of the TF are loaded exactly as the study loads them (research/macdfade15.ts loadFiles and
+// chartOf, :85-95, :1057-1069): loadTf(src, pair, TF, LOAD_FROM, END, st, weekendOutOf("inside")) → quotesOf →
+// historyRead(pair, TF, quotes, END), each chart bar with its own quote. For every bar n whose close T = open + the
+// bar's length is in [START, END): fewer than 600 bars up to it counted short; else fadeCloseEntryAt on the 600 closes
+// ending at n; an entry is mailed when one of the function's reads (1h: T + 0, 3 and 5 minutes; 15min: T + 0, 1 and 3
+// minutes; a second into the minute, :78-79) is not in isPossiblyClosed, else counted not mailed; a mailed entry's
+// price is ridePaidAt(side, bar n's
 // quote). Against the study, keyed by pair|open: rows.csv's fade rows are the same set of bars, each with the same
 // zside, side, entry and share0 (as written); per pair summary.json's entries, notMailed, signals (the two together),
 // short, zoneless and judged. Also, at every such bar, the function's Z and Zp (closeZonesAt) bit for bit against the
@@ -43,21 +47,22 @@ const W = LEVEL_WINDOW;
 const SHOW = 20;
 
 const env = (k: string, d: string) => Deno.env.get(k) ?? d;
-const TF = env("TF", "") || "15min";
-if (TF !== "1h") throw new Error(`TF "${TF}": this check is for the 1-hour email (TF=1h)`);
-const STEP = HOUR;
+const TF = env("TF", "");
+if (TF !== "1h" && TF !== "15min") throw new Error(`TF "${TF}": 1h or 15min (the email's bar length)`);
+const STEP = TF === "1h" ? HOUR : 15 * MINUTE;
 const MODE = env("MODE", "");
 if (MODE !== "walkfiles" && MODE !== "real") throw new Error(`MODE "${MODE}": walkfiles or real (the study's run being checked)`);
 const START = Date.parse(env("START", "2024-01-01T00:00:00Z"));
 const END = Date.parse(env("END", "2026-11-10T21:00:00Z"));
-const LOAD_FROM = Date.parse(env("LOAD_FROM", "2023-10-01T00:00:00Z"));
-const OUT = env("OUT", "research/out/macdfade1h");
+const LOAD_FROM = Date.parse(env("LOAD_FROM", TF === "1h" ? "2023-10-01T00:00:00Z" : "2023-12-01T00:00:00Z"));
+const OUT = env("OUT", TF === "1h" ? "research/out/macdfade1h" : "research/out/macdfade15");
 if (!(Number.isFinite(START) && Number.isFinite(END) && Number.isFinite(LOAD_FROM) && LOAD_FROM <= START && START < END)) throw new Error("LOAD_FROM <= START < END, as times");
 const iso = (ms: number) => new Date(ms).toISOString().replace(".000Z", "Z");
 
-// the function reads the 1-hour chart 0, 3 and 5 minutes after a close (indicators.ts gmoIntervalsDue), from a
-// second into the minute, and does not run while isPossiblyClosed holds (research/macdfade15.ts mailedAt)
-const READS = [0, 3, 5] as const;
+// the function reads the 1-hour chart 0, 3 and 5 minutes after a close and the 15-minute chart 0, 1 and 3 minutes
+// after it (indicators.ts gmoIntervalsDue), from a second into the minute, and does not run while isPossiblyClosed
+// holds (research/macdfade15.ts READS, mailedAt)
+const READS: readonly number[] = TF === "1h" ? [0, 3, 5] : [0, 1, 3];
 const mailedAt = (T: number): boolean => READS.some((r) => !isPossiblyClosed(T + r * MINUTE + 1000));
 
 const zoneOf = (r: ReturnType<typeof zoneAt>): FadeZone | null => (r === null ? null : { m: r.m, top: r.top, bottom: r.bottom });
@@ -82,7 +87,7 @@ interface PairSum {
 const check = async (bad: (m: string) => void) => {
   const summary = JSON.parse(await Deno.readTextFile(`${OUT}/summary.json`));
   const meta = summary.meta ?? {};
-  if (meta.tf !== "1h") bad(`the study's summary.json says tf ${JSON.stringify(meta.tf)}, not "1h"`);
+  if (meta.tf !== TF) bad(`the study's summary.json says tf ${JSON.stringify(meta.tf)}, not ${JSON.stringify(TF)}`);
   if (meta.share !== FADE_SHARE) bad(`the study's summary.json says share ${meta.share}; the function's is ${FADE_SHARE}: not the same rule`);
   if (meta.start !== iso(START) || meta.end !== iso(END) || meta.loadFrom !== iso(LOAD_FROM)) {
     bad(`the study's period ${meta.loadFrom} / ${meta.start} / ${meta.end} is not this check's ${iso(LOAD_FROM)} / ${iso(START)} / ${iso(END)} (LOAD_FROM / START / END)`);
@@ -108,7 +113,7 @@ const check = async (bad: (m: string) => void) => {
     if (c[0] !== "fade") continue;
     const key = `${c[1]}|${c[2]}`;
     if (study.has(key)) bad(`rows.csv: two fade rows at ${key}`);
-    if (Date.parse(c[3]) !== Date.parse(c[2]) + STEP) bad(`rows.csv: ${key}: T0 ${c[3]} is not the bar's open + 1 hour`);
+    if (Date.parse(c[3]) !== Date.parse(c[2]) + STEP) bad(`rows.csv: ${key}: T0 ${c[3]} is not the bar's open + the bar's length (${TF})`);
     study.set(key, { zside: c[4], side: c[5], entry: c[6], share0: c[7] });
   }
   if (flowRows !== study.size) bad(`rows.csv: ${study.size} fade rows, ${flowRows} flow rows`);
@@ -119,13 +124,13 @@ const check = async (bad: (m: string) => void) => {
   const mine = new Map<string, Row & { price: number; share: number }>();
   const tot = { bars: 0, inRange: 0, short: 0, zoneless: 0, judged: 0, zRead: 0, signals: 0, entries: 0, notMailed: 0, top: 0, bottom: 0 };
   for (const [pi, pair] of PAIRS.entries()) {
-    const q = await loadTf(src, pair, "1h", LOAD_FROM, END, st, weekend);
+    const q = await loadTf(src, pair, TF, LOAD_FROM, END, st, weekend);
     const qs: QuoteCandle[] = quotesOf(q.bars);
     const byT = new Map(qs.map((x) => [Date.parse(x.datetime), x]));
     const t: number[] = [];
     const closes: number[] = [];
     const quotes: QuoteCandle[] = [];
-    for (const c of historyRead(pair, "1h", qs, END).candles) {
+    for (const c of historyRead(pair, TF, qs, END).candles) {
       const tt = Date.parse(c.datetime.replace(" ", "T") + "Z");
       const qq = byT.get(tt);
       if (!qq) throw new Error(`${pair} ${iso(tt)}: a chart bar without its quote`);
@@ -181,7 +186,7 @@ const check = async (bad: (m: string) => void) => {
     tot.notMailed += c.notMailed;
     const p = sumPairs[pi];
     console.log(
-      `${pair}: chart ${t.length} 1-hour bars, ${c.inRange} closing in [START, END) (short ${c.short}, zoneless ${c.zoneless}, judged ${c.judged}); the function: ${c.entries + c.notMailed} signals, ${c.entries} mailed, ${c.notMailed} not mailed (weekend gate) | the study: ${p?.signals} signals, ${p?.entries} entries, ${p?.notMailed} not mailed (short ${p?.short}, zoneless ${p?.zoneless}, judged ${p?.judged})`,
+      `${pair}: chart ${t.length} ${TF} bars, ${c.inRange} closing in [START, END) (short ${c.short}, zoneless ${c.zoneless}, judged ${c.judged}); the function: ${c.entries + c.notMailed} signals, ${c.entries} mailed, ${c.notMailed} not mailed (weekend gate) | the study: ${p?.signals} signals, ${p?.entries} entries, ${p?.notMailed} not mailed (short ${p?.short}, zoneless ${p?.zoneless}, judged ${p?.judged})`,
     );
     if (!p || p.pair !== pair) continue;
     const same = (what: keyof typeof c | "signals", mineV: number, theirs: number) => {

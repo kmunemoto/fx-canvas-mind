@@ -2,7 +2,7 @@
 
 **Superseded (2026-11-17) by research/macdfade1h-prod-spec.md, not to be built.** The owner then said
 「やっぱりメールの判断1時間足で」; its line numbers were read on the shelved v10 files, which 9bcfd70 put back to main's. The 15-minute form is
-built from research/macdfade15min-prod-spec.md (2026-11-19).
+built, per pair, from research/macdfade15min-prod-spec.md (2026-11-19).
 
 Status: a production spec, written 2026-11-17 on branch `claude/app-confirmation-jvmk03` (f681256). Nothing in it is
 built. Production still runs v9 (signal-alerts v39, 1-hour bars). For production it replaces research/macdride-spec.md

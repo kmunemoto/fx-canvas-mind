@@ -1,0 +1,16 @@
+-- gold-v12.sql  -  the morning check of the MACD fade e-mails on the 15-minute chart for GOLD (XAU/USD), rule v12.
+-- ONE read-only statement (WITH ... SELECT) for mcp__Supabase__execute_sql. Replace the two markers START_MS and END_MS (each written once, in double curly braces, in the first CTE) by the epoch
+-- milliseconds of the range: bars are judged by their OPEN time, START_MS <= open < END_MS; the Routine's day is (X-2d) 21:00 UTC .. (X-1d) 21:00 UTC,
+-- END_MS = START_MS + 86400000. Nothing else is to be edited.
+-- THE GO-LIVE CONSTANTS ARE NOT SET YET: GO_LIVE_MS_GOLD and END_1H_MS_GOLD (double curly braces, in syms) are placeholders that are replaced in src/syms-gold-v12.part at
+-- the release of signal-alerts v41 (README.md v12.1); while they are there, the statement does not run. Bars that opened before GO_LIVE_MS_GOLD were judged by v40 on the
+-- 1-hour chart (README.md v11).
+-- It recounts the rule macdx_12_26_9_w600_15min_fade96of120_in_v12 (signal-alerts v41, research/macdfade15min-prod-spec.md: at a closed 15-MINUTE bar, the MACD line, the
+-- blue line, is at 96% of the top / bottom edge of the MACD pane of the newest 120 bars and was not one bar earlier in the same 600-bar window; the FADE side: top -> SELL,
+-- bottom -> BUY; the price in is the bar's close; no stop and no target) from the closed bars of the ONE stored row public.live_chart_fallback (XAU/USD, 15min; Twelve Data),
+-- and compares the expected entries with public.signal_alerts (pair XAU/USD, kind signal, interval 15min, that rule id): the bar, the side, the entry against the close, one
+-- side a bar (other_side), no stop or target (stop_or_target).
+-- It is v11's statement (gold-v11.sql) on v7's 15-minute parts (gold-v7.sql: head-v7, front-gold-v7, guard-gold-v7) with the 15-minute constants of v7 in BACK 1 and BACK 2,
+-- the new id, and the switch's fields (README.md v12.2).
+-- The row is the LATEST read: production judged each bar on the row as it was 1 to 15 minutes after the close. No user_id / event_id / e-mail is read; nothing is written.
+-- Result: the same columns as pairs-v12.sql: row_type (RUN | SUMMARY | LINE), instrument, bar_open_utc, side, verdict, data (json). See README.md (sections v12, v11 and v7).

@@ -52,6 +52,18 @@ describe("dictionaries", () => {
     expect(untranslated, `English values still in Japanese:\n${untranslated.join("\n")}`).toEqual([]);
   });
 
+  // research/macdfade15min-prod-spec.md section 5 (v41 per pair): the MACD fade's grid titles its "—" cell with a key of
+  // its own, in both dictionaries (its words are pinned in src/test/signal-alert-settings.test.tsx)
+  it("hold the MACD fade's own \"—\" title (alerts.macdxOtherChart) in both locales, apart from indicatorHourOnly", () => {
+    for (const locale of LOCALES) {
+      const a = dictionaryFor(locale).alerts;
+      expect(typeof a.macdxOtherChart, locale).toBe("string");
+      expect(a.macdxOtherChart.length, locale).toBeGreaterThan(0);
+      expect(a.macdxOtherChart, locale).not.toBe(a.indicatorHourOnly);
+    }
+    expect(ja.alerts.macdxOtherChart).not.toBe(en.alerts.macdxOtherChart);
+  });
+
   it("keeps the direction gloss distinct from the direction word", () => {
     for (const locale of LOCALES) {
       const d = dictionaryFor(locale).direction;

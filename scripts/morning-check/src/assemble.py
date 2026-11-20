@@ -44,7 +44,7 @@ def main(argv):
                 continue
             lines.append(s)
         text = "\n".join(lines) + "\n"
-    left = re.findall(r"\{\{[A-Z_]+\}\}", text)
+    left = re.findall(r"\{\{[A-Z0-9_]+\}\}", text)
     with open(out, "w", encoding="utf-8") as f:
         f.write(text)
     print(f"wrote {out}: {len(text)} chars, {text.count(chr(10))} lines, unreplaced markers: {sorted(set(left))}")

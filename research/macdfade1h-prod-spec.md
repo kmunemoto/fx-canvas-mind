@@ -1,7 +1,8 @@
 # The MACD fade on 1-hour closes: one email when the line closes at 96%, no target, no stop
 
-**For production, replaced (2026-11-19) by research/macdfade15min-prod-spec.md at signal-alerts v41** (the owner's
-「メールの判断15分に変更して」). It stays the record of v40.
+**For production (2026-11-19, signal-alerts v41, research/macdfade15min-prod-spec.md): USD/JPY, AUD/USD and the shares
+move to 15-minute bars; EUR/JPY, AUD/JPY, EUR/USD and gold keep this spec's rule, chart and id, their mails' numbers taken
+from run 44555599946** (the owner's per-pair decision). It stays the record of v40.
 
 Status: a production spec, written 2026-11-17 on branch `claude/app-confirmation-jvmk03` on 53f7003 (the draft
 committed in 6cbee35), then revised the same day after three reviews (24 findings, each checked against the code and

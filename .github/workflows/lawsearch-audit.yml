@@ -48,8 +48,10 @@ on:
       - supabase/functions/_shared/ema-return.ts
       - supabase/functions/_shared/macd-extreme.ts
       - supabase/functions/_shared/macd-level.ts
-      # #397 (docs §8.150): the MACD ride's shared code, imported by signal-alerts/indicators.ts and stocks.ts
-      - supabase/functions/_shared/macd-ride.ts
+      # v40 (docs §8.155) and v41: the MACD fade's shared code and its measured numbers, imported by
+      # signal-alerts/indicators.ts and stocks.ts (macd-ride.ts, the v39 ride's, is no longer in the graphs)
+      - supabase/functions/_shared/macd-fade.ts
+      - supabase/functions/_shared/macd-fade-measured.ts
       - supabase/functions/_shared/macd.ts
       - supabase/functions/_shared/market-hours.ts
       - supabase/functions/_shared/pair-names.ts

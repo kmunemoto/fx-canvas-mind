@@ -1,0 +1,110 @@
+# research/macdfade15min-prod-spec.md 4.5 step 4: two runs of the 15-minute study on the same code gave different
+# numbers (run 44077464383, read again by the branch's run 44537377516 from the branch's caches; and main's run
+# 44535888012, whose caches were main's or fetched afresh): 92 15-minute bars with no 1-minute data on three pairs in the
+# first, none in the second. This restores the two runs' saved caches side by side and prints which GMO day files
+# differ: their paths, GMO's status, the number of bars in each, and when GMO answered (responsetime). No price is
+# printed. Read only: it writes nothing to the repository and saves no cache.
+name: gmo-cache-diff
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - .github/workflows/gmo-cache-diff.yml
+  workflow_dispatch:
+    inputs:
+      a:
+        description: "The first cache's key (exact)"
+        required: false
+        default: "gmo-macdfade15-44537377516"
+      b:
+        description: "The second cache's key (exact)"
+        required: false
+        default: "gmo-macdfade15-44535888012"
+permissions:
+  contents: read
+  actions: read
+jobs:
+  diff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      A: ${{ github.event.inputs.a || 'gmo-macdfade15-44537377516' }}
+      B: ${{ github.event.inputs.b || 'gmo-macdfade15-44535888012' }}
+    steps:
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: ${{ env.A }}
+          fail-on-cache-miss: true
+      - run: mkdir -p "$RUNNER_TEMP/a" && mv research/.cache "$RUNNER_TEMP/a/cache"
+      - uses: actions/cache/restore@v4
+        with:
+          path: research/.cache
+          key: ${{ env.B }}
+          fail-on-cache-miss: true
+      - run: mkdir -p "$RUNNER_TEMP/b" && mv research/.cache "$RUNNER_TEMP/b/cache"
+      - name: Which day files differ (paths, status, bars, responsetime; no price)
+        run: |
+          python3 -I - "$RUNNER_TEMP/a/cache" "$RUNNER_TEMP/b/cache" <<'PY'
+          import collections, hashlib, json, os, sys
+          a_root, b_root = sys.argv[1], sys.argv[2]
+          a_key, b_key = os.environ["A"], os.environ["B"]
+          def files(root):
+              out = {}
+              for d, _, fs in os.walk(root):
+                  for f in fs:
+                      p = os.path.join(d, f)
+                      out[os.path.relpath(p, root)] = p
+              return out
+          A, B = files(a_root), files(b_root)
+          print(f"A {a_key}: {len(A)} files; B {b_key}: {len(B)} files")
+          def info(p):
+              try:
+                  j = json.load(open(p))
+              except Exception as e:
+                  return f"unreadable ({type(e).__name__})"
+              data = j.get("data")
+              n = len(data) if isinstance(data, list) else None
+              return f"status {j.get('status')} bars {n} responsetime {j.get('responsetime')}"
+          only_a = sorted(set(A) - set(B))
+          only_b = sorted(set(B) - set(A))
+          both = sorted(set(A) & set(B))
+          def load(p):
+              try:
+                  return json.load(open(p))
+              except Exception:
+                  return None
+          # a file GMO answered again differs in its responsetime; what counts is its bars (data) and its status
+          bytes_differ, data_differ = [], []
+          for k in both:
+              ba, bb = open(A[k], "rb").read(), open(B[k], "rb").read()
+              if ba == bb:
+                  continue
+              bytes_differ.append(k)
+              ja, jb = load(A[k]), load(B[k])
+              if ja is None or jb is None or ja.get("status") != jb.get("status") or ja.get("data") != jb.get("data"):
+                  data_differ.append(k)
+          by_dir = lambda ks: dict(sorted(collections.Counter(os.path.dirname(k) for k in ks).items()))
+          print(f"in both {len(both)}: the same bytes {len(both) - len(bytes_differ)}; other bytes {len(bytes_differ)}, of them other bars or status {len(data_differ)}; only in A {len(only_a)}; only in B {len(only_b)}")
+          print(f"== other bars or status, by folder: {by_dir(data_differ)}")
+          for k in data_differ[:300]:
+              ja, jb = load(A[k]), load(B[k])
+              note = ""
+              if ja and jb and isinstance(ja.get("data"), list) and isinstance(jb.get("data"), list):
+                  da, db = ja["data"], jb["data"]
+                  ta = {r.get("openTime") for r in da if isinstance(r, dict)}
+                  tb = {r.get("openTime") for r in db if isinstance(r, dict)}
+                  same_t = ta & tb
+                  ra = {r.get("openTime"): r for r in da if isinstance(r, dict)}
+                  rb = {r.get("openTime"): r for r in db if isinstance(r, dict)}
+                  changed = sum(1 for t in same_t if ra[t] != rb[t])
+                  note = f" | bars only in A {len(ta - tb)}, only in B {len(tb - ta)}, in both but other values {changed}"
+              print(f"  {k}: A {info(A[k])} | B {info(B[k])}{note}")
+          if len(data_differ) > 300:
+              print(f"  ... {len(data_differ) - 300} more not printed")
+          print(f"== only in A, by folder: {by_dir(only_a)}")
+          print(f"== only in B, by folder: {by_dir(only_b)}")
+          for k in sorted(only_b, key=lambda k: (("/1min/" not in k), k))[:60]:
+              print(f"  only in B {k}: {info(B[k])}")
+          PY

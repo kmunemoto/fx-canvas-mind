@@ -274,8 +274,10 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
                           </td>
                           {ind.intervals.map((iv) => {
                             if (!indicatorChartOffered(settings, pair, iv, rule)) {
+                              // v41 per pair (research/macdfade15min-prod-spec.md section 5): the MACD fade's "—" is a
+                              // pair on its other timeframe, not a symbol GMO Coin does not carry
                               return (
-                                <td key={iv} className="py-1 text-center text-muted-foreground" title={a.indicatorHourOnly} data-testid={`signal-alert-${rule}-${pair}-${iv}-none`}>
+                                <td key={iv} className="py-1 text-center text-muted-foreground" title={rule === "macdx" ? a.macdxOtherChart : a.indicatorHourOnly} data-testid={`signal-alert-${rule}-${pair}-${iv}-none`}>
                                   —
                                 </td>
                               );
