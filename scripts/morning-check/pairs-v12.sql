@@ -41,21 +41,24 @@ pp as (
 -- Two rows only (research/macdfade15min-prod-spec.md 7.3, the per-pair form): USD/JPY and AUD/USD move to the 15-minute chart; EUR/JPY, AUD/JPY and EUR/USD stay on v40's
 -- 1-hour form under v11's id and are checked by pairs1h-v11.sql, gold by gold-v11.sql (README.md v12.1). Every CTE of this statement is scoped by syms, so their rows are
 -- not read here; a stray 15-minute macdx row of theirs (or of gold) is counted in the RUN row's macdx_15min_rows_other_pairs (back2-v12.part, the RUN_OTHER_PAIRS slot).
--- live_ms = GO_LIVE_MS_PAIRS, A PLACEHOLDER TO BE SET AT THE RELEASE (README.md v12.1): the open (epoch ms) of the first 15-minute bar v41 judged, read from the run's record
--- in net._http_response (research/macdfade15min-prod-spec.md 6.2, 6.3 step 5).
--- end_1h_ms = END_1H_MS_PAIRS, A PLACEHOLDER TO BE SET AT THE RELEASE (README.md v12.1): the end (epoch ms: open + 1 h) of the last 1-hour bar v40 judged, read from the
--- same record (spec 6.2). It is not a limit of the recount: it tells the 1-hour macdx rows of the day that came after v40's last judged bar (a finding,
+-- live_ms = 1795161600000 (2026-11-20 08:00 UTC), set at the release (README.md v12.1) from the run's records in net._http_response: v41 (signal-alerts-v41-2026-11-20)
+-- first answered at 08:05:00 UTC, and the first 15-minute bar it judged for both pairs is the one opened at 08:00 (closing 08:15; research/macdfade15min-prod-spec.md 6.2,
+-- 6.3 step 5; docs/OPERATIONS.md section 8.156).
+-- end_1h_ms = 1795161600000 (08:00 UTC), the end (open + 1 h) of the last 1-hour bar v40 judged: v40 answered every minute up to 08:04:00 UTC, its reads of the 08:00 close at 08:00
+-- and 08:03 (gmoIntervalsDue: 1-hour charts at minutes 0, 3 and 5; the read at 08:05 was v41's, which no longer reads these two pairs' 1-hour chart). The records of those
+-- two reads expired (about 6 hours) before they were read for this, so whether either of them judged the hour is NOT confirmed (no 'macdx failed' line in the function's
+-- log 07:59-08:06 UTC; docs/OPERATIONS.md section 8.156). 08:00 is spec 7.3's value for a judged hour; had neither judged it, v40's last judged bar would end at 07:00 (spec 6.2's four-bar
+-- gap), and an entry on the 07:00 bar would show as missing in pairs-v11 on the switch day (read before end_1h_ms) rather than be hidden.
+-- It is not a limit of the recount: it tells the 1-hour macdx rows of the day that came after v40's last judged bar (a finding,
 -- macdx_1h_rows_after_end_1h) from v40's own last rows (expected on the switch day), and, with live_ms, the 15-minute bars of the switch day judged by neither form (live_ms
--- after end_1h_ms) or by both (live_ms before end_1h_ms).
--- Until both markers are replaced by those numbers (here, then bash build.sh), the statement does not run: a marker is not SQL. If the two pairs' numbers differ, write each
--- pair's own numbers in its row. With a first answer of v41 from H:06 to H:18 UTC (spec 6.2), both are H:00 for both pairs (spec 7.3).
+-- after end_1h_ms) or by both (live_ms before end_1h_ms). Both pairs have the same numbers (each row holds its own, should they ever differ).
 -- The rest of the FRONT is v7's 15-minute one (front-pairs-v7.part: interval '15min', the closure test on open + 15 min) with v9's two closes: each bar's BID close (bc) and ASK
 -- close (ac) as given, and the CTE paid (paid_buy = the ASK close, paid_sell = the BID close, per bar of the range: ridePaidAt on the 15-minute read's own quote, as the fade
 -- prices a pair's entry from fadeQuotes, research/macdfade15min-prod-spec.md 2.3).
 syms as (
   select * from (values
-    ('USD_JPY', 'USD/JPY', 1, {{GO_LIVE_MS_PAIRS}}::bigint, 3, {{END_1H_MS_PAIRS}}::bigint),
-    ('AUD_USD', 'AUD/USD', 5, {{GO_LIVE_MS_PAIRS}}::bigint, 5, {{END_1H_MS_PAIRS}}::bigint)
+    ('USD_JPY', 'USD/JPY', 1, 1795161600000::bigint, 3, 1795161600000::bigint),
+    ('AUD_USD', 'AUD/USD', 5, 1795161600000::bigint, 5, 1795161600000::bigint)
   ) v(symbol, pair, ord, live_ms, d, end_1h_ms)
 ),
 -- the day files of the 13 days up to the last key (15-minute files, interval '15min', BID and ASK; GMO_INTERVALS['15min'].name in track-outcomes/quotes.ts)

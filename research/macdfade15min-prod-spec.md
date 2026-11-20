@@ -455,9 +455,33 @@ and before New York's open):
 - The answer's `previousClose` (the day before the latest's close, as Yahoo gives it) is not the close of that day's
   last 15-minute bar: Tokyo, outside that bar's low..high (both shares); New York, inside it but not equal. So the
   older sessions' last bars do not carry the closing auction's price.
-- Not yet seen (timed reads dispatched for New York's close of 11/19, and Tokyo's lunch and close of 11/20): when the
-  closing row and the 11:30 row appear after the bar before them, and regularMarketTime then; whether the latest
-  session's closing row stays in the answer while the next session trades.
+- Seen in the timed reads (added after the release, 2026-11-20; shapes and times only, no price; notes of each run
+  read in full):
+  - New York's close of 11/19 (run 44564231302, AAPL, reads 20:55 to 21:40 UTC): while the session trades, the answer
+    ends with a live point at regularMarketTime (one price, volume 0), which `parseYahooChart` joins to the forming
+    15:45 bar. At 21:01 the live point is gone (regularMarketTime 20:59:59, the 15:45 bar's close = the last trade); at
+    21:03 a 16:00 point (one price, volume 0, = regularMarketPrice, regularMarketTime 21:00:01) is there, and
+    currentTradingPeriod still names 11/19's session at 21:40, so the 16:00 point is joined to the 15:45 bar. The
+    stocks run takes the 15:45 bar as closed once regularMarketTime is at or past 21:00 (`stockBarsOf`), so it is
+    judged on the closing auction's price.
+  - Tokyo's lunch of 11/20 (run 44622879795, 7203.T and 6758.T, reads 02:25 to 03:15 UTC): regularMarketTime about 15
+    minutes behind the read; the 11:15 bar appears at 02:32 while it is still forming and stops changing (by its flags)
+    at 02:47, when regularMarketTime is 11:30:00 and an 11:30 row of one price and volume 0 appears in place of the
+    live point; it gains volume 30 to 45 minutes later. currentTradingPeriod stays 9:00 to 15:30 JST (no lunch split)
+    and no null 11:45 to 12:15 rows of the day appear by 03:15 UTC. The 11:30 row is 900 s after the 11:15 row, so it
+    stays a bar of its own: the 11:15 bar is judged at 02:47 or later on the last continuous trade, not on the lunch
+    auction's price.
+  - Tokyo's close of 11/20 (run 44656554475, the same shares, reads 06:30 to 07:15 UTC): the 15:15 bar is null at
+    06:30 and priced from 06:32 (regularMarketTime 06:16:5x); regularMarketTime stops at 15:24:5x JST (06:41, 06:44:
+    the closing auction from 15:25 has no trades); at 06:47 regularMarketTime is 15:30:00 and a 15:30 row of one price
+    and volume 0 (= regularMarketPrice) is there, joined to the 15:15 bar (at the session's end, currentTradingPeriod
+    still 11/20's at 07:15). So the 15:15 bar, closed once regularMarketTime reaches 15:30, is judged on the closing
+    auction's price in these reads (between 06:44 and 06:47 both changed; a read in between was not made).
+  - The day before's closing row while the next session trades: gone in the reads made (New York 11/18's 16:00 row at
+    20:55 UTC on 11/19; Tokyo 11/19's 15:30 row at 02:25 UTC on 11/20). Before the next session opens, once Yahoo names
+    it, the row is still there as a bar of its own in `parseYahooChart` (11/19 13:44 UTC). Not seen: when it goes, and
+    so whether it is still in the answer at the next session's first close (a stray one-price bar in that close's
+    600-bar window).
 
 Changes in stocks.ts:
 1. `STOCKMACD_INTERVALS = ["15min"]` (:49). It drives `isStockmacdChart` (:50-52), the run's subscription filter
@@ -2180,6 +2204,10 @@ release check.
   md5 for the changed `pairs-v12` and the new `pairs1h-v11` files, and `gold-v12`'s checked unchanged.
 
 ## 8. Not measured, not checked
+
+(After the release, 2026-11-20: the timed reads of 3.3 were made. What they showed of New York's close and Tokyo's lunch
+and close is in 3.3 "Seen in the timed reads"; the items below that call those "not yet seen" are answered there, but
+for when the day before's closing row leaves Yahoo's answer.)
 
 - **Measured, now in this file:** the five pairs' numbers of this form on both charts (the 15-minute run 44535888012 and
   the 1-hour run 44555599946, both on GMO's whole files; their summary.json in research/ledger/), and the per-pair
