@@ -964,7 +964,7 @@ describe("#391 the shares' run and the database", () => {
   it("runs every minute as its own mode, reads only its own subscriptions, and the database takes the shares and the rule", () => {
     const fn = readFileSync("supabase/functions/signal-alerts/index.ts", "utf8");
     // (v40: the MACD email, the shares' too, is the fade; v41 on 15-minute bars)
-    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v41-2026-11-23";');
+    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v41-2026-11-20";');
     expect(fn).toContain('readRows("signal_alert_subscriptions?rule=eq.stockmacd&select=user_id,pair,interval,lang,rule")');
     // the other rules' run does not take them
     expect(fn).toContain('readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra,macdx,amdpo3,emarm,spike)&select=user_id,pair,interval,lang,rule")');

@@ -399,7 +399,7 @@ import type { Candle } from "../analyze/indicators.ts";
 // rows stay. `set` and `set_many` send created_at with each tick, and the
 // test mail lists only the rows this version mails (spec 3.6). The other
 // rules are as they were. (The date below is set again at the release.)
-const FUNCTION_VERSION = "signal-alerts-v41-2026-11-23";
+const FUNCTION_VERSION = "signal-alerts-v41-2026-11-20";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts

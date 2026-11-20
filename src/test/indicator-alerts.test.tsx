@@ -1244,7 +1244,7 @@ describe("#339 the 1-hour MACD cross rule (each pair's own level, 0.8 times its 
     // #353: the zone rule's version; #362: v30, its band from 95%; #384: v31, on the 15-minute chart; #385: v32, beside AMD Po3's;
     // #386: v33, back on the 1-hour chart; #387: v34, beside the EMA 20 / 200 way's; #397: v39, the MACD email a ride;
     // v40: the fade; v41: the fade on each pair's own chart (the date is set again at the release)
-    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v41-2026-11-23";');
+    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v41-2026-11-20";');
   });
 
   it("indicatorSignals stays what the live chart labels: Q-Trend's and ULTRA's, not the MACD rule's", () => {
