@@ -894,6 +894,11 @@ instances), the budget's leftovers, and one note a share a day.
 Until answered, it is built as this file says (the first answer of each). The answers go into docs §8.157, and an
 answer other than the first changes this file first.
 
+**Answered 2026-11-22 (UTC), before the build:** the owner chose the first answer of all six, word for word as the
+dialog's options: 1 「付けない（おすすめ）」, 2 「自動では外さない（おすすめ）」, 3 「Yahooの名前を出す（おすすめ）」,
+4 「そのままにする（おすすめ）」, 5 「50のまま出す（おすすめ）」, 6 「数を出す（おすすめ）」. So nothing of this file changes;
+question 5, which section 8 puts to the owner before the release, is answered.
+
 1. **1人で使える銘柄の数.**
    「株の MACD のメールで通知する株は、使う人全員で合わせて50銘柄までにします。この作り（v42）では、1人で50銘柄
    すべてを使うこともできます（そのあとは、ほかの人は、まだだれも通知していない株を足せません）。どうしますか？
