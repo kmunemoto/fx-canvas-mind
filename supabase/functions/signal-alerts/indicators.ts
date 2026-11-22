@@ -64,8 +64,10 @@ import { STOCKMACD_RULE_ID, isStockmacdChart, renderStockMail } from "./stocks.t
 // #387: and "emarm", the owner's video's EMA 20 / 200 way (the cross, the
 // candle back to the 200 EMA, the necklines' break and the return move; docs
 // §8.130)
-// #391: and "stockmacd", the MACD email's rule on the 22 shares' hourly bars
-// (stocks.ts; docs §8.134), judged by the "stocks" run on Yahoo's bars
+// #391: and "stockmacd", the MACD email on shares (stocks.ts; docs §8.134; v41:
+// the fade on their 15-minute bars; v42: any share Yahoo's search finds, up to
+// 50 for all users together, research/allstocks-prod-spec.md), judged by the
+// "stocks" run on Yahoo's bars
 // #395: and "spike", a sharp rise or fall of the 1-hour bar, seen as the bar
 // forms (_shared/spike.ts; docs §8.138)
 export const INDICATOR_RULES = ["qtrend", "ultra", "macdx", "sweepx", "amdpo3", "emarm", "stockmacd", "spike"] as const;
@@ -441,6 +443,11 @@ export interface IndicatorSignal {
   // v40: the MACD fade's (the MACD email's from v40, and the shares'; absent
   // on the other rules'). (#397: v39's `ride`, its three mails, went with it)
   fade?: FadeFacts | null;
+  // v42 (research/allstocks-prod-spec.md 4.3): a share's stored name (Yahoo's
+  // search's, set by the stocks run for a share outside the 22; absent on the
+  // other rules'). Only the mail reads it: signalRow and the claim's body list
+  // their own fields
+  stockName?: string | null;
 }
 
 // v40 (docs §8.155; research/macdfade1h-prod-spec.md 3.4): what made the MACD

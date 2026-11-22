@@ -159,16 +159,19 @@ import { SPIKE, spikeOf } from "../_shared/spike.ts";
 import { GOLD_TICK_EVERY_MS, goldSeedRows, goldTickPlan, judgesWhileShut, nextTickAt } from "./gold-minutes.ts";
 import {
   STOCK_RUN_BUDGET_MS,
+  STOCKMACD_CAP,
   STOCKMACD_INTERVALS,
   STOCKMACD_PAIRS,
+  isListedStock,
   isStockmacdChart,
   stockBarsOf,
   stockCloseDue,
   stockFadeClose,
+  stockNameClean,
   stockSweepOf,
   type StockBar,
 } from "./stocks.ts";
-import { YAHOO_HEADERS, yahooChartUrl } from "../live-chart/stocks.ts";
+import { YAHOO_HEADERS, isStockQuery, parseYahooSearch, yahooChartUrl, yahooSearchUrl, type StockHit } from "../live-chart/stocks.ts";
 import { SWEEPX } from "../_shared/sweep-cross.ts";
 import { GMO_INTERVALS, GMO_SYMBOLS, jstDayKey, jstYearKey } from "../track-outcomes/quotes.ts";
 import { barOpenMs } from "../analyze/state.ts";
@@ -399,7 +402,21 @@ import type { Candle } from "../analyze/indicators.ts";
 // rows stay. `set` and `set_many` send created_at with each tick, and the
 // test mail lists only the rows this version mails (spec 3.6). The other
 // rules are as they were. (The date below is set again at the release.)
-const FUNCTION_VERSION = "signal-alerts-v41-2026-11-20";
+// v42 (research/allstocks-prod-spec.md): the stock MACD email on any share
+// Yahoo's search finds, at most 50 distinct shares for all users together
+// (the owner, 2026-11-21: 「1で」, 「50銘柄まで（おすすめ）」). 'stockmacd' is
+// accepted on any share symbol's 15-minute chart (stocks.ts isStockmacdChart);
+// `set` confirms a share nobody follows yet, outside the 22, by Yahoo's search
+// and keeps the hit's name in public.signal_alert_stocks; `set` and `set_many`
+// save 'stockmacd' rows through public.stockmacd_follow, which refuses a new
+// share past STOCKMACD_CAP; the status call's stockmacd block adds the user's
+// own shares, the cap, the count and each own share's name and daily note.
+// The "stocks" run reads its subscriptions paged by key, turns the order of
+// the shares this instance has not read with the minute's parity, gives each
+// Yahoo read the smaller of 5 s and the budget left (none started with under
+// 1 s of it), reads and writes signal_alert_stocks once a run (the names; the
+// daily note). The rule, its id and every other run are as they were.
+const FUNCTION_VERSION = "signal-alerts-v42-2026-11-22";
 
 const MIN = 60_000;
 // What one sweep may spend on the feed before it stops starting new charts
@@ -1595,13 +1612,70 @@ Deno.serve(async (req: Request) => {
     const stockSweep = async (): Promise<JsonRecord> => {
       const nowMs = Date.now();
       const summary: JsonRecord = { ok: true, mode: "stocks", version: FUNCTION_VERSION, email_configured: emailConfigured };
-      const subs: IndicatorSub[] = (await readRows("signal_alert_subscriptions?rule=eq.stockmacd&select=user_id,pair,interval,lang,rule"))
+      // v42 (research/allstocks-prod-spec.md 4.2): the '15min' rows, paged by key (the id, a random uuid) until a page
+      // comes back empty: a row there through the whole read is never skipped (an untick between two pages moves no later
+      // row back past a key, as it would past an offset), and a row limit lower than 1,000 does not end the read early.
+      // A page is taken only when it was read and is a list (readRows gives [] for a failed read, which would pass for
+      // the last page); anything else ends the run before any Yahoo read, since a run on part of the rows could hold a bar
+      // judged with a follower never mailed. The id is used for the paging only and goes into no record
+      const rows: JsonRecord[] = [];
+      try {
+        for (let after: string | null = null; ; ) {
+          const res = await rest(
+            `signal_alert_subscriptions?rule=eq.stockmacd&interval=eq.15min&select=id,user_id,pair,interval,lang,rule&order=id.asc&limit=1000${after === null ? "" : `&id=gt.${encodeURIComponent(after)}`}`,
+          );
+          const page: unknown = res.ok ? await res.json().catch(() => null) : null;
+          if (!res.ok) await res.body?.cancel();
+          if (!Array.isArray(page)) throw new Error(`a page not read: ${res.status}`);
+          if (page.length === 0) break;
+          const last = page[page.length - 1];
+          if (!isRecord(last) || typeof last.id !== "string") throw new Error("a page with no key at its end");
+          rows.push(...page.filter(isRecord));
+          after = last.id;
+        }
+      } catch (err) {
+        console.error("stockmacd subscriptions unread:", errText(err));
+        return { ...summary, ok: false, error: "subscriptions_unread", took_ms: Date.now() - nowMs };
+      }
+      const subs: IndicatorSub[] = rows
         .filter((r) => typeof r.user_id === "string" && isStockmacdChart(r.pair, r.interval) && typeof r.lang === "string")
         .map((r) => ({ user_id: r.user_id as string, pair: r.pair as string, interval: r.interval as string, lang: r.lang as string, rule: "stockmacd" as const }));
       summary.subscriptions = subs.length;
-      if (subs.length === 0) return { ...summary, took_ms: Date.now() - nowMs };
+      if (subs.length === 0) return { ...summary, shares: 0, took_ms: Date.now() - nowMs };
       const counts: Record<string, number> = { sent: 0, failed: 0, not_configured: 0, duplicate: 0, not_allowed: 0 };
       const reads: JsonRecord[] = [];
+      // v42 (spec 2.3, 4.2): the followed shares' rows of public.signal_alert_stocks (no user id), read once a run, before
+      // its first Yahoo read (a run with nothing due makes no such request): a share outside the 22 its name for the mail
+      // (none is read for the 22, whose names are the app's), each share whether its daily note is of today. undefined:
+      // not read yet; null: the read failed or gave no list (no stored name in this run's mails, no daily note this run;
+      // logged without its URL, not an error of the run)
+      let stored: Map<string, { name: string | null; notedAt: number | null }> | null | undefined = undefined;
+      const readStored = async (syms: string[]): Promise<Map<string, { name: string | null; notedAt: number | null }> | null> => {
+        try {
+          const quoted = syms.map((p) => `"${p}"`).join(",");
+          const res = await rest(`signal_alert_stocks?pair=in.(${encodeURIComponent(quoted)})&select=pair,name,noted_at`);
+          const got: unknown = res.ok ? await res.json().catch(() => null) : null;
+          if (!res.ok) await res.body?.cancel();
+          if (!Array.isArray(got)) {
+            console.error("signal_alert_stocks unread:", res.status);
+            return null;
+          }
+          const out = new Map<string, { name: string | null; notedAt: number | null }>();
+          for (const r of got.filter(isRecord)) {
+            if (typeof r.pair !== "string") continue;
+            const at = typeof r.noted_at === "string" ? Date.parse(r.noted_at) : Number.NaN;
+            out.set(r.pair, { name: isListedStock(r.pair) ? null : stockNameClean(r.name, r.pair), notedAt: Number.isFinite(at) ? at : null });
+          }
+          return out;
+        } catch (err) {
+          console.error("signal_alert_stocks unread:", errText(err));
+          return null;
+        }
+      };
+      // v42 (spec 2.3, 4.2): the daily notes kept while the loop reads (one a share a UTC day, whatever the instance: the
+      // day is the stored noted_at's), written in one request after it
+      const notes: JsonRecord[] = [];
+      const noteDay = new Date(nowMs).toISOString().slice(0, 10);
       // The fade on one share at a read whose newest closed bar is to be
       // judged (`closed`: its closed bars, oldest first; `newest`: the newest
       // of them): (1) not fresh (it ended more than STOCK_FRESH_MS ago):
@@ -1629,6 +1703,8 @@ Deno.serve(async (req: Request) => {
         const price = newest.close;
         out.fade.price = price;
         const sig = fadeSignal("stockmacd", sym, STOCKMACD_INTERVALS[0], entry, { openMs: newest.open_ms, closeMs: newest.end, close: newest.close, price });
+        // v42 (spec 4.2, 7): a share outside the 22 is mailed with its stored name (the code alone without one)
+        sig.stockName = isListedStock(sym) ? null : (stored?.get(sym)?.name ?? null);
         const got = await mailRide(sig, subs, counts);
         if (got.otherSide) out.fade.other_side = true;
         if (got.made + got.had > 0) out.tags.push(rideSignalTag(sig));
@@ -1638,45 +1714,85 @@ Deno.serve(async (req: Request) => {
       // v41 (spec 3.3 item 10): the followed shares, oldest read first (a
       // share never read in this instance first; the sort keeps the
       // subscriptions' order among equals), so a share a run left for the
-      // budget is read first by the next
-      const followed = [...new Set(subs.map((x) => x.pair))]
-        .map((sym, k) => ({ sym, k, at: stockReadAt.get(sym) ?? Number.NEGATIVE_INFINITY }))
+      // budget is read first by the next. v42 (research/allstocks-prod-spec.md
+      // 3.5, 4.2): the ties among the shares never read in this instance
+      // follow the subscription read's order on an even UTC minute and the
+      // reverse order on an odd one, so that on new instances (where every
+      // share is never read) a run at the budget does not leave the same last
+      // shares every minute
+      const uniq = [...new Set(subs.map((x) => x.pair))];
+      const back = Math.floor(nowMs / 60_000) % 2 === 1;
+      const followed = uniq
+        .map((sym, k) => ({ sym, k: back ? uniq.length - 1 - k : k, at: stockReadAt.get(sym) ?? Number.NEGATIVE_INFINITY }))
         .sort((a, b) => a.at - b.at || a.k - b.k)
         .map((x) => x.sym);
+      // v42: the distinct shares followed (a count; no user id)
+      summary.shares = followed.length;
       for (const sym of followed) {
         const due = stockCloseDue(sym, nowMs);
         if (due === null || stockDone.get(sym) === due) continue;
         if (nowMs - (stockReadAt.get(sym) ?? 0) < 50_000) continue;
+        // v42 (spec 4.2): the stored rows, once a run, before its first Yahoo read
+        if (stored === undefined) stored = await readStored(followed);
         // v41: no Yahoo read is started once the run has spent its budget; the
-        // share is left for the next run (its read time not set)
-        if (Date.now() - nowMs >= STOCK_RUN_BUDGET_MS) {
+        // share is left for the next run (its read time not set). v42 (spec
+        // 2.3, 4.2): nor with under 1 s of it left
+        if (Date.now() - nowMs >= STOCK_RUN_BUDGET_MS - 1_000) {
           reads.push({ pair: sym, skipped: "budget" });
           continue;
         }
         stockReadAt.set(sym, nowMs);
         let body: unknown = null;
+        // v42 (spec 2.3, 4.2): each read is given the smaller of 5 s and the
+        // budget left (v41: 10 s), so no read goes on past the budget and one
+        // that hangs costs at most 5 s; a read cut by it, in its request or its
+        // body, is yahoo_unavailable. `ms`: the read's milliseconds (the
+        // request and its body), in each entry of a read of Yahoo
+        const readFrom = Date.now();
+        const cut = AbortSignal.timeout(Math.min(5_000, STOCK_RUN_BUDGET_MS - (Date.now() - nowMs)));
         try {
-          const r = await fetch(yahooChartUrl(sym, STOCKMACD_INTERVALS[0]), { headers: YAHOO_HEADERS, signal: AbortSignal.timeout(10_000) });
+          const r = await fetch(yahooChartUrl(sym, STOCKMACD_INTERVALS[0]), { headers: YAHOO_HEADERS, signal: cut });
           body = r.ok ? await r.json().catch(() => null) : null;
           if (!r.ok) {
             await r.body?.cancel();
-            reads.push({ pair: sym, error: `yahoo_${r.status}` });
+            reads.push({ pair: sym, error: `yahoo_${r.status}`, ms: Date.now() - readFrom });
             continue;
           }
         } catch (err) {
           console.error("yahoo read failed:", sym, err);
-          reads.push({ pair: sym, error: "yahoo_unavailable" });
+          reads.push({ pair: sym, error: "yahoo_unavailable", ms: Date.now() - readFrom });
+          continue;
+        }
+        const ms = Date.now() - readFrom;
+        if (body === null && cut.aborted) {
+          reads.push({ pair: sym, error: "yahoo_unavailable", ms });
           continue;
         }
         const got = stockBarsOf(sym, body, nowMs);
         if (!got) {
-          reads.push({ pair: sym, error: "yahoo_no_bars" });
+          reads.push({ pair: sym, error: "yahoo_no_bars", ms });
           continue;
+        }
+        // v42 (spec 2.3, 4.2): the share's daily note (noSession included),
+        // when the stored one is not of today's UTC date or there is none: the
+        // open of the newest bar Yahoo gave and the count of its closed bars
+        // (stockSweepOf gives no closed bars for noSession, so the count is
+        // taken from got.bars); none when the stored rows were not read
+        if (stored && got.bars.length > 0) {
+          const notedAt = stored.get(sym)?.notedAt ?? null;
+          if (notedAt === null || new Date(notedAt).toISOString().slice(0, 10) !== noteDay) {
+            notes.push({
+              pair: sym,
+              last_bar_at: new Date(got.bars[got.bars.length - 1].open_ms).toISOString(),
+              bars: got.bars.filter((b) => b.closed).length,
+              noted_at: new Date(nowMs).toISOString(),
+            });
+          }
         }
         const step = stockSweepOf(sym, got.bars, due, stockJudged.get(sym), nowMs);
         if (step.noSession) {
           stockDone.set(sym, due);
-          reads.push({ pair: sym, due: new Date(due).toISOString(), skipped: "no_session" });
+          reads.push({ pair: sym, due: new Date(due).toISOString(), skipped: "no_session", ms });
           continue;
         }
         // v40: the fade at this read, in its own try / catch
@@ -1706,6 +1822,7 @@ Deno.serve(async (req: Request) => {
           newest: step.newest ? step.newest.datetime : null,
           close: step.newest ? step.newest.close : null,
           market_time: got.marketMs === null ? null : new Date(got.marketMs).toISOString(),
+          ms,
           judged: step.judge,
           // (v40: the fade's email as "stockmacd:SELL" or "stockmacd:BUY";
           // #397: v39's ride's three mails were "stockmacd:", "stockmacd-at:"
@@ -1715,6 +1832,22 @@ Deno.serve(async (req: Request) => {
           judged_after_ms: step.judge && step.newest ? Date.now() - step.newest.end : null,
           ...(step.judge ? { fade: said.fade } : {}),
         });
+      }
+      // v42 (spec 2.3, 4.2): the daily notes in one upsert, a JSON array
+      // (name and checked_at are not in it and are left as they are), in its
+      // own try / catch: a failure is logged without its URL and changes
+      // nothing of the judgment (not among the budget's reads; in took_ms)
+      if (notes.length > 0) {
+        try {
+          const res = await rest("signal_alert_stocks?on_conflict=pair", {
+            method: "POST",
+            headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+            body: JSON.stringify(notes),
+          });
+          if (!res.ok) console.error("stockmacd notes not written:", res.status, await res.text().catch(() => ""));
+        } catch (err) {
+          console.error("stockmacd notes not written:", errText(err));
+        }
       }
       // v41: how long the run took, ms (spec 3.3 item 10)
       return { ...summary, reads, ...counts, took_ms: Date.now() - nowMs };
@@ -2067,6 +2200,142 @@ Deno.serve(async (req: Request) => {
     const allowed = alertsAllowed(plan, email);
     const uid = encodeURIComponent(userId);
 
+    // ---- v42 (research/allstocks-prod-spec.md 2.2, 3.2, 4.2): the stock MACD email on any share ----------------------
+    //
+    // The distinct shares followed on '15min', all users together (public.stockmacd_followed_count); null when it
+    // cannot be read
+    const stockmacdFollowedCount = async (): Promise<number | null> => {
+      try {
+        const r = await rest("rpc/stockmacd_followed_count", { method: "POST", body: "{}" });
+        const v: unknown = r.ok ? await r.json().catch(() => null) : null;
+        if (!r.ok) {
+          console.error("stockmacd count unread:", r.status);
+          await r.body?.cancel();
+        }
+        return typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : null;
+      } catch (err) {
+        console.error("stockmacd count unread:", errText(err));
+        return null;
+      }
+    };
+    // Each share this user follows: its stored name (null for the 22, which the screen names itself) and its daily
+    // note (the newest bar the run read, its closed bars' count; `stale` when that bar opened more than 7 days ago),
+    // from one read of public.signal_alert_stocks; nulls where there is no row or the read failed
+    const stockmacdShares = async (own: string[]) => {
+      const out: Record<string, { name: string | null; last_bar_at: string | null; bars: number | null; stale: boolean }> = {};
+      for (const p of own) out[p] = { name: null, last_bar_at: null, bars: null, stale: false };
+      if (own.length === 0) return out;
+      try {
+        const quoted = own.map((p) => `"${p}"`).join(",");
+        const r = await rest(`signal_alert_stocks?pair=in.(${encodeURIComponent(quoted)})&select=pair,name,last_bar_at,bars`);
+        const rows: unknown = r.ok ? await r.json().catch(() => null) : null;
+        if (!r.ok) await r.body?.cancel();
+        if (!Array.isArray(rows)) {
+          console.error("signal_alert_stocks unread:", r.status);
+          return out;
+        }
+        for (const x of rows.filter(isRecord)) {
+          if (typeof x.pair !== "string" || !own.includes(x.pair)) continue;
+          const at = typeof x.last_bar_at === "string" ? Date.parse(x.last_bar_at) : Number.NaN;
+          out[x.pair] = {
+            name: isListedStock(x.pair) ? null : stockNameClean(x.name, x.pair),
+            last_bar_at: Number.isFinite(at) ? new Date(at).toISOString() : null,
+            bars: typeof x.bars === "number" && Number.isInteger(x.bars) && x.bars >= 0 ? x.bars : null,
+            stale: Number.isFinite(at) && nowMs - at > 7 * 24 * 60 * MIN,
+          };
+        }
+      } catch (err) {
+        console.error("signal_alert_stocks unread:", errText(err));
+      }
+      return out;
+    };
+    // One Yahoo search (2.2, as the chart's, 8 s): the hit, parsed by parseYahooSearch, with exactly that symbol; null
+    // when no hit has it (a word Yahoo will not search for, a 400, finds nothing, as the chart reads it); "unavailable"
+    // on a Yahoo error, a timeout or an answer that cannot be read
+    const stockSearch = async (q: string, pair: string): Promise<StockHit | null | "unavailable"> => {
+      try {
+        const cut = AbortSignal.timeout(8_000);
+        const r = await fetch(yahooSearchUrl(q), { headers: YAHOO_HEADERS, signal: cut });
+        if (r.status === 400) {
+          await r.body?.cancel();
+          return null;
+        }
+        if (!r.ok) {
+          console.error("yahoo search failed:", r.status);
+          await r.body?.cancel();
+          return "unavailable";
+        }
+        const data: unknown = await r.json().catch(() => null);
+        if (!isRecord(data)) return "unavailable";
+        return parseYahooSearch(data).find((h) => h.symbol === pair) ?? null;
+      } catch (err) {
+        console.error("yahoo search failed:", errText(err));
+        return "unavailable";
+      }
+    };
+    // `set` of a share outside the 22 (2.2, 4.2 step 2): nothing to do when someone already follows it; else refused at
+    // once when the count is at the cap (skipped when the count cannot be read: the locked call decides), confirmed by
+    // Yahoo's search (by `q`, what the user typed when the hit was shown, ASCII and isStockQuery's, else by the symbol;
+    // the symbol once more when `q` has no hit with it), and the hit's name kept. A refusal's answer, or null to go on
+    const stockmacdConfirm = async (pair: string, q: unknown): Promise<Response | null> => {
+      try {
+        const r = await rest(`signal_alert_subscriptions?rule=eq.stockmacd&interval=eq.15min&pair=eq.${encodeURIComponent(pair)}&select=pair&limit=1`);
+        const got: unknown = r.ok ? await r.json().catch(() => null) : null;
+        if (!r.ok) await r.body?.cancel();
+        if (!Array.isArray(got)) {
+          console.error("stockmacd followers unread:", r.status);
+          return json({ ok: false, error: "save_failed" }, 500);
+        }
+        if (got.length > 0) return null;
+      } catch (err) {
+        console.error("stockmacd followers unread:", errText(err));
+        return json({ ok: false, error: "save_failed" }, 500);
+      }
+      const n = await stockmacdFollowedCount();
+      if (n !== null && n >= STOCKMACD_CAP) return json({ ok: false, error: "stock_cap_full", cap: STOCKMACD_CAP }, 409);
+      // eslint-disable-next-line no-control-regex
+      const typed = isStockQuery(q) && !/[^\x00-\x7F]/.test(q) ? q.trim() : pair;
+      let hit = await stockSearch(typed, pair);
+      if (hit === null && typed !== pair) hit = await stockSearch(pair, pair);
+      if (hit === "unavailable") return json({ ok: false, error: "stock_check_unavailable" }, 503);
+      if (hit === null) return json({ ok: false, error: "stock_not_found" }, 422);
+      try {
+        const up = await rest("signal_alert_stocks?on_conflict=pair", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
+          body: JSON.stringify({ pair, name: stockNameClean(hit.name, pair), checked_at: new Date(nowMs).toISOString() }),
+        });
+        if (up.ok) return null;
+        console.error("stock name not saved:", up.status);
+        await up.body?.cancel();
+      } catch (err) {
+        console.error("stock name not saved:", errText(err));
+      }
+      return json({ ok: false, error: "save_failed" }, 500);
+    };
+    // The locked call (3.2, section 5): saves this user's rows of `pairs` only while the count stays at most the cap or
+    // nothing new is asked. A body of exactly true: saved (null); exactly false: refused at the cap; anything else
+    // (not ok, unreadable, not a boolean): save_failed. (Not read as take_twelve_data_credit's, which lets any doubt
+    // count as yes.) Its failures are logged by status only (an error's text could name the user)
+    const stockmacdFollow = async (pairs: string[], lang: Lang): Promise<Response | null> => {
+      try {
+        const r = await rest("rpc/stockmacd_follow", {
+          method: "POST",
+          body: JSON.stringify({ p_user: userId, p_pairs: pairs, p_lang: lang, p_at: new Date(nowMs).toISOString(), p_cap: STOCKMACD_CAP }),
+        });
+        const v: unknown = r.ok ? await r.json().catch(() => null) : null;
+        if (!r.ok) {
+          console.error("stockmacd follow failed:", r.status);
+          await r.body?.cancel();
+        }
+        if (v === true) return null;
+        if (v === false) return json({ ok: false, error: "stock_cap_full", cap: STOCKMACD_CAP }, 409);
+      } catch (err) {
+        console.error("stockmacd follow failed:", errText(err));
+      }
+      return json({ ok: false, error: "save_failed" }, 500);
+    };
+
     const status = async () => {
       const [subs, alerts] = await Promise.all([
         readRows(`signal_alert_subscriptions?user_id=eq.${uid}&select=pair,interval,lang,rule&order=created_at.asc`),
@@ -2106,6 +2375,13 @@ Deno.serve(async (req: Request) => {
         ...recordOf(false, BACKTEST),
         gainz: recordOf(true, GA_BACKTEST),
       };
+      // v42 (research/allstocks-prod-spec.md 4.2): the stock MACD email's shares: the 22 listed from the start, then this
+      // user's own '15min' shares outside them, in the order of the user's rows; the count of all users' shares
+      // together (a number, null when unread) beside the cap; each own share's stored name and daily note. What other
+      // users follow is theirs: no other user's share, and no user id, address or row id, is in it
+      const own = [...new Set(subs.filter((x) => x.rule === "stockmacd" && isStockmacdChart(x.pair, x.interval)).map((x) => String(x.pair)))];
+      const pairs = [...STOCKMACD_PAIRS, ...own.filter((p) => !isListedStock(p))];
+      const [followed, shares] = await Promise.all([stockmacdFollowedCount(), stockmacdShares(own)]);
       return {
         ok: true,
         version: FUNCTION_VERSION,
@@ -2135,8 +2411,11 @@ Deno.serve(async (req: Request) => {
           sweepx: { pairs: SWEEPX_PAIRS, intervals: SWEEPX_INTERVALS },
           // #387: the EMA 20 / 200 way's: the six's 15-minute chart
           emarm: { pairs: EMARM_PAIRS, intervals: EMARM_INTERVALS },
-          // #391: the MACD email on shares: the 22 shares' 1-hour chart
-          stockmacd: { pairs: STOCKMACD_PAIRS, intervals: STOCKMACD_INTERVALS },
+          // #391: the MACD email on shares (v41: their 15-minute chart; v42: the
+          // 22 listed from the start and the user's own shares beyond them, the
+          // cap of 50 for all users together and its count, the own shares' names
+          // and notes)
+          stockmacd: { pairs, intervals: STOCKMACD_INTERVALS, cap: STOCKMACD_CAP, followed, shares },
           // #395: a sharp rise or fall: the six's 1-hour chart
           spike: { pairs: SPIKE_PAIRS, intervals: SPIKE_INTERVALS },
         },
@@ -2165,6 +2444,19 @@ Deno.serve(async (req: Request) => {
       const rule: RuleKey | IndicatorRule = indicator ? (body.rule as IndicatorRule) : isRuleKey(body.rule) ? body.rule : "rsi_sar";
       if (body.on) {
         if (!allowed) return json({ ok: false, error: "plan_required" }, 403);
+        // v42 (research/allstocks-prod-spec.md 2.2, 3.2, 4.2): a share outside
+        // the 22 that nobody follows yet is confirmed by Yahoo's search first;
+        // every share's row is saved by the locked call (the cap of 50)
+        if (rule === "stockmacd") {
+          const pair = body.pair;
+          if (!isListedStock(pair)) {
+            const refused = await stockmacdConfirm(pair, body.q);
+            if (refused) return refused;
+          }
+          const refused = await stockmacdFollow([pair], isLang(body.lang) ? body.lang : "ja");
+          if (refused) return refused;
+          return json(await status());
+        }
         // v41 (research/macdfade15min-prod-spec.md 3.6): created_at, the
         // function's now, beside lang: a tick of a row that exists (the upsert
         // merges) shows the tick's time too, so the reconcile after the
@@ -2207,6 +2499,27 @@ Deno.serve(async (req: Request) => {
       if (body.on) {
         if (!allowed) return json({ ok: false, error: "plan_required" }, 403);
         const lang = isLang(body.lang) ? body.lang : "ja";
+        // v42 (research/allstocks-prod-spec.md 4.2): every share one of the 22
+        // or one this user already follows (a new share comes only through
+        // `set`, which confirms it), then one locked call with all of them,
+        // refused when its new shares would take the total past the cap
+        if (rule === "stockmacd") {
+          const asked = [...new Set(list.map((c) => c.pair))];
+          if (asked.some((p) => !isListedStock(p))) {
+            const r = await rest(`signal_alert_subscriptions?user_id=eq.${uid}&rule=eq.stockmacd&interval=eq.15min&select=pair`);
+            const mine: unknown = r.ok ? await r.json().catch(() => null) : null;
+            if (!r.ok) await r.body?.cancel();
+            if (!Array.isArray(mine)) {
+              console.error("stockmacd rows unread:", r.status);
+              return json({ ok: false, error: "save_failed" }, 500);
+            }
+            const own = new Set(mine.filter(isRecord).map((x) => x.pair));
+            if (!asked.every((p) => isListedStock(p) || own.has(p))) return json({ ok: false, error: "invalid_request" }, 400);
+          }
+          const refused = await stockmacdFollow(asked, lang);
+          if (refused) return refused;
+          return json(await status());
+        }
         // v41 (spec 3.6): created_at, the function's now, in every row beside
         // lang, as `set` sends it
         const createdAt = new Date(nowMs).toISOString();

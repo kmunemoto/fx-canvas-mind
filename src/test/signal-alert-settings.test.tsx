@@ -28,10 +28,15 @@ import { readFileSync } from "node:fs";
 // 〔switch〕 (research/macdfade15min-prod-spec.md section 5, macdxNotes [0]): the UTC date of v41's first answer, ja
 // 「2026年11月D日」, en "D November 2026", written in step 4's PR as FUNCTION_VERSION's date is (3.7); read from the
 // function, so that the two dates change together at the release (if v41 first answers on another UTC date than
-// FUNCTION_VERSION's, section 5's src/-only PR that corrects 〔switch〕 puts that date here in place of this reading)
-const SWITCH_DATE = readFileSync("supabase/functions/signal-alerts/index.ts", "utf8").match(
-  /const FUNCTION_VERSION = "signal-alerts-v41-(\d{4})-(\d{2})-(\d{2})";/,
-)!;
+// FUNCTION_VERSION's, section 5's src/-only PR that corrects 〔switch〕 puts that date here in place of this reading).
+// v42 (research/allstocks-prod-spec.md) moved FUNCTION_VERSION on (signal-alerts-v42-…); 〔switch〕 stays v41's first
+// answer, so its date is the one v41's version line held (v41 first answered 2026-11-20 08:05 UTC, docs §8.156)
+const SWITCH_DATE = "signal-alerts-v41-2026-11-20".match(/^signal-alerts-v41-(\d{4})-(\d{2})-(\d{2})$/)!;
+// v42 (research/allstocks-prod-spec.md 6.4): stockmacdNotes [0], ja and en (pinned to that file's text below)
+const V42_NOTE0_JA =
+  "Yahoo の検索で見つかる米国株と日本株（Yahoo が株として出す、米国の取引所と東証の銘柄）の15分足で判定します。上の「通知する株を探す」で探して足せます。通知する株は、使う人全員で合わせて50銘柄までです（同じ株は、何人がチェックしても1銘柄と数えます）。はじめから表に出している22銘柄（米国株8・日本株14）は、前の決まりで過去の数字を測った銘柄です。今の決まりは、株では測っていません。";
+const V42_NOTE0_EN =
+  "Judged on the 15-minute chart of US and Japanese stocks that Yahoo's search finds (what Yahoo lists as equities on US exchanges and the Tokyo Stock Exchange). Find one with \"Find a stock to alert\" above and add it. Up to 50 stocks can be alerted for all users together (a stock counts once, however many people tick it). The 22 stocks in the table from the start (8 US, 14 Japanese) are the ones the earlier rule was measured on. The present rule is not measured on stocks.";
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const SWITCH_JA = `${Number(SWITCH_DATE[1])}年${Number(SWITCH_DATE[2])}月${Number(SWITCH_DATE[3])}日`;
 const SWITCH_EN = `${Number(SWITCH_DATE[3])} ${MONTHS[Number(SWITCH_DATE[2]) - 1]} ${SWITCH_DATE[1]}`;
@@ -636,16 +641,26 @@ describe("#275 the MACD ride (once the peak-and-valley rule) in the email-alert 
     expect(grid.querySelectorAll("tbody input")).toHaveLength(2 + 2 * MACDH_PAIRS.length);
   });
 
-  // section 5: "The `stockmacd` grid is unchanged (one 15分 column)"
-  it("leaves the stock MACD's grid as it was: one 15分 column, a box a share, no \"—\"", async () => {
+  // section 5: "The `stockmacd` grid is unchanged (one 15分 column)"; v42 (research/allstocks-prod-spec.md 6.3, section
+  // 9): its header is 「銘柄」 / "Stock" (not 「通貨ペア」), still no "—"
+  it("leaves the stock MACD's grid as it was: one 15分 column, a box a share, no \"—\"; v42: its header 「銘柄」 / \"Stock\"", async () => {
     const stockIndicator = { ...indicator, rules: ["qtrend", "ultra", "macdx", "stockmacd"], stockmacd: { pairs: ["AAPL", "7203.T"], intervals: ["15min"] } };
     render(<SignalAlertSettings call={async () => settings({ indicator: stockIndicator })} />);
     fireEvent.click(await screen.findByTestId("signal-alerts-rule-stockmacd"));
     const grid = screen.getByTestId("signal-alerts-grid");
-    expect([...grid.querySelectorAll("thead th")].map((e) => e.textContent)).toEqual([ja.alerts.pairHeader, "15分"]);
+    expect([...grid.querySelectorAll("thead th")].map((e) => e.textContent)).toEqual(["銘柄", "15分"]);
+    expect(ja.alerts.stockmacdHeader).toBe("銘柄");
     expect(box("signal-alert-stockmacd-AAPL-15min").tagName).toBe("INPUT");
     expect(box("signal-alert-stockmacd-7203.T-15min").tagName).toBe("INPUT");
     expect(grid.querySelector("[data-testid$='-none']")).toBeNull();
+    cleanup();
+    render(<SignalAlertSettings call={async () => settings({ indicator: stockIndicator })} />, "en");
+    fireEvent.click(await screen.findByTestId("signal-alerts-rule-stockmacd"));
+    const gridEn = screen.getByTestId("signal-alerts-grid");
+    expect([...gridEn.querySelectorAll("thead th")].map((e) => e.textContent)).toEqual(["Stock", en.alerts.intervals["15min"]]);
+    expect(gridEn.querySelector("[data-testid$='-none']")).toBeNull();
+    // (the other rules keep 「通貨ペア」 / "Pair")
+    expect([ja.alerts.pairHeader, en.alerts.pairHeader]).toEqual(["通貨ペア", "Pair"]);
   });
 
   it("shows RSI + SAR's record on its own tab only: not under the MACD tab, nor ULTRA's or Q-Trend's (a fixture that has a record, so the check can fail)", async () => {
@@ -1296,7 +1311,8 @@ describe("#275 the MACD ride (once the peak-and-valley rule) in the email-alert 
     // v41: the shares on the 15-minute chart; the list of 15-minute closes (with Tokyo's 11:30 bar, never mailed, the
     // Tokyo delay, measured on the 1-hour reads, and "not checked" for the inbox; 〔closing〕 empty: spec 3.3 item 6's
     // condition does not hold today); the weekend and the US half day; "not an order"
-    expect(items[0]).toContain("の15分足だけで判定します（前の決まりで過去の数字を測った銘柄です。今の決まりは、株では測っていません。");
+    // v42 (research/allstocks-prod-spec.md 6.4): [0] any share Yahoo's search finds, at most 50 for all users together
+    expect(items[0]).toBe(V42_NOTE0_JA);
     expect(items[2]).toBe(
       "足と値段は Yahoo Finance の公開データで、チャートの株の足と同じです（公式の配信ではないため、止まることがあります）。足が確定してから送ります。米国株はニューヨークの 9:45〜16:00 の15分ごと、日本株は 9:15〜11:30 と 12:45〜15:30 の15分ごとに足が確定し、Yahoo の最後の約定の時刻がそれを過ぎたら判定します。確定から45分を過ぎた足は送りません。日本株の前場の引け（11:30）の値段は、Yahoo では1本の足（11:30〜11:45）になり、チャートと MACD の600本に入りますが、その足ではメールを送りません。その足を判定できるのは 12:45 からの午後の読み込みで、確定から45分を過ぎているためです（コードから数えたもので、昼休みの間の Yahoo の答えは、まだ見ていません）。東証の値段は Yahoo では約15分遅れて届きます（2026-11-06 に、1時間足の読み込みで測りました）。そのため、日本株のメールは足が確定してから15分ほど後に判定して送ります（15分足で実際に何分後になるかは、まだ測っていません）。米国株は、1時間足の時に、確定の数秒後に送っていました（2026-11-05 の2通。15分足では、まだ見ていません）。受信箱に届くまでの時間は確かめていません。",
     );
@@ -1322,6 +1338,7 @@ describe("#275 the MACD ride (once the peak-and-valley rule) in the email-alert 
     const notesEn = screen.getByTestId("signal-alerts-notes").textContent!;
     const itemsEn = en.alerts.stockmacdNotes;
     expect(notesEn).toBe(itemsEn.join(""));
+    expect(itemsEn[0]).toBe(V42_NOTE0_EN);
     expect(itemsEn[1]).toBe(
       "The rule is the same as the currency pairs' MACD fade; a stock is looked at at each 15-minute close. " +
         "The MACD(12, 26, 9) blue line, computed on the 600 closed bars ending at the bar, is at 96% or more of the top of the newest 120 bars' pane and was below 96% at the close of the bar before: a SELL; at 96% or more of its bottom and below 96% at the close of the bar before: a BUY (the fade side; a SELL on a stock is a short sale, and the email says so). " +
@@ -1524,8 +1541,11 @@ describe("v41 the screen's texts on the fade, word for word against research/mac
     expect(specJa).toContain("「米国の取引が早く終わる日は、最後の足（終わりの15分）も、ほかの足と同じく確定の後の読み込みで判定します（本物の早く終わる日では、まだ見ていません）。」");
     expect(ja.alerts.stockmacdNotes[5]).toContain("米国の取引が早く終わる日は、最後の足（終わりの15分）も、ほかの足と同じく確定の後の読み込みで判定します（本物の早く終わる日では、まだ見ていません）。");
     expect(en.alerts.stockmacdNotes[5]).toContain("On a US half day the last bar (the last 15 minutes) is judged at a read after its close like any other (not yet seen on a real half day).");
-    expect(ja.alerts.stockmacdNotes[0]).toContain("の15分足だけで判定します");
-    expect(en.alerts.stockmacdNotes[0]).toContain("Judged on the 15-minute chart of 8 US stocks");
+    // v42 (research/allstocks-prod-spec.md 6.4): [0] replaced; word for word against that spec in its own describe below
+    expect(ja.alerts.stockmacdNotes[0]).toBe(V42_NOTE0_JA);
+    expect(en.alerts.stockmacdNotes[0]).toBe(V42_NOTE0_EN);
+    expect(ja.alerts.stockmacdNotes[0]).not.toContain("の15分足だけで判定します");
+    expect(en.alerts.stockmacdNotes[0]).not.toContain("Judged on the 15-minute chart of 8 US stocks");
     expect(ja.alerts.stockmacdNotes[1]).toContain("見るのは15分足の確定ごとです");
     expect(specEn).toContain("\"The rule is the same as the currency pairs' MACD fade; a stock is looked at at each 15-minute close.\"");
     expect(en.alerts.stockmacdNotes[1].startsWith("The rule is the same as the currency pairs' MACD fade; a stock is looked at at each 15-minute close. ")).toBe(true);
@@ -1542,8 +1562,11 @@ describe("v41 the screen's texts on the fade, word for word against research/mac
     inEn("and for the MACD fade signals on the 15-minute bars of USD/JPY and AUD/USD and the 1-hour bars of EUR/JPY, AUD/JPY, EUR/USD and gold.");
     expect(answer(ja, "どの通貨ペアに対応していますか？")).toContain("MACD の逆張りのサインをドル/円・豪ドル/ドルの15分足と、ユーロ/円・豪ドル/円・ユーロ/ドル・金の1時間足から選べます。");
     expect(answer(en, "Which currency pairs are covered?")).toContain("and for the MACD fade signals on the 15-minute bars of USD/JPY and AUD/USD and the 1-hour bars of EUR/JPY, AUD/JPY, EUR/USD and gold.");
-    expect(JSON.stringify(ja)).toContain("（決まった22銘柄の15分足だけ）");
-    expect(JSON.stringify(en)).toContain("(the 22 listed stocks' 15-minute charts only)");
+    // v42 (research/allstocks-prod-spec.md 6.5): the stock data note's last parenthesis
+    expect(ja.live.stockNote.endsWith("「株の MACD」で選べます（Yahoo の検索で見つかる株の15分足。使う人全員で合わせて50銘柄まで）。")).toBe(true);
+    expect(en.live.stockNote.endsWith("→ Stock MACD (the 15-minute chart of a stock Yahoo's search finds; up to 50 stocks for all users together).")).toBe(true);
+    expect(JSON.stringify(ja)).not.toContain("（決まった22銘柄の15分足だけ）");
+    expect(JSON.stringify(en)).not.toContain("(the 22 listed stocks' 15-minute charts only)");
     // indicatorIntro.macdx after section 5's four replacements: 「15分足」 / "15-minute" three times (USD/JPY's and
     // AUD/USD's chart, the owner's 15-minute pane, the 15-minute run), each pair's own chart named
     expect(ja.alerts.indicatorIntro.macdx.split("15分足").length - 1).toBe(3);
@@ -1657,3 +1680,49 @@ const OWNER_JA_V41 =
   "この決まりは Sextant 独自のもので、公開されているインジケーターではありません。96%・足の確定で判定すること・ペアごとの時間足・15分足の MACD の枠を新しい120本にすること・逆張りの向き・利確と損切りの値段を書かないことは、アプリのオーナーが決めたものです。MACD の枠（新しい120本）は、アプリのその時間足のチャートの枠と同じです。";
 const OWNER_EN_V41 =
   "This rule is Sextant's own, not a published indicator. 96%, judging at the bar's close, each pair's timeframe, the 15-minute MACD pane of the newest 120 bars, the fade side and stating no take-profit or stop price are the app owner's choices. The MACD pane (the newest 120 bars) is the same as the app's chart's on that timeframe.";
+
+// v42 (research/allstocks-prod-spec.md 6.4, 6.5): the stock MACD tab's new and changed texts and the chart's one
+// sentence, word for word against that file: a ja text as 「…」 there, an en text as its JSON string there (the spec
+// writes the inner quotes of notes [0] as \"), a text with a number as its template there (`…${n}…`)
+describe("v42 the stock MACD tab's texts, word for word against research/allstocks-prod-spec.md 6.4 and 6.5", () => {
+  const spec = readFileSync("research/allstocks-prod-spec.md", "utf8");
+  const specOne = spec.replace(/\n +/g, " ");
+  const T = (s: string) => s as unknown as number;
+  it("the plain texts, ja and en", () => {
+    const keys = ["stockmacdSearchLabel", "stockmacdNoHits", "stockmacdHeader", "stockmacdAllRow", "stockmacdCountUnread", "stockmacdNotFound", "stockmacdCheckFailed"] as const;
+    for (const k of keys) {
+      expect(spec, k).toContain(`「${ja.alerts[k]}」`);
+      expect(spec, k).toContain(JSON.stringify(en.alerts[k]));
+    }
+    expect(spec).toContain(`「${ja.alerts.stockmacdNotes[0]}」`);
+    expect(spec).toContain(JSON.stringify(en.alerts.stockmacdNotes[0]));
+    expect([ja.alerts.stockmacdNotes[0], en.alerts.stockmacdNotes[0]]).toEqual([V42_NOTE0_JA, V42_NOTE0_EN]);
+    // [1]-[6] unchanged (7 in all)
+    expect([ja.alerts.stockmacdNotes.length, en.alerts.stockmacdNotes.length]).toEqual([7, 7]);
+  });
+
+  it("the texts with a number, as their templates, ja and en; and filled in", () => {
+    const tpl = [
+      ja.alerts.stockmacdCount(T("${n}"), T("${cap}")), en.alerts.stockmacdCount(T("${n}"), T("${cap}")),
+      ja.alerts.stockmacdFull(T("${cap}")), en.alerts.stockmacdFull(T("${cap}")),
+      ja.alerts.stockmacdCapRefused(T("${cap}")), en.alerts.stockmacdCapRefused(T("${cap}")),
+      ja.alerts.stockmacdStale("${day}"), en.alerts.stockmacdStale("${day}"),
+      ja.alerts.stockmacdShortBars(T("${n}")), en.alerts.stockmacdShortBars(T("${n}")),
+    ];
+    for (const x of tpl) expect(spec, x).toContain("`" + x + "`");
+    expect(ja.alerts.stockmacdCount(48, 50)).toBe("通知している株（使う人全員の合計）: 48/50銘柄");
+    expect(en.alerts.stockmacdCount(48, 50)).toBe("Stocks alerted (all users together): 48 of 50");
+    expect(ja.alerts.stockmacdShortBars(412)).toBe("Yahoo から読めた15分足が412本で、600本に届くまで判定しません");
+    expect(en.alerts.stockmacdShortBars(412)).toBe("412 15-minute bars could be read from Yahoo; not judged until there are 600");
+  });
+
+  it("the chart's stock note: only its last parenthesis changed (6.5)", () => {
+    expect(spec).toContain("「（決まった22銘柄の15分足だけ）」 → 「（Yahoo の検索で見つかる株の15分足。使う人全員で合わせて50銘柄まで）」");
+    expect(specOne).toContain("\"(the 22 listed stocks' 15-minute charts only)\" → \"(the 15-minute chart of a stock Yahoo's search finds; up to 50 stocks for all users together)\"");
+    expect(ja.live.stockNote).toContain("（Yahoo の検索で見つかる株の15分足。使う人全員で合わせて50銘柄まで）");
+    expect(en.live.stockNote).toContain("(the 15-minute chart of a stock Yahoo's search finds; up to 50 stocks for all users together)");
+    // the rest as before: the way to the tab stays (src/test/stocks.test.tsx reads it on the chart)
+    expect(ja.live.stockNote).toContain("株のメール通知は、「設定」→「メール通知」の「株の MACD」で選べます（");
+    expect(en.live.stockNote).toContain("Stock emails can be chosen under Settings → Email alerts → Stock MACD (");
+  });
+});

@@ -1,6 +1,11 @@
-// #391 (docs §8.134): the MACD email on shares (signal-alerts v35) — the 22 shares' hourly bars from Yahoo, each
+// #391 (docs §8.134): the MACD email on shares (signal-alerts v35: then the 22 shares' hourly bars) from Yahoo, each
 // session's bar closes (Tokyo's lunch break and closing auction, New York's 16:00, daylight saving), when a bar is in,
 // the run's steps — and its tab in the settings.
+// v42 (research/allstocks-prod-spec.md section 9): any share Yahoo's search finds, at most 50 for all users together —
+// the chart guard by the symbol's shape, `set` and `set_many` through the locked call (the cap; Yahoo's search for a
+// share nobody follows yet), the status call's stockmacd block, the names in the mail, and the run's paged read, its
+// order, its reads' timeout and the one read and one write of signal_alert_stocks; over the fake world below, which
+// gains the two functions of the migration (their SQL's logic), signal_alert_stocks, Yahoo's search and the paging.
 // #397 (docs §8.150): from v39 to v40 that email was the ride of the pairs' MACD email (its tests went with it).
 // v40 (docs §8.155; research/macdfade1h-prod-spec.md): the email is the fade, judged at the share's 1-hour closes.
 // v41 (research/macdfade15min-prod-spec.md sections 2.4, 3.3, 3.4, 3.6, 3.7, 4.1, 4.2, 4.4 and 7.1): the same fade on
@@ -18,17 +23,20 @@
 // with volume, null rows 11:45 … 12:15, 12:30 … 15:15). The rule itself (fadeCloseEntryAt) is checked in
 // src/test/macd-fade.test.ts and against the study by research/macdfade-prod-check.ts; the pairs' and gold's fade in
 // src/test/macd-fade-alerts.test.ts.
-import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { render as rtlRender, screen, fireEvent, waitFor, type RenderResult } from "@testing-library/react";
+import { render as rtlRender, screen, fireEvent, waitFor, act, cleanup, type RenderResult } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { LocaleProvider } from "@/lib/i18n";
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), warning: vi.fn(), error: vi.fn() } }));
 vi.mock("@/lib/supabase", () => ({ supabase: {} }));
 
+import { toast } from "sonner";
 import SignalAlertSettings from "../components/SignalAlertSettings";
-import { normalizeAlertSettings } from "../lib/signalAlerts";
+import StockPicker from "../components/StockPicker";
+import { AlertRequestError, normalizeAlertSettings, type AlertSettings } from "../lib/signalAlerts";
+import type { StockHit } from "../lib/stocks";
 import {
   CLOSES,
   STOCK_POLL_MS,
@@ -38,7 +46,9 @@ import {
   STOCKMACD_PAIRS,
   STOCKMACD_RULE_ID,
   STOCK_FRESH_MS,
+  STOCKMACD_CAP,
   type StockBar,
+  isListedStock,
   localOf,
   renderStockMail,
   stockBarBreak,
@@ -47,6 +57,8 @@ import {
   stockBarsOf,
   stockCloseDue,
   stockFadeClose,
+  stockNameClean,
+  stockNameOf,
   stockSweepOf,
 } from "../../supabase/functions/signal-alerts/stocks";
 import {
@@ -112,9 +124,13 @@ describe("#391 when a share's bar closes (signal-alerts/stocks.ts; v41: its 15-m
     expect(indicatorRuleId("stockmacd")).toBe(STOCKMACD_RULE_ID);
     expect(isIndicatorChartFor("stockmacd", "AAPL", "15min")).toBe(true);
     expect(isIndicatorChartFor("stockmacd", "7203.T", "15min")).toBe(true);
-    expect(isIndicatorChartFor("stockmacd", "IBM", "15min")).toBe(false);
+    // v42 (research/allstocks-prod-spec.md 4.1): any share of the symbol's shape, not only the 22; not one of another
+    // shape (lowercase, no ".T", a trailing space)
+    expect(isIndicatorChartFor("stockmacd", "IBM", "15min")).toBe(true);
+    for (const no of ["ibm", "7203", "IBM "]) expect(isIndicatorChartFor("stockmacd", no, "15min"), no).toBe(false);
     // the 1-hour chart is not offered any more (a '1h' row gets a '15min' twin by hand, spec 3.6)
     expect(isIndicatorChartFor("stockmacd", "AAPL", "1h")).toBe(false);
+    expect(isIndicatorChartFor("stockmacd", "7203.T", "1h")).toBe(false);
     expect(isIndicatorChartFor("stockmacd", "USD/JPY", "15min")).toBe(false);
     // the FX rules do not take a share
     expect(isIndicatorChartFor("macdx", "AAPL", "15min")).toBe(false);
@@ -584,8 +600,8 @@ describe("v41 the fade on a share, judged at closes (stocks.ts stockFadeClose; s
     expect(stockFadeClose(SYM, closedTo(I_SELL), closeOf(I_SELL) + MIN)).toEqual({ fresh: true, entry: entryAt(I_SELL) });
     // fewer than 600 closed bars: no entry
     expect(stockFadeClose(SYM, closed.slice(-599), closeOf(I_BUY) + MIN)).toEqual({ fresh: true, entry: null });
-    // a share the rule is not offered on, or no closed bar: nothing
-    expect(stockFadeClose("IBM", closed, closeOf(I_BUY) + MIN)).toEqual({ fresh: false, entry: null });
+    // a symbol the rule is not offered on (v42: not of a share's shape; IBM is one now), or no closed bar: nothing
+    expect(stockFadeClose("ibm", closed, closeOf(I_BUY) + MIN)).toEqual({ fresh: false, entry: null });
     expect(stockFadeClose(SYM, [], closeOf(I_BUY) + MIN)).toEqual({ fresh: false, entry: null });
     // a session's last bar is judged by its own end (16:00 New York), 15 minutes after it opened
     expect(stockFadeClose(SYM, closedTo(I_LAST), times[I_LAST] + STEP + MIN)).toEqual({ fresh: true, entry: entryAt(I_LAST) });
@@ -963,13 +979,16 @@ describe("v41 the share's email, word for word (spec 4.2 and 4.4)", () => {
 describe("#391 the shares' run and the database", () => {
   it("runs every minute as its own mode, reads only its own subscriptions, and the database takes the shares and the rule", () => {
     const fn = readFileSync("supabase/functions/signal-alerts/index.ts", "utf8");
-    // (v40: the MACD email, the shares' too, is the fade; v41 on 15-minute bars)
-    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v41-2026-11-20";');
-    expect(fn).toContain('readRows("signal_alert_subscriptions?rule=eq.stockmacd&select=user_id,pair,interval,lang,rule")');
+    // (v40: the MACD email, the shares' too, is the fade; v41 on 15-minute bars; v42 on any share, up to 50)
+    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v42-2026-11-22";');
+    // v42 (research/allstocks-prod-spec.md 4.2): the '15min' rows, paged by key
+    expect(fn).toContain(
+      "`signal_alert_subscriptions?rule=eq.stockmacd&interval=eq.15min&select=id,user_id,pair,interval,lang,rule&order=id.asc&limit=1000${after === null ? \"\" : `&id=gt.${encodeURIComponent(after)}`}`",
+    );
     // the other rules' run does not take them
     expect(fn).toContain('readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra,macdx,amdpo3,emarm,spike)&select=user_id,pair,interval,lang,rule")');
     expect(fn).toContain('if (body.mode === "stocks") {');
-    expect(fn).toContain("stockmacd: { pairs: STOCKMACD_PAIRS, intervals: STOCKMACD_INTERVALS },");
+    expect(fn).toContain("stockmacd: { pairs, intervals: STOCKMACD_INTERVALS, cap: STOCKMACD_CAP, followed, shares },");
     expect(renderTestMail([{ pair: "AAPL", interval: "15min", rule: "stockmacd" }], "ja").text).toContain("AAPL 15分足（株の MACD）");
     const mig = readFileSync("supabase/migrations/20261031160000_signal_alert_stockmacd.sql", "utf8");
     expect(mig).toContain("'emarm', 'stockmacd']));");
@@ -997,7 +1016,9 @@ describe("#391 the shares' run and the database", () => {
     );
     expect(code).toMatch(/if \(settled\) \{\s+if \(step\.done\) stockDone\.set\(sym, due\);\s+if \(step\.judge && step\.newest\) stockJudged\.set\(sym, step\.newest\.open_ms\);\s+\}/);
     // the bars read are the rule's chart's (spec 3.3 item 2: Yahoo's `15m` over `60d`), at the reads as they were
-    expect(code).toContain('const r = await fetch(yahooChartUrl(sym, STOCKMACD_INTERVALS[0]), { headers: YAHOO_HEADERS, signal: AbortSignal.timeout(10_000) });');
+    // (v42, research/allstocks-prod-spec.md 4.2: the read's timeout the smaller of 5 s and the budget left)
+    expect(code).toContain("const cut = AbortSignal.timeout(Math.min(5_000, STOCK_RUN_BUDGET_MS - (Date.now() - nowMs)));");
+    expect(code).toContain("const r = await fetch(yahooChartUrl(sym, STOCKMACD_INTERVALS[0]), { headers: YAHOO_HEADERS, signal: cut });");
     expect(code).toContain("const due = stockCloseDue(sym, nowMs);");
     expect(code).toContain("if (nowMs - (stockReadAt.get(sym) ?? 0) < 50_000) continue;");
     expect(code).toContain("const got = stockBarsOf(sym, body, nowMs);");
@@ -1073,7 +1094,10 @@ describe("#391 the shares' run and the database", () => {
     };
     const calls = [...callsOf("rest"), ...callsOf("readRows")];
     expect(calls.length).toBeGreaterThan(20);
-    expect(calls).toContain('readRows("signal_alert_subscriptions?rule=eq.stockmacd&select=user_id,pair,interval,lang,rule")');
+    // (v42: the shares' paged read is rest()'s, research/allstocks-prod-spec.md 4.2)
+    expect(calls).toContain(
+      "rest(\n            `signal_alert_subscriptions?rule=eq.stockmacd&interval=eq.15min&select=id,user_id,pair,interval,lang,rule&order=id.asc&limit=1000${after === null ? \"\" : `&id=gt.${encodeURIComponent(after)}`}`,\n          )",
+    );
     for (const c of calls) expect(c, c).not.toMatch(/macd_ride/);
     // stricter still: no code line of index.ts names either table
     expect(code).not.toContain("macd_ride");
@@ -1095,6 +1119,10 @@ describe("#391 the shares' run and the database", () => {
 });
 
 describe("#391 the MACD email on shares in the settings", () => {
+  // v42 (research/allstocks-prod-spec.md 4.2, 6.3): the status's block as a v42 server sends it — the 22, then this
+  // user's own share beyond them (a made-up symbol of the US shape), the cap, the count of all users' shares and the
+  // own share's stored name (made up)
+  const OWN = "XYZ";
   const payload = (over: Record<string, unknown> = {}) => ({
     ok: true,
     allowed: true,
@@ -1102,21 +1130,33 @@ describe("#391 the MACD email on shares in the settings", () => {
     email: "me@example.com",
     pairs: ["USD/JPY"],
     intervals: ["15min", "1h", "4h", "1day"],
-    subscriptions: [],
+    subscriptions: [{ pair: OWN, interval: "15min", rule: "stockmacd" }],
     alerts: [],
     indicator: {
       rules: INDICATOR_RULES,
       pairs: INDICATOR_PAIRS,
       intervals: INDICATOR_INTERVALS,
       limited: {},
-      stockmacd: { pairs: STOCKMACD_PAIRS, intervals: STOCKMACD_INTERVALS },
+      stockmacd: {
+        pairs: [...STOCKMACD_PAIRS, OWN],
+        intervals: STOCKMACD_INTERVALS,
+        cap: STOCKMACD_CAP,
+        followed: 23,
+        shares: { [OWN]: { name: "Example Holdings", last_bar_at: "2026-11-20T20:45:00.000Z", bars: 812, stale: false } },
+      },
     },
     ...over,
   });
 
-  it("has its own tab with the 22 shares named on the 15-minute chart, its notes, and saves a tick under its own rule", async () => {
+  // v42 (section 9, "Tests to change" :1097-1133): the rows are the 22, then the user's own shares beyond them, and the
+  // row for all of them; a share beyond the 22 named by its stored name (`shares`), the 22 by the app's names
+  it("has its own tab with the 22 shares named on the 15-minute chart, then the user's own (named from `shares`), its notes, and saves a tick under its own rule", async () => {
     const call = vi.fn(async (body: Record<string, unknown>) =>
-      normalizeAlertSettings(body.action === "set" ? payload({ subscriptions: [{ pair: "7203.T", interval: "15min", rule: "stockmacd" }] }) : payload())!
+      normalizeAlertSettings(
+        body.action === "set"
+          ? payload({ subscriptions: [{ pair: OWN, interval: "15min", rule: "stockmacd" }, { pair: "7203.T", interval: "15min", rule: "stockmacd" }] })
+          : payload(),
+      )!
     );
     render(<SignalAlertSettings call={call} />);
     fireEvent.click(await screen.findByTestId("signal-alerts-rule-stockmacd"));
@@ -1128,9 +1168,12 @@ describe("#391 the MACD email on shares in the settings", () => {
     expect(intro).toContain("株の売りは空売りです");
     expect(intro).toContain("株では測っていません。");
     const rows = screen.getByTestId("signal-alerts-grid").querySelectorAll("tbody tr");
-    // the shares, and the row for all of them
-    expect(rows.length).toBe(STOCKMACD_PAIRS.length + 1);
+    // the row for all of them, the 22, and the user's own share
+    expect(rows.length).toBe(1 + STOCKMACD_PAIRS.length + 1);
+    expect([...rows].map((r) => r.querySelector("td")!.firstChild!.textContent)).toEqual(["表の銘柄すべて", ...STOCKMACD_PAIRS, OWN]);
     expect(screen.getByTestId("signal-alerts-grid").textContent).toContain("7203.Tトヨタ自動車");
+    expect(rows[rows.length - 1].querySelector("td")!.textContent).toBe("XYZExample Holdings");
+    expect((screen.getByTestId(`signal-alert-stockmacd-${OWN}-15min`) as HTMLInputElement).checked).toBe(true);
     expect(screen.getByTestId("signal-alert-stockmacd-AAPL-15min")).toBeTruthy();
     expect(screen.queryByTestId("signal-alert-stockmacd-AAPL-1h")).toBeNull();
     const notes = screen.getByTestId("signal-alerts-notes").textContent!;
@@ -1152,6 +1195,457 @@ describe("#391 the MACD email on shares in the settings", () => {
     render(<SignalAlertSettings call={call} />);
     fireEvent.click(await screen.findByTestId("signal-alerts-rule-stockmacd"));
     expect(screen.getByTestId("signal-alerts-stockmacd-unavailable")).toBeTruthy();
+  });
+});
+
+// ---- v42: the screen (research/allstocks-prod-spec.md 6.1, 6.2, 6.3; section 9 "The screen") -------------------------
+//
+// The stock MACD tab over hand-made statuses in the shape the function sends (its real answer is read through the same
+// normalizer in "v42 the status call's stockmacd block" below). The shares beyond the 22 are made-up symbols (XYZ,
+// BRK-B as a shape) with made-up names ("Example Holdings"); the search is a fake (no Yahoo answer is in the repository).
+describe("v42 the stock MACD tab: the count, the search, the refusals and the own shares' rows (spec 6.1-6.3)", () => {
+  const OWN = "XYZ";
+  const share = (over: Record<string, unknown> = {}) => ({ name: "Example Holdings", last_bar_at: "2026-11-20T20:45:00.000Z", bars: 812, stale: false, ...over });
+  // the stock MACD block as a v42 server sends it (snake_case), the 22 first
+  const block = (over: Record<string, unknown> = {}) => ({ pairs: [...STOCKMACD_PAIRS], intervals: STOCKMACD_INTERVALS, cap: STOCKMACD_CAP, followed: 23, shares: {}, ...over });
+  // a status with that block (null: none, as from a server older than v35), the user's own stock MACD rows `own`
+  const status = (stock: Record<string, unknown> | null, own: string[] = [], over: Record<string, unknown> = {}): AlertSettings =>
+    normalizeAlertSettings({
+      ok: true, allowed: true, email_configured: true, email: "me@example.com", pairs: ["USD/JPY"], intervals: ["15min", "1h", "4h", "1day"],
+      subscriptions: own.map((pair) => ({ pair, interval: "15min", rule: "stockmacd" })), alerts: [],
+      indicator: { rules: INDICATOR_RULES, pairs: INDICATOR_PAIRS, intervals: INDICATOR_INTERVALS, limited: {}, ...(stock ? { stockmacd: stock } : {}) },
+      ...over,
+    })!;
+  const withOwn = (followed = 24, shares: Record<string, unknown> = { [OWN]: share() }) =>
+    status(block({ pairs: [...STOCKMACD_PAIRS, ...Object.keys(shares).filter((p) => !(STOCKMACD_PAIRS as readonly string[]).includes(p))], followed, shares }), Object.keys(shares));
+  const open = async () => fireEvent.click(await screen.findByTestId("signal-alerts-rule-stockmacd"));
+  const errors = () => vi.mocked(toast.error).mock.calls.map((c) => c[0]);
+  const box = (id: string) => screen.getByTestId(id) as HTMLInputElement;
+  const statusCalls = (call: { mock: { calls: unknown[][] } }) => call.mock.calls.filter((c) => (c[0] as Record<string, unknown>).action === "status").length;
+  const A = JA.alerts;
+  beforeEach(() => vi.mocked(toast.error).mockClear());
+  afterEach(() => vi.useRealTimers());
+
+  it("the normalizer (6.1): the block from snake_case, keyed by the symbol; malformed entries and fields dropped; a v41 block: cap and followed null, shares empty", () => {
+    // (as JSON.parse gives it: "__proto__" an own key, which must not become the object's prototype)
+    const shares = JSON.parse(
+      `{"${OWN}":${JSON.stringify(share())},"BRK-B":{"name":"","last_bar_at":"not a time","bars":12.5,"stale":"yes"},` +
+        `"130A.T":{"name":null,"last_bar_at":null,"bars":null,"stale":true},"not a share":${JSON.stringify(share())},` +
+        `"__proto__":${JSON.stringify(share({ stale: true }))},"AAPL":"not an object","7203.T":null}`,
+    );
+    expect(Object.keys(shares)).toContain("__proto__");
+    const s = status(block({ followed: 31, shares }));
+    expect(s.indicator!.stockmacd).toEqual({
+      pairs: [...STOCKMACD_PAIRS],
+      intervals: ["15min"],
+      cap: 50,
+      followed: 31,
+      shares: {
+        [OWN]: { name: "Example Holdings", lastBarAt: "2026-11-20T20:45:00.000Z", bars: 812, stale: false },
+        "BRK-B": { name: null, lastBarAt: null, bars: null, stale: false },
+        "130A.T": { name: null, lastBarAt: null, bars: null, stale: true },
+      },
+    });
+    expect(Object.getPrototypeOf(s.indicator!.stockmacd!.shares)).toBe(Object.prototype);
+    for (const bad of [null, "50", -1, 2.5, 0]) {
+      const b = status(block({ cap: bad, followed: bad })).indicator!.stockmacd!;
+      expect([b.cap, b.followed], String(bad)).toEqual([null, bad === 0 ? 0 : null]);
+    }
+    expect(status({ pairs: STOCKMACD_PAIRS, intervals: STOCKMACD_INTERVALS }).indicator!.stockmacd).toEqual({
+      pairs: [...STOCKMACD_PAIRS], intervals: ["15min"], cap: null, followed: null, shares: {},
+    });
+  });
+
+  it("the picker (6.2, fake timers): one search 400 ms after the typing stops; Japanese words find the listed only and Yahoo is never asked; the listed finds first, then Yahoo's less those; a pick gives the hit and the words typed", async () => {
+    vi.useFakeTimers();
+    const loadSearch = vi.fn(async (q: string): Promise<StockHit[]> =>
+      q === "sony"
+        ? [{ symbol: "6758.T", name: "Example Name", market: "jp" }, { symbol: OWN, name: "Example Holdings", market: "us" }]
+        : q === "ibm"
+        ? Promise.reject(new Error("feed_unavailable"))
+        : [],
+    );
+    const onPick = vi.fn();
+    render(<StockPicker onPick={onPick} loadSearch={loadSearch} />);
+    expect(screen.getByTestId("stockmacd-search").textContent).toContain("通知する株を探す");
+    const q = box("stockmacd-q");
+    expect(q.placeholder).toBe(JA.live.stockSearchPlaceholder);
+    // Japanese: the listed only, at once, and no search however long one waits
+    fireEvent.change(q, { target: { value: "トヨタ" } });
+    expect(screen.getByTestId("stockmacd-hit-7203.T").textContent).toBe("7203.Tトヨタ自動車東証");
+    expect(screen.queryByTestId("stockmacd-searching")).toBeNull();
+    act(() => void vi.advanceTimersByTime(5_000));
+    expect(loadSearch).not.toHaveBeenCalled();
+    // typing: nothing is asked until 400 ms after the last change, then once, for the words then
+    fireEvent.change(q, { target: { value: "so" } });
+    act(() => void vi.advanceTimersByTime(300));
+    fireEvent.change(q, { target: { value: "sony" } });
+    expect(screen.getByTestId("stockmacd-searching").textContent).toBe(JA.live.stockSearching);
+    act(() => void vi.advanceTimersByTime(399));
+    expect(loadSearch).not.toHaveBeenCalled();
+    await act(async () => void vi.advanceTimersByTime(1));
+    expect(loadSearch.mock.calls).toEqual([["sony"]]);
+    expect(screen.queryByTestId("stockmacd-searching")).toBeNull();
+    // the listed Sony first (its name in the app's language), then Yahoo's other find; the listed one once
+    const hits = [...screen.getByTestId("stockmacd-search").querySelectorAll("button")].map((b) => b.getAttribute("data-testid"));
+    expect(hits).toEqual(["stockmacd-hit-6758.T", `stockmacd-hit-${OWN}`]);
+    expect(screen.getByTestId("stockmacd-hit-6758.T").textContent).toBe("6758.Tソニーグループ東証");
+    expect(screen.getByTestId(`stockmacd-hit-${OWN}`).textContent).toBe("XYZExample Holdings米国");
+    fireEvent.click(screen.getByTestId(`stockmacd-hit-${OWN}`));
+    expect(onPick.mock.calls).toEqual([[{ symbol: OWN, name: "Example Holdings", market: "us" }, "sony"]]);
+    expect(q.value).toBe("");
+    // nothing found says how to search (its own words, not the chart's 「上の一覧」); a search that fails says so
+    fireEvent.change(q, { target: { value: "zzzz" } });
+    await act(async () => void vi.advanceTimersByTime(400));
+    expect(screen.getByTestId("stockmacd-no-hits").textContent).toBe(A.stockmacdNoHits);
+    expect(A.stockmacdNoHits).not.toContain("上の一覧");
+    fireEvent.change(q, { target: { value: "ibm" } });
+    await act(async () => void vi.advanceTimersByTime(400));
+    expect(screen.getByTestId("stockmacd-search-error").textContent).toBe(JA.live.stockSearchError);
+    expect(screen.queryByTestId("stockmacd-no-hits")).toBeNull();
+    expect(loadSearch.mock.calls.map((c) => c[0])).toEqual(["sony", "zzzz", "ibm"]);
+  });
+
+  it("the picker (6.2, fake timers): an ASCII word isStockQuery refuses is never sent to Yahoo, however long one waits; while a search is out with no listed find, it says it is searching and not that nothing was found", async () => {
+    vi.useFakeTimers();
+    const loadSearch = vi.fn(async (): Promise<StockHit[]> => []);
+    render(<StockPicker onPick={() => {}} loadSearch={loadSearch} />);
+    const q = box("stockmacd-q");
+    for (const word of ["<b>", "AAPL!"]) {
+      fireEvent.change(q, { target: { value: word } });
+      expect(screen.queryByTestId("stockmacd-searching"), word).toBeNull();
+      act(() => void vi.advanceTimersByTime(5_000));
+      expect(screen.queryByTestId("stockmacd-searching"), word).toBeNull();
+    }
+    expect(loadSearch).not.toHaveBeenCalled();
+    // an ASCII word no listed share holds: searching until Yahoo answers, then nothing found
+    fireEvent.change(q, { target: { value: "qqqq" } });
+    expect(screen.getByTestId("stockmacd-searching").textContent).toBe(JA.live.stockSearching);
+    expect(screen.queryByTestId("stockmacd-no-hits")).toBeNull();
+    act(() => void vi.advanceTimersByTime(399));
+    expect(screen.getByTestId("stockmacd-searching")).toBeTruthy();
+    expect(screen.queryByTestId("stockmacd-no-hits")).toBeNull();
+    await act(async () => void vi.advanceTimersByTime(1));
+    expect(loadSearch.mock.calls).toEqual([["qqqq"]]);
+    expect(screen.queryByTestId("stockmacd-searching")).toBeNull();
+    expect(screen.getByTestId("stockmacd-no-hits").textContent).toBe(A.stockmacdNoHits);
+  });
+
+  it("the picker in English (6.2): a listed share by its English name and its market; the pick gives that hit", () => {
+    const onPick = vi.fn();
+    rtlRender(<LocaleProvider initial="en"><StockPicker onPick={onPick} loadSearch={async () => []} /></LocaleProvider>);
+    fireEvent.change(box("stockmacd-q"), { target: { value: "toyota" } });
+    expect(screen.getByTestId("stockmacd-hit-7203.T").textContent).toBe("7203.TToyota MotorTokyo");
+    fireEvent.click(screen.getByTestId("stockmacd-hit-7203.T"));
+    expect(onPick.mock.calls).toEqual([[{ symbol: "7203.T", name: "Toyota Motor", market: "jp" }, "toyota"]]);
+  });
+
+  it("the picker disabled: its box and its hits are disabled, and a hit gives no pick", async () => {
+    const onPick = vi.fn();
+    render(<StockPicker onPick={onPick} disabled loadSearch={async () => []} />);
+    expect(box("stockmacd-q").disabled).toBe(true);
+    fireEvent.change(box("stockmacd-q"), { target: { value: "トヨタ" } });
+    expect((screen.getByTestId("stockmacd-hit-7203.T") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByTestId("stockmacd-hit-7203.T"));
+    expect(onPick).not.toHaveBeenCalled();
+  });
+
+  it("a pick sends set with the share, its one chart, the rule, the language and the words typed; the share's row and the count follow the answer", async () => {
+    const call = vi.fn(async (body: Record<string, unknown>) => (body.action === "set" ? withOwn(24) : status(block())));
+    const loadSearch = vi.fn(async (q: string): Promise<StockHit[]> => (q === "example" ? [{ symbol: OWN, name: "Example Holdings", market: "us" }] : []));
+    render(<SignalAlertSettings call={call} loadSearch={loadSearch} />);
+    await open();
+    expect(screen.getByTestId("stockmacd-count").textContent).toBe("通知している株（使う人全員の合計）: 23/50銘柄");
+    expect(screen.queryByTestId(`signal-alert-stockmacd-${OWN}-15min`)).toBeNull();
+    fireEvent.change(box("stockmacd-q"), { target: { value: "example" } });
+    fireEvent.click(await screen.findByTestId(`stockmacd-hit-${OWN}`));
+    await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "set", pair: OWN, interval: "15min", on: true, rule: "stockmacd", lang: "ja", q: "example" }));
+    await waitFor(() => expect(box(`signal-alert-stockmacd-${OWN}-15min`).checked).toBe(true));
+    expect(screen.getByTestId("stockmacd-count").textContent).toBe("通知している株（使う人全員の合計）: 24/50銘柄");
+    const rows = screen.getByTestId("signal-alerts-grid").querySelectorAll("tbody tr");
+    expect(rows[rows.length - 1].querySelector("td")!.textContent).toBe("XYZExample Holdings");
+    expect(errors()).toEqual([]);
+  });
+
+  it("a pick in English sends lang \"en\" (the share's mails are then in English)", async () => {
+    const call = vi.fn(async (body: Record<string, unknown>) => (body.action === "set" ? withOwn(24) : status(block())));
+    const loadSearch = vi.fn(async (q: string): Promise<StockHit[]> => (q === "example" ? [{ symbol: OWN, name: "Example Holdings", market: "us" }] : []));
+    rtlRender(<LocaleProvider initial="en"><SignalAlertSettings call={call} loadSearch={loadSearch} /></LocaleProvider>);
+    await open();
+    fireEvent.change(box("stockmacd-q"), { target: { value: "example" } });
+    fireEvent.click(await screen.findByTestId(`stockmacd-hit-${OWN}`));
+    await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "set", pair: OWN, interval: "15min", on: true, rule: "stockmacd", lang: "en", q: "example" }));
+    await waitFor(() => expect(box(`signal-alert-stockmacd-${OWN}-15min`).checked).toBe(true));
+    expect(errors()).toEqual([]);
+  });
+
+  it("while the save is out the picker and the boxes are disabled; with no plan the picker is disabled (unticking stays)", async () => {
+    let answer: (s: AlertSettings) => void = () => {};
+    const call = vi.fn((body: Record<string, unknown>) =>
+      body.action === "set" ? new Promise<AlertSettings>((res) => (answer = res)) : Promise.resolve(withOwn(24)),
+    );
+    render(<SignalAlertSettings call={call} loadSearch={async () => []} />);
+    await open();
+    expect(box("stockmacd-q").disabled).toBe(false);
+    fireEvent.change(box("stockmacd-q"), { target: { value: "トヨタ" } });
+    fireEvent.click(screen.getByTestId("stockmacd-hit-7203.T"));
+    await waitFor(() => expect(box("stockmacd-q").disabled).toBe(true));
+    expect(box("signal-alert-stockmacd-AAPL-15min").disabled).toBe(true);
+    await act(async () => answer(withOwn(24)));
+    await waitFor(() => expect(box("stockmacd-q").disabled).toBe(false));
+    expect(call).toHaveBeenCalledWith({ action: "set", pair: "7203.T", interval: "15min", on: true, rule: "stockmacd", lang: "ja", q: "トヨタ" });
+    cleanup();
+    const lapsed = { ...withOwn(24), allowed: false };
+    render(<SignalAlertSettings call={async () => lapsed} loadSearch={async () => []} />);
+    await open();
+    expect(box("stockmacd-q").disabled).toBe(true);
+    expect(box("signal-alert-stockmacd-AAPL-15min").disabled).toBe(true);
+    expect(box(`signal-alert-stockmacd-${OWN}-15min`).disabled).toBe(false);
+  });
+
+  it("the count line, and at the cap (or past it) the full message; ja and en", async () => {
+    for (const [followed, full] of [[0, false], [49, false], [50, true], [51, true]] as const) {
+      render(<SignalAlertSettings call={async () => status(block({ followed }))} loadSearch={async () => []} />);
+      await open();
+      expect(screen.getByTestId("stockmacd-count").textContent, String(followed)).toBe(`通知している株（使う人全員の合計）: ${followed}/50銘柄`);
+      expect(screen.queryByTestId("stockmacd-full")?.textContent ?? null, String(followed)).toBe(full ? "全員の合計が50銘柄に達しています。まだだれも通知していない株は、足せません。" : null);
+      expect(screen.queryByTestId("stockmacd-count-unread")).toBeNull();
+      // the search stays at the cap: a share someone follows can still be added
+      expect(box("stockmacd-q").disabled).toBe(false);
+      cleanup();
+    }
+    rtlRender(<LocaleProvider initial="en"><SignalAlertSettings call={async () => status(block({ followed: 50 }))} loadSearch={async () => []} /></LocaleProvider>);
+    await open();
+    expect(screen.getByTestId("stockmacd-count").textContent).toBe("Stocks alerted (all users together): 50 of 50");
+    expect(screen.getByTestId("stockmacd-full").textContent).toBe("All users together have reached 50 stocks. A stock nobody alerts yet cannot be added.");
+    expect(screen.getByTestId("stockmacd-search").textContent).toContain("Find a stock to alert");
+    expect([...screen.getByTestId("signal-alerts-grid").querySelectorAll("thead th")].map((e) => e.textContent)).toEqual(["Stock", EN.alerts.intervals["15min"]]);
+    expect(screen.getByTestId("signal-alerts-all-row").querySelector("td")!.textContent).toBe("All stocks in the table");
+  });
+
+  it("followed null (the count could not be read): its own line, no count and no full message, the picker kept", async () => {
+    render(<SignalAlertSettings call={async () => status(block({ followed: null }))} loadSearch={async () => []} />);
+    await open();
+    expect(screen.getByTestId("stockmacd-count-unread").textContent).toBe("通知している株の数（使う人全員の合計）を、いま読めませんでした。");
+    expect(screen.queryByTestId("stockmacd-count")).toBeNull();
+    expect(screen.queryByTestId("stockmacd-full")).toBeNull();
+    expect(screen.getByTestId("stockmacd-head").textContent).not.toMatch(/\d+\/50/);
+    expect(box("stockmacd-q").disabled).toBe(false);
+  });
+
+  it("each refusal's own toast, from a pick and from a tick: stock_cap_full, stock_not_found, stock_check_unavailable; any other code saveFailed; another rule's tick saveFailed whatever the code", async () => {
+    const said: Record<string, string> = {
+      stock_cap_full: "足すと全員の合計が50銘柄を超えるため、足せませんでした。",
+      stock_not_found: "Yahoo の検索で、この株を確かめられませんでした。足せるのは、Yahoo が株として出す、米国の取引所と東証の銘柄だけです。",
+      stock_check_unavailable: "Yahoo が答えなかったため、この株を確かめられませんでした。少し後にもう一度お試しください。",
+      save_failed: A.saveFailed,
+      invalid_request: A.saveFailed,
+      http_500: A.saveFailed,
+    };
+    for (const [code, text] of Object.entries(said)) {
+      const call = vi.fn(async (body: Record<string, unknown>) => {
+        if (body.action === "set") throw new AlertRequestError(code);
+        return status(block());
+      });
+      render(<SignalAlertSettings call={call} loadSearch={async () => []} />);
+      await open();
+      fireEvent.change(box("stockmacd-q"), { target: { value: "トヨタ" } });
+      fireEvent.click(screen.getByTestId("stockmacd-hit-7203.T"));
+      await waitFor(() => expect(errors(), code).toEqual([text]));
+      fireEvent.click(box("signal-alert-stockmacd-AAPL-15min"));
+      await waitFor(() => expect(errors(), code).toEqual([text, text]));
+      // nothing was saved: the box stays unticked
+      expect(box("signal-alert-stockmacd-AAPL-15min").checked).toBe(false);
+      cleanup();
+      vi.mocked(toast.error).mockClear();
+    }
+    // a thrown error that is not the function's code
+    const broken = vi.fn(async (body: Record<string, unknown>) => {
+      if (body.action === "set") throw new Error("network");
+      return status(block());
+    });
+    render(<SignalAlertSettings call={broken} loadSearch={async () => []} />);
+    await open();
+    fireEvent.click(box("signal-alert-stockmacd-AAPL-15min"));
+    await waitFor(() => expect(errors()).toEqual([A.saveFailed]));
+    cleanup();
+    vi.mocked(toast.error).mockClear();
+    // the other rules as before: saveFailed for every error, and no second read of the status
+    const other = vi.fn(async (body: Record<string, unknown>) => {
+      if (body.action === "set") throw new AlertRequestError("stock_cap_full");
+      return status(block());
+    });
+    render(<SignalAlertSettings call={other} loadSearch={async () => []} />);
+    fireEvent.click(await screen.findByTestId("signal-alerts-rule-qtrend"));
+    fireEvent.click(box(`signal-alert-qtrend-${INDICATOR_PAIRS[0]}-15min`));
+    await waitFor(() => expect(errors()).toEqual([A.saveFailed]));
+    expect(statusCalls(other)).toBe(1);
+  });
+
+  it("after stock_cap_full the status is read again and the count line and the full message follow it: from a pick (set) and from the \"all\" row (set_many)", async () => {
+    for (const how of ["pick", "all"] as const) {
+      let reads = 0;
+      const call = vi.fn(async (body: Record<string, unknown>) => {
+        if (body.action === "status") return status(block({ followed: ++reads === 1 ? 49 : 50 }));
+        throw new AlertRequestError("stock_cap_full");
+      });
+      render(<SignalAlertSettings call={call} loadSearch={async () => []} />);
+      await open();
+      expect(screen.getByTestId("stockmacd-count").textContent).toBe("通知している株（使う人全員の合計）: 49/50銘柄");
+      expect(screen.queryByTestId("stockmacd-full")).toBeNull();
+      if (how === "pick") {
+        fireEvent.change(box("stockmacd-q"), { target: { value: "トヨタ" } });
+        fireEvent.click(screen.getByTestId("stockmacd-hit-7203.T"));
+      } else {
+        fireEvent.click(box("signal-alert-stockmacd-all-15min"));
+        await waitFor(() =>
+          expect(call).toHaveBeenCalledWith({ action: "set_many", rule: "stockmacd", on: true, lang: "ja", charts: STOCKMACD_PAIRS.map((pair) => ({ pair, interval: "15min" })) }),
+        );
+      }
+      await waitFor(() => expect(screen.getByTestId("stockmacd-count").textContent, how).toBe("通知している株（使う人全員の合計）: 50/50銘柄"));
+      expect(screen.getByTestId("stockmacd-full").textContent).toBe("全員の合計が50銘柄に達しています。まだだれも通知していない株は、足せません。");
+      expect(errors(), how).toEqual(["足すと全員の合計が50銘柄を超えるため、足せませんでした。"]);
+      expect(statusCalls(call), how).toBe(2);
+      cleanup();
+      vi.mocked(toast.error).mockClear();
+    }
+    // the "all" row ticks the rows shown: the 22 and the user's own (its label the table's own)
+    const call = vi.fn(async (body: Record<string, unknown>) => (body.action === "status" ? withOwn(24) : withOwn(24)));
+    render(<SignalAlertSettings call={call} loadSearch={async () => []} />);
+    await open();
+    expect(screen.getByTestId("signal-alerts-all-row").querySelector("td")!.textContent).toBe("表の銘柄すべて");
+    fireEvent.click(box("signal-alert-stockmacd-all-15min"));
+    await waitFor(() =>
+      expect(call).toHaveBeenCalledWith({ action: "set_many", rule: "stockmacd", on: true, lang: "ja", charts: [...STOCKMACD_PAIRS, OWN].map((pair) => ({ pair, interval: "15min" })) }),
+    );
+  });
+
+  it("the own share's row: its stored name, and under it the stale note (the bar's date in Japan time) and the short-bars note; one of the 22 by the app's name; a share with no name by its code alone; no note for a share fresh with 600 bars or more; ja and en", async () => {
+    const shares = {
+      // 15:30 UTC is 00:30 the next day in Japan
+      [OWN]: share({ last_bar_at: "2026-11-10T15:30:00.000Z", bars: 412, stale: true }),
+      "7203.T": share({ name: null, last_bar_at: "2026-11-21T06:15:00.000Z", bars: 600, stale: false }),
+      "BRK-B": share({ name: null, last_bar_at: null, bars: null, stale: false }),
+      "130A.T": share({ name: "Example Works", last_bar_at: null, bars: 599, stale: true }),
+    };
+    render(<SignalAlertSettings call={async () => withOwn(26, shares)} loadSearch={async () => []} />);
+    await open();
+    const cell = (p: string) => box(`signal-alert-stockmacd-${p}-15min`).closest("tr")!.querySelector("td")!;
+    expect(screen.getByTestId(`stockmacd-stale-${OWN}`).textContent).toBe("アプリが Yahoo から読めた一番新しい足は 2026-11-11（日本時間）のものです");
+    expect(screen.getByTestId(`stockmacd-short-${OWN}`).textContent).toBe("Yahoo から読めた15分足が412本で、600本に届くまで判定しません");
+    expect(cell(OWN).textContent).toBe("XYZExample Holdingsアプリが Yahoo から読めた一番新しい足は 2026-11-11（日本時間）のものですYahoo から読めた15分足が412本で、600本に届くまで判定しません");
+    expect(cell("7203.T").textContent).toBe("7203.Tトヨタ自動車");
+    expect(cell("BRK-B").textContent).toBe("BRK-B");
+    // stale with no bar time: no date to say; 599 bars: the short note
+    expect(screen.queryByTestId("stockmacd-stale-130A.T")).toBeNull();
+    expect(cell("130A.T").textContent).toBe("130A.TExample WorksYahoo から読めた15分足が599本で、600本に届くまで判定しません");
+    expect([...screen.getByTestId("signal-alerts-grid").querySelectorAll("tbody tr")].map((r) => r.querySelector("td")!.firstChild!.textContent).slice(-3)).toEqual([OWN, "BRK-B", "130A.T"]);
+    cleanup();
+    rtlRender(<LocaleProvider initial="en"><SignalAlertSettings call={async () => withOwn(26, shares)} loadSearch={async () => []} /></LocaleProvider>);
+    await open();
+    expect(screen.getByTestId(`stockmacd-stale-${OWN}`).textContent).toBe("The newest bar the app could read from Yahoo is from 2026-11-11 (Japan time)");
+    expect(screen.getByTestId(`stockmacd-short-${OWN}`).textContent).toBe("412 15-minute bars could be read from Yahoo; not judged until there are 600");
+    expect(cell("7203.T").textContent).toBe("7203.TToyota Motor");
+  });
+
+  it("untick: the own share's box sends set off; the answer no longer has it, so its row leaves the table", async () => {
+    const call = vi.fn(async (body: Record<string, unknown>) => (body.action === "set" ? status(block({ followed: 23 })) : withOwn(24)));
+    render(<SignalAlertSettings call={call} loadSearch={async () => []} />);
+    await open();
+    expect(box(`signal-alert-stockmacd-${OWN}-15min`).checked).toBe(true);
+    fireEvent.click(box(`signal-alert-stockmacd-${OWN}-15min`));
+    await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "set", pair: OWN, interval: "15min", on: false, rule: "stockmacd", lang: "ja" }));
+    await waitFor(() => expect(screen.queryByTestId(`signal-alert-stockmacd-${OWN}-15min`)).toBeNull());
+    expect(screen.getByTestId("signal-alerts-grid").querySelectorAll("tbody tr")).toHaveLength(1 + STOCKMACD_PAIRS.length);
+    expect(screen.getByTestId("stockmacd-count").textContent).toBe("通知している株（使う人全員の合計）: 23/50銘柄");
+    expect(errors()).toEqual([]);
+  });
+
+  it("a v41 status (no cap): no count and no picker, the grid as before (the 22 and the \"all\" row); no block: not available", async () => {
+    render(<SignalAlertSettings call={async () => status({ pairs: STOCKMACD_PAIRS, intervals: STOCKMACD_INTERVALS })} loadSearch={async () => []} />);
+    await open();
+    for (const id of ["stockmacd-head", "stockmacd-search", "stockmacd-q", "stockmacd-count", "stockmacd-count-unread", "stockmacd-full"]) expect(screen.queryByTestId(id), id).toBeNull();
+    expect(screen.getByTestId("signal-alerts-grid").querySelectorAll("tbody tr")).toHaveLength(1 + STOCKMACD_PAIRS.length);
+    expect(box("signal-alert-stockmacd-AAPL-15min").tagName).toBe("INPUT");
+    cleanup();
+    render(<SignalAlertSettings call={async () => status(null)} loadSearch={async () => []} />);
+    await open();
+    expect(screen.getByTestId("signal-alerts-stockmacd-unavailable")).toBeTruthy();
+    expect(screen.queryByTestId("stockmacd-search")).toBeNull();
+  });
+});
+
+// ---- v42: the migration file (research/allstocks-prod-spec.md section 5; section 9 "The migration file") ------------
+//
+// Read as text. Its run on a PostgreSQL is scripts/stockmacd-v42/db-check.sh (section 9 "Local PostgreSQL").
+describe("v42 the migration file (supabase/migrations/20261122010000_stockmacd_any_share.sql)", () => {
+  const FILE = "supabase/migrations/20261122010000_stockmacd_any_share.sql";
+  const mig = readFileSync(FILE, "utf8");
+
+  it("is the spec's SQL byte for byte, and sorts after every earlier migration file", () => {
+    const spec = readFileSync("research/allstocks-prod-spec.md", "utf8");
+    const from = spec.indexOf("```sql\n-- v42 (research/allstocks-prod-spec.md)") + "```sql\n".length;
+    expect(from).toBeGreaterThan(100);
+    expect(mig).toBe(spec.slice(from, spec.indexOf("```\n", from)));
+    const names = readdirSync("supabase/migrations").filter((f) => f.endsWith(".sql")).sort();
+    expect(names[names.length - 1]).toBe("20261122010000_stockmacd_any_share.sql");
+    expect(names[names.length - 2]).toBe("20261113140000_morning_check_v9_fix.sql");
+  });
+
+  it("the pair check: 20261031160000's 21 FX and gold literals, unchanged and in order, its 22 share literals gone, and the two shapes; each pattern equal to live-chart/stocks.ts's (its [.] read as \\.), with no backslash", () => {
+    const old = readFileSync("supabase/migrations/20261031160000_signal_alert_stockmacd.sql", "utf8");
+    const oldList = [...old.slice(old.indexOf("add constraint signal_alert_subscriptions_pair_check")).matchAll(/'([^']*)'/g)].map((m) => m[1]);
+    const fx = oldList.filter((p) => p.includes("/"));
+    expect(fx).toHaveLength(21);
+    expect(oldList.filter((p) => !p.includes("/"))).toEqual([...STOCKMACD_PAIRS]);
+    const check = mig.slice(mig.indexOf("add constraint signal_alert_subscriptions_pair_check"), mig.indexOf("create table if not exists public.signal_alert_stocks"));
+    expect([...check.matchAll(/'([A-Z]{3}\/[A-Z]{3})'/g)].map((m) => m[1])).toEqual(fx);
+    for (const s of STOCKMACD_PAIRS) expect(check, s).not.toContain(`'${s}'`);
+    const lc = readFileSync("supabase/functions/live-chart/stocks.ts", "utf8");
+    const us = lc.match(/^const US_SYMBOL = \/(.*)\/;$/m)![1];
+    const jp = lc.match(/^const JP_SYMBOL = \/(.*)\/;$/m)![1];
+    expect([us, jp]).toEqual(["^[A-Z]{1,5}(-[A-Z]{1,2})?$", "^[0-9][0-9A-Z]{3}\\.T$"]);
+    // every pattern of the file: the subscriptions' check, signal_alert_stocks's check, the function's argument check
+    const pats = [...mig.matchAll(/pair ~ '([^']*)'/g)].map((m) => m[1]);
+    expect(pats).toHaveLength(6);
+    for (const p of pats) expect(p, p).not.toContain("\\");
+    expect(pats.map((p) => p.replace("[.]", "\\."))).toEqual([us, jp, us, jp, us, jp]);
+    // ([.] and \. are the same in a regex: both take the same made-up inputs)
+    for (const v of ["7203.T", "130A.T", "7203xT", "7203.TT", "AAPL", "BRK-B"]) expect(new RegExp(pats[1]).test(v), v).toBe(new RegExp(jp).test(v));
+  });
+
+  it("each revoke right after its create; the grants; the table's rights and row level security, no policy; both functions security definer on search_path public", () => {
+    expect(mig).toContain(
+      "  noted_at timestamptz\n);\nalter table public.signal_alert_stocks enable row level security;\nrevoke all on public.signal_alert_stocks from anon, authenticated;\ngrant all on public.signal_alert_stocks to service_role;\n",
+    );
+    expect(mig).toContain(
+      "$$;\nrevoke all on function public.stockmacd_followed_count() from public, anon, authenticated;\ngrant execute on function public.stockmacd_followed_count() to service_role;\n\ncreate or replace function public.stockmacd_follow(",
+    );
+    expect(mig.endsWith(
+      "$$;\nrevoke all on function public.stockmacd_follow(uuid, jsonb, text, timestamptz, integer) from public, anon, authenticated;\ngrant execute on function public.stockmacd_follow(uuid, jsonb, text, timestamptz, integer) to service_role;\n",
+    )).toBe(true);
+    expect(mig).toContain("create or replace function public.stockmacd_follow(p_user uuid, p_pairs jsonb, p_lang text, p_at timestamptz, p_cap integer)\nreturns boolean\n");
+    expect(mig.match(/\nsecurity definer\nset search_path = public\nas \$\$\n/g)).toHaveLength(2);
+    expect(mig).not.toMatch(/create policy/i);
+    expect(mig).not.toMatch(/grant [a-z ,]+ to (anon|authenticated|public)\b/i);
+    // the conflict target is the subscriptions' unique key (20260925180000)
+    expect(readFileSync("supabase/migrations/20260925180000_signal_alert_rules.sql", "utf8")).toContain("unique (user_id, pair, interval, rule)");
+    expect(mig).toContain('on conflict (user_id, pair, "interval", rule) do update set lang = excluded.lang, created_at = excluded.created_at;');
+  });
+
+  it("the isolation guard before the lock (read committed only), the lock key used by no other migration, the count after the lock; the note cleared only for a share nobody followed", () => {
+    const guard = mig.indexOf("if current_setting('transaction_isolation') <> 'read committed' then\n    raise exception 'stockmacd_follow: needs read committed';");
+    const lock = mig.indexOf("perform pg_advisory_xact_lock(391042);");
+    const count = mig.indexOf("select count(*) into n from (");
+    expect(guard).toBeGreaterThan(0);
+    expect(lock).toBeGreaterThan(guard);
+    expect(count).toBeGreaterThan(lock);
+    expect(mig.indexOf("update public.signal_alert_stocks s set last_bar_at = null, bars = null, noted_at = null")).toBeGreaterThan(mig.indexOf("return false;"));
+    for (const f of readdirSync("supabase/migrations").filter((x) => x.endsWith(".sql") && x !== "20261122010000_stockmacd_any_share.sql")) {
+      const text = readFileSync(`supabase/migrations/${f}`, "utf8");
+      expect(text, f).not.toContain("391042");
+      expect(text, f).not.toContain("pg_advisory");
+    }
   });
 });
 
@@ -1186,6 +1680,44 @@ const world = {
   unrouted: [] as string[],
   rideTables: [] as string[],
   ids: 0,
+  // ---- v42 (research/allstocks-prod-spec.md section 9, "the fake world gains") ----
+  // every request in order, as "METHOD what" (what: the table, "rpc/…", "yahoo chart", "yahoo search")
+  log: [] as string[],
+  // the subscriptions' reads as their query strings; the n-th of them (1-based) answering 503, or a body that is no list
+  subsQueries: [] as string[],
+  subsFailAt: 0,
+  subsNotListAt: 0,
+  // run after the n-th subscriptions read is answered (an untick between two pages)
+  afterSubsRead: null as null | ((n: number) => void),
+  // public.signal_alert_stocks: a row a share, no user id; what each write sent; a read's or a write's failing status
+  stocks: [] as Row[],
+  stockWrites: [] as unknown[],
+  // each write's query and Prefer header, as "?query prefer"
+  stockWriteAsks: [] as string[],
+  stocksReadStatus: 200,
+  stocksWriteStatus: 200,
+  // the rpcs called, as "name body"; an rpc's answer put in place of its logic ({ status, text })
+  rpcs: [] as string[],
+  followAnswer: null as null | { status: number; text: string },
+  countAnswer: null as null | { status: number; text: string },
+  // Yahoo's search: the quotes it gives a query (made-up), its status, a search that cannot be sent; each query
+  searchQuotes: ((_q: string) => []) as (q: string) => unknown[],
+  searchStatus: 200,
+  searchThrows: false,
+  searches: [] as string[],
+  // the app's callers ("Bearer tok-<user>"), each user's plan (light unless set; null: no profile row)
+  plans: new Map<string, string | null>(),
+  // Yahoo's chart reads that hang until their timeout (the ms given to AbortSignal.timeout, recorded), and a read's
+  // time by symbol in place of yahooDelayMs
+  hangFor: new Set<string>(),
+  // Yahoo's chart reads whose answer comes (200) but whose body is cut by the timeout: its read takes the timeout's ms,
+  // the read's signal is aborted (when the test's AbortSignal.timeout gives one that can be: its cutNow) and the body's
+  // read fails as the timeout's
+  cutInBodyFor: new Set<string>(),
+  delayFor: new Map<string, number>(),
+  timeouts: [] as number[],
+  // how many bars back a chart answer reaches (0: the 60 days a `60d` read brings)
+  yahooBars: 0,
 };
 const resetWorld = () => {
   Object.assign(world, { subs: [], alerts: [], sent: [], yahooLag: 0, yahooStatus: 200, yahoo: [], yahooDelayMs: 0, reads: [], unrouted: [], rideTables: [], ids: 0 });
@@ -1193,7 +1725,18 @@ const resetWorld = () => {
   world.failAuthFor.clear();
   world.alertsThrowFor.clear();
   world.alertsFailFor.clear();
+  Object.assign(world, {
+    log: [], subsQueries: [], subsFailAt: 0, subsNotListAt: 0, afterSubsRead: null, stocks: [], stockWrites: [], stockWriteAsks: [], stocksReadStatus: 200, stocksWriteStatus: 200,
+    rpcs: [], followAnswer: null, countAnswer: null, searchQuotes: () => [], searchStatus: 200, searchThrows: false, searches: [], timeouts: [], yahooBars: 0,
+  });
+  world.plans.clear();
+  world.hangFor.clear();
+  world.cutInBodyFor.clear();
+  world.delayFor.clear();
 };
+// v42: a subscription row's made-up id (a uuid's shape; ids sort as their text, as PostgreSQL's uuids do)
+let subIds = 0;
+const nextSubId = () => `00000000-0000-4000-8000-${(++subIds).toString(16).padStart(12, "0")}`;
 let clock = 0;
 
 // Yahoo's 15-minute answer at the clock (less its lag): the bars of the 60 days before it (`range=60d`), each bar opened
@@ -1211,6 +1754,7 @@ const yahooAnswer = (sym: string) => {
   }
   const ts: number[] = [];
   const q = { open: [] as number[], high: [] as number[], low: [] as number[], close: [] as number[], volume: [] as number[] };
+  if (world.yahooBars > 0) from = Math.max(from, last - world.yahooBars + 1);
   for (let k = from; k <= last; k++) {
     const open = k > 0 ? S.closes[k - 1] : S.closes[k];
     const close = S.ends[k] <= seen ? S.closes[k] : Number((open + 0.7).toFixed(2));
@@ -1230,8 +1774,17 @@ const same = (col: string, a: unknown, b: string) => (TIME_COLS.has(col) ? Date.
 const condOf = (col: string, expr: string): ((r: Row) => boolean) => {
   const dot = expr.indexOf(".");
   const op = expr.slice(0, dot);
+  // v42: in.("A","B") (the shares, quoted as set_many quotes them)
+  if (op === "in") {
+    const list = new Set(expr.slice(dot + 1).replace(/^\(|\)$/g, "").split(",").map(unquote));
+    return (r) => r[col] !== null && r[col] !== undefined && list.has(String(r[col]));
+  }
   const val = unquote(expr.slice(dot + 1));
   if (op === "eq") return (r) => r[col] !== null && r[col] !== undefined && same(col, r[col], val);
+  // v42: gt. (the paging by key: ids compared as their text) and gte. (times)
+  const cmp = (a: unknown) => (TIME_COLS.has(col) ? Math.sign(Date.parse(String(a)) - Date.parse(val)) : String(a) < val ? -1 : String(a) > val ? 1 : 0);
+  if (op === "gt") return (r) => r[col] !== null && r[col] !== undefined && cmp(r[col]) > 0;
+  if (op === "gte") return (r) => r[col] !== null && r[col] !== undefined && cmp(r[col]) >= 0;
   throw new Error(`a filter the fake does not know: ${col}=${expr}`);
 };
 const META = new Set(["select", "order", "limit", "on_conflict"]);
@@ -1252,9 +1805,40 @@ const fakeFetch = async (input: string | URL | Request, init?: RequestInit): Pro
     const u = new URL(url);
     const sym = decodeURIComponent(u.pathname.split("/").pop()!);
     world.yahoo.push(`${sym} ${u.searchParams.get("interval")} ${u.searchParams.get("range")}`);
+    world.log.push("GET yahoo chart");
+    // v42: a read that hangs is cut at the timeout it was given (AbortSignal.timeout's ms, recorded by the test)
+    const cutAfter = (init?.signal as (AbortSignal & { cutAfterMs?: number }) | undefined)?.cutAfterMs;
+    if (world.hangFor.has(sym)) {
+      clock += cutAfter ?? 0;
+      throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    }
+    // v42: the answer's head comes, then its body is cut at the timeout (r.json() rejects, the signal aborted)
+    if (world.cutInBodyFor.has(sym)) {
+      const signal = init?.signal as (AbortSignal & { cutNow?: () => void }) | undefined;
+      const cutBody = async (): Promise<never> => {
+        clock += cutAfter ?? 0;
+        signal?.cutNow?.();
+        throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      };
+      return { ok: true, status: 200, body: null, json: cutBody, text: cutBody } as unknown as Response;
+    }
     // (a slow read: the clock moves on by it before the answer comes)
-    clock += world.yahooDelayMs;
+    clock += world.delayFor.get(sym) ?? world.yahooDelayMs;
     return world.yahooStatus === 200 ? reply(yahooAnswer(sym)) : reply({}, world.yahooStatus);
+  }
+  // v42: Yahoo's search (the made-up quotes the test gives a query)
+  if (url.startsWith("https://query2.finance.yahoo.com/v1/finance/search?")) {
+    const q = new URL(url).searchParams.get("q") ?? "";
+    world.searches.push(q);
+    world.log.push("GET yahoo search");
+    if (world.searchThrows) throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    return world.searchStatus === 200 ? reply({ quotes: world.searchQuotes(q) }) : reply({}, world.searchStatus);
+  }
+  // v42: the app's caller ("Bearer tok-<user>")
+  if (url === `${SB}/auth/v1/user`) {
+    const auth = new Headers(init?.headers).get("Authorization") ?? "";
+    const user = auth.startsWith("Bearer tok-") ? auth.slice("Bearer tok-".length) : null;
+    return user ? reply({ id: user, email: `${user}@example.test` }) : reply({ message: "no" }, 401);
   }
   if (url === "https://api.resend.com/emails") {
     world.sent.push({ to: body.to[0], subject: body.subject, text: body.text });
@@ -1280,12 +1864,92 @@ const fakeFetch = async (input: string | URL | Request, init?: RequestInit): Pro
     return reply({ message: `relation "public.${table}" does not exist` }, 404);
   }
   if (method === "GET") world.reads.push(`${table} ${select ?? "*"}`);
+  world.log.push(`${method} ${table}`);
   if (table === "rpc/track_outcomes_sweep_token") return reply("tok");
   const where = whereOf(u);
-  if (table === "signal_alert_subscriptions" && method === "GET") return reply(world.subs.filter(where).map((r) => pick(r, select)));
+  if (table === "signal_alert_subscriptions" && method === "GET") {
+    // v42: rows get their made-up ids; ordered (id.asc, created_at.asc) and limited as PostgREST would; a page that fails
+    for (const r of world.subs) if (r.id === undefined) r.id = nextSubId();
+    world.subsQueries.push(u.searchParams.toString());
+    const n = world.subsQueries.length;
+    if (world.subsFailAt === n) return reply({ message: "boom" }, 503);
+    if (world.subsNotListAt === n) return reply({ rows: [] });
+    let rows = world.subs.filter(where);
+    const order = u.searchParams.get("order");
+    if (order === "id.asc") rows = [...rows].sort((a, b) => (String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0));
+    if (order === "created_at.asc") rows = [...rows].sort((a, b) => Date.parse(String(a.created_at)) - Date.parse(String(b.created_at)));
+    const limit = u.searchParams.get("limit");
+    if (limit !== null) rows = rows.slice(0, Number(limit));
+    const out = reply(rows.map((r) => pick(r, select)));
+    world.afterSubsRead?.(n);
+    return out;
+  }
+  if (table === "signal_alert_subscriptions" && method === "DELETE") {
+    world.subs = world.subs.filter((r) => !where(r));
+    return empty(204);
+  }
   if (table === "profiles" && method === "GET") {
     const uid = u.searchParams.get("id")!.slice(3);
-    return world.failPlanFor.has(uid) ? reply({ message: "boom" }, 503) : reply([{ plan: "light" }]);
+    if (world.failPlanFor.has(uid)) return reply({ message: "boom" }, 503);
+    const plan = world.plans.has(uid) ? world.plans.get(uid)! : "light";
+    return reply(plan === null ? [] : [{ plan }]);
+  }
+  if (table === "signal_events" && method === "GET") return reply([]);
+  // v42: public.signal_alert_stocks, its checks as the migration's (the pair's shape, a name of 1 to 100 code points)
+  if (table === "signal_alert_stocks") {
+    if (method === "GET") return world.stocksReadStatus === 200 ? reply(world.stocks.filter(where).map((r) => pick(r, select))) : reply({ message: "boom" }, world.stocksReadStatus);
+    if (method === "POST") {
+      world.stockWrites.push(body);
+      // (what each write asked for: its query and its Prefer header)
+      const prefer = new Headers(init?.headers).get("Prefer") ?? "";
+      world.stockWriteAsks.push(`${u.search} ${prefer}`);
+      if (world.stocksWriteStatus !== 200) return reply({ message: "boom" }, world.stocksWriteStatus);
+      const items = (Array.isArray(body) ? body : [body]) as Row[];
+      const shape = (p: unknown) => typeof p === "string" && (/^[A-Z]{1,5}(-[A-Z]{1,2})?$/.test(p) || /^[0-9][0-9A-Z]{3}\.T$/.test(p));
+      const nameOk = (v: unknown) => v === null || v === undefined || (typeof v === "string" && [...v].length >= 1 && [...v].length <= 100);
+      if (!items.every((x) => shape(x.pair) && nameOk(x.name))) return reply({ message: "check" }, 400);
+      // as PostgREST: a POST is a plain INSERT unless Prefer asks for a resolution (merge-duplicates: ON CONFLICT DO
+      // UPDATE of the body's columns; ignore-duplicates: DO NOTHING) on on_conflict's columns (the primary key, pair,
+      // when none is given); so a pair already there, with no resolution, fails the whole request (409, 23505) and
+      // nothing of it is written
+      const resolution = prefer.split(",").map((x) => x.trim()).find((x) => x.startsWith("resolution="))?.slice("resolution=".length) ?? null;
+      const target = u.searchParams.get("on_conflict");
+      if (resolution !== null && target !== null && target !== "pair") return reply({ code: "42P10", message: "there is no unique or exclusion constraint matching the ON CONFLICT specification" }, 400);
+      if (resolution === null && items.some((x) => world.stocks.some((r) => r.pair === x.pair))) {
+        return reply({ code: "23505", message: 'duplicate key value violates unique constraint "signal_alert_stocks_pkey"' }, 409);
+      }
+      for (const x of items) {
+        const there = world.stocks.find((r) => r.pair === x.pair);
+        if (there && resolution === "merge-duplicates") Object.assign(there, x);
+        else if (!there) world.stocks.push({ name: null, checked_at: null, last_bar_at: null, bars: null, noted_at: null, ...x });
+      }
+      return empty(201);
+    }
+  }
+  // v42: the two functions of the migration, with its logic (the count; the locked call, which clears the note of a
+  // share nobody followed when it saves it)
+  if (table === "rpc/stockmacd_followed_count") {
+    world.rpcs.push("stockmacd_followed_count");
+    if (world.countAnswer) return new Response(world.countAnswer.text, { status: world.countAnswer.status });
+    return reply(new Set(world.subs.filter((r) => r.rule === "stockmacd" && r.interval === "15min").map((r) => r.pair)).size);
+  }
+  if (table === "rpc/stockmacd_follow") {
+    world.rpcs.push(`stockmacd_follow ${JSON.stringify(body.p_pairs)}`);
+    if (world.followAnswer) return new Response(world.followAnswer.text, { status: world.followAnswer.status });
+    const asked: string[] = Array.isArray(body.p_pairs) ? [...new Set<string>(body.p_pairs.map(String))] : [];
+    const shape = (p: string) => /^[A-Z]{1,5}(-[A-Z]{1,2})?$/.test(p) || /^[0-9][0-9A-Z]{3}\.T$/.test(p);
+    if (typeof body.p_user !== "string" || asked.length === 0 || !["ja", "en"].includes(body.p_lang) || !asked.every(shape)) {
+      return reply({ message: "stockmacd_follow: bad arguments" }, 400);
+    }
+    const followedNow = new Set(world.subs.filter((r) => r.rule === "stockmacd" && r.interval === "15min").map((r) => String(r.pair)));
+    if (new Set([...followedNow, ...asked]).size > body.p_cap && asked.some((p) => !followedNow.has(p))) return reply(false);
+    for (const r of world.stocks) if (asked.includes(String(r.pair)) && !followedNow.has(String(r.pair))) Object.assign(r, { last_bar_at: null, bars: null, noted_at: null });
+    for (const pair of asked) {
+      const there = world.subs.find((r) => r.user_id === body.p_user && r.pair === pair && r.interval === "15min" && r.rule === "stockmacd");
+      if (there) Object.assign(there, { lang: body.p_lang, created_at: body.p_at });
+      else world.subs.push({ id: nextSubId(), user_id: body.p_user, pair, interval: "15min", rule: "stockmacd", lang: body.p_lang, created_at: body.p_at });
+    }
+    return reply(true);
   }
   if (table === "signal_alerts") {
     if (method === "GET") {
@@ -1379,7 +2043,8 @@ describe("v41 the shares' run: the real index.ts replayed over fake tables (spec
       expect(r, r).not.toContain("error");
       if (r.startsWith("signal_alerts ")) expect(r).toBe("signal_alerts user_id,side");
     }
-    for (const y of world.yahoo) expect(y).toMatch(/^[A-Z0-9.]+ 15m 60d$/);
+    // (v42: a share of any shape, BRK-B's dash too)
+    for (const y of world.yahoo) expect(y).toMatch(/^[A-Z0-9.-]+ 15m 60d$/);
   };
 
   it("a US share's BUY at a close: one email a follower, the price the bar's close; read again before the next close by fresh instances, nobody is mailed twice and a follower whose plan lookup failed is mailed then; the row; the next close judged; nothing asked of v39's ride tables", async () => {
@@ -1387,7 +2052,7 @@ describe("v41 the shares' run: the real index.ts replayed over fake tables (spec
     world.failPlanFor.add("userB");
     const s0 = await fresh(after(I_BUY, 0));
     expect(s0).toMatchObject({ ok: true, mode: "stocks", subscriptions: 2, sent: 1, not_allowed: 1 });
-    expect(String(s0.version)).toMatch(/^signal-alerts-v41-/);
+    expect(String(s0.version)).toMatch(/^signal-alerts-v42-/);
     // (the follower whose lookup failed got no row: said, with no name)
     expect(readOf(s0)).toMatchObject({
       pair: SYM, due: iso(closeOf(I_BUY)), bars: I_BUY + 1, newest: dt(times[I_BUY]), close: closes[I_BUY], judged: true, signals: ["stockmacd:BUY"],
@@ -1499,7 +2164,8 @@ describe("v41 the shares' run: the real index.ts replayed over fake tables (spec
     world.yahooLag = 17 * MIN;
     const h = await instance();
     const s0 = await run(h, T.ends[first] + MIN);
-    expect(s0.reads).toEqual([{ pair: T.sym, due: iso(T.ends[first]), skipped: "no_session" }]);
+    // (v42: with the read's milliseconds, none in the fake unless a delay is set)
+    expect(s0.reads).toEqual([{ pair: T.sym, due: iso(T.ends[first]), skipped: "no_session", ms: 0 }]);
     // the 9:15 close is done: not read again in its half hour
     expect((await run(h, T.ends[first] + 5 * MIN)).reads).toEqual([]);
     // the 9:30 close: once the 9:15 bar is in, the 9:00 bar is closed and judged
@@ -1648,7 +2314,7 @@ describe("v41 the shares' run: the real index.ts replayed over fake tables (spec
       resetWorld();
       world.subs = [follow("userA")];
       world.yahooStatus = 429;
-      expect((await fresh(after(I_BUY, 0))).reads).toEqual([{ pair: SYM, error: "yahoo_429" }]);
+      expect((await fresh(after(I_BUY, 0))).reads).toEqual([{ pair: SYM, error: "yahoo_429", ms: 0 }]);
       expect(world.sent).toEqual([]);
     } finally {
       spy.mockRestore();
@@ -1660,7 +2326,8 @@ describe("v41 the shares' run: the real index.ts replayed over fake tables (spec
     expect(s0).toMatchObject({ ok: true, mode: "stocks", subscriptions: 0 });
     expect(s0.reads).toBeUndefined();
     expect(world.yahoo).toEqual([]);
-    expect(world.reads).toEqual(["signal_alert_subscriptions user_id,pair,interval,lang,rule"]);
+    // (v42: one page, empty, of the '15min' rows read by key)
+    expect(world.reads).toEqual(["signal_alert_subscriptions id,user_id,pair,interval,lang,rule"]);
     world.subs = [follow("userA", SYM, "ja", "1h")];
     const s1 = await fresh(after(I_BUY, 0));
     expect(s1).toMatchObject({ subscriptions: 0 });
@@ -1693,16 +2360,21 @@ describe("v41 the shares' run: the real index.ts replayed over fake tables (spec
       expect(s0.reads!.filter((r) => r.skipped === "budget").every((r) => Object.keys(r).sort().join() === "pair,skipped")).toBe(true);
       expect(world.yahoo.map((y) => y.split(" ")[0])).toEqual(["NVDA", "INTC", "AAPL"]);
       expect(s0.took_ms).toBe(30_000);
-      // the next run, a minute on: the shares left first (never read), then the ones read a minute ago
+      // v42 (research/allstocks-prod-spec.md 4.2): the ties among the shares never read in this instance (and among
+      // those read in the same run) follow the subscriptions' order on an even UTC minute, the reverse on an odd one.
+      // The first run is at 18:00:01 UTC (an even minute), the next at 18:01:01 (odd), the one after at 18:02:01 (even)
+      expect([0, 1, 2].map((m) => Math.floor(after(I_BUY + 1, m) / MIN) % 2)).toEqual([0, 1, 0]);
+      // the next run, a minute on: the shares left first (never read; the minute odd, so in reverse), then the ones read
+      // a minute ago (in reverse too)
       const s1 = await run(h, after(I_BUY + 1, 1));
       expect(s1.reads!.map((r) => [r.pair, r.skipped ?? "read"])).toEqual([
-        ["MSFT", "read"], ["GOOGL", "read"], ["AMZN", "read"],
-        ["META", "budget"], ["TSLA", "budget"], ["NVDA", "budget"], ["INTC", "budget"], ["AAPL", "budget"],
+        ["TSLA", "read"], ["META", "read"], ["AMZN", "read"],
+        ["GOOGL", "budget"], ["MSFT", "budget"], ["AAPL", "budget"], ["INTC", "budget"], ["NVDA", "budget"],
       ]);
-      expect(world.yahoo.map((y) => y.split(" ")[0]).slice(3)).toEqual(["MSFT", "GOOGL", "AMZN"]);
-      // and the one after: META and TSLA, never read, first; then the oldest read
+      expect(world.yahoo.map((y) => y.split(" ")[0]).slice(3)).toEqual(["TSLA", "META", "AMZN"]);
+      // and the one after (even): MSFT and GOOGL, never read, first, in the subscriptions' order; then the oldest read
       const s2 = await run(h, after(I_BUY + 1, 2));
-      expect(s2.reads!.map((r) => [r.pair, r.skipped ?? "read"]).slice(0, 3)).toEqual([["META", "read"], ["TSLA", "read"], ["NVDA", "read"]]);
+      expect(s2.reads!.map((r) => [r.pair, r.skipped ?? "read"]).slice(0, 3)).toEqual([["MSFT", "read"], ["GOOGL", "read"], ["NVDA", "read"]]);
       clean();
     });
 
@@ -1716,15 +2388,817 @@ describe("v41 the shares' run: the real index.ts replayed over fake tables (spec
       clean();
     });
 
-    it("is written as the spec says: the shares oldest read first, no read started once the budget is spent, the share left with its read time not set, took_ms", () => {
+    it("is written as the spec says: the shares oldest read first (v42: the ties turned with the minute's parity), no read started with under 1 s of the budget left, the share left with its read time not set, each read's timeout the smaller of 5 s and the budget left, took_ms", () => {
       const fn = readFileSync("supabase/functions/signal-alerts/index.ts", "utf8");
       const runCode = fn.slice(fn.indexOf("const stockSweep = async"), fn.indexOf("const goldTicks = async"));
       expect(runCode).toContain(".sort((a, b) => a.at - b.at || a.k - b.k)");
-      expect(runCode).toContain("at: stockReadAt.get(sym) ?? Number.NEGATIVE_INFINITY");
-      expect(runCode).toMatch(/if \(Date\.now\(\) - nowMs >= STOCK_RUN_BUDGET_MS\) \{\s+reads\.push\(\{ pair: sym, skipped: "budget" \}\);\s+continue;\s+\}\s+stockReadAt\.set\(sym, nowMs\);/);
+      // v42 (research/allstocks-prod-spec.md 4.2), as the spec writes it
+      expect(runCode).toContain(
+        [
+          "const uniq = [...new Set(subs.map((x) => x.pair))];",
+          "      const back = Math.floor(nowMs / 60_000) % 2 === 1;",
+          "      const followed = uniq",
+          "        .map((sym, k) => ({ sym, k: back ? uniq.length - 1 - k : k, at: stockReadAt.get(sym) ?? Number.NEGATIVE_INFINITY }))",
+          "        .sort((a, b) => a.at - b.at || a.k - b.k)",
+          "        .map((x) => x.sym);",
+        ].join("\n"),
+      );
+      expect(runCode).toMatch(/if \(Date\.now\(\) - nowMs >= STOCK_RUN_BUDGET_MS - 1_000\) \{\s+reads\.push\(\{ pair: sym, skipped: "budget" \}\);\s+continue;\s+\}\s+stockReadAt\.set\(sym, nowMs\);/);
+      expect(runCode).toContain("AbortSignal.timeout(Math.min(5_000, STOCK_RUN_BUDGET_MS - (Date.now() - nowMs)))");
+      expect(runCode).not.toContain("AbortSignal.timeout(10_000)");
       expect(runCode).toContain("return { ...summary, reads, ...counts, took_ms: Date.now() - nowMs };");
       // the 50-second spacing stays
       expect(runCode).toContain("if (nowMs - (stockReadAt.get(sym) ?? 0) < 50_000) continue;");
+    });
+  });
+
+  // ---- v42 (research/allstocks-prod-spec.md section 9, "Tests to add"): the app's calls and the run ----------------
+  //
+  // The app's calls of the same real index.ts over the same fake world: a caller "Bearer tok-<user>" (plan light unless
+  // world.plans says otherwise), the migration's two functions with its SQL's logic, signal_alert_stocks, Yahoo's search
+  // with made-up quotes and made-up names ("Example Holdings"). No Yahoo answer is in the repository.
+  type Answer = { status: number; body: Record<string, unknown> & { indicator?: { stockmacd?: Record<string, unknown> } }; text: string };
+  const call = async (h: Handler, user: string, body: Record<string, unknown>): Promise<Answer> => {
+    const res = await h(new Request("https://fn.test/signal-alerts", { method: "POST", headers: { Authorization: `Bearer tok-${user}`, "Content-Type": "application/json" }, body: JSON.stringify(body) }));
+    const text = await res.text();
+    return { status: res.status, body: JSON.parse(text), text };
+  };
+  const tick = (h: Handler, user: string, pair: unknown, over: Record<string, unknown> = {}) =>
+    call(h, user, { action: "set", pair, interval: "15min", on: true, rule: "stockmacd", lang: "ja", ...over });
+  const tickMany = (h: Handler, user: string, pairs: string[], on = true) =>
+    call(h, user, { action: "set_many", rule: "stockmacd", on, lang: "ja", charts: pairs.map((pair) => ({ pair, interval: "15min" })) });
+  // a made-up share symbol of the US shape, none of the 22 (QAA, QAB, …)
+  const madeUp = (k: number) => `Q${String.fromCharCode(65 + Math.floor(k / 26))}${String.fromCharCode(65 + (k % 26))}`;
+  // n distinct shares followed on '15min' by another user
+  const fill = (n: number, user = "userZ") => {
+    for (let k = 0; k < n; k++) world.subs.push(follow(user, madeUp(k)));
+  };
+  const followedCount = () => new Set(world.subs.filter((r) => r.rule === "stockmacd" && r.interval === "15min").map((r) => r.pair)).size;
+  const rowsOf = (user: string) => world.subs.filter((r) => r.user_id === user && r.rule === "stockmacd").map((r) => `${r.pair} ${r.interval}`);
+  // a quote of Yahoo's search as parseYahooSearch takes it: an equity on an allowed exchange, a made-up name
+  const quote = (symbol: string, over: Record<string, unknown> = {}) => ({
+    symbol, quoteType: "EQUITY", exchange: symbol.endsWith(".T") ? "JPX" : "NMS", longname: "Example Holdings", shortname: "Example", ...over,
+  });
+  const CAP_FULL = { ok: false, error: "stock_cap_full", cap: 50 };
+  const SAVE_FAILED = { ok: false, error: "save_failed" };
+
+  describe("v42 the cap of 50 (spec 3.2, 3.3, 4.2 set and set_many)", () => {
+    it("49 followed, a new share: confirmed by the search and saved, 50; then at 50 a new share: 409 stock_cap_full, no search, no row", async () => {
+      fill(49);
+      world.searchQuotes = (q) => (q === "NEWA" ? [quote("NEWA")] : []);
+      const h = await instance();
+      const a = await tick(h, "userA", "NEWA");
+      expect(a.status).toBe(200);
+      expect(a.body.indicator!.stockmacd).toMatchObject({ cap: 50, followed: 50 });
+      expect(rowsOf("userA")).toEqual(["NEWA 15min"]);
+      expect(world.stocks).toEqual([expect.objectContaining({ pair: "NEWA", name: "Example Holdings", checked_at: iso(clock) })]);
+      expect(world.searches).toEqual(["NEWA"]);
+      const b = await tick(h, "userB", "NEWB");
+      expect([b.status, b.body]).toEqual([409, CAP_FULL]);
+      expect(rowsOf("userB")).toEqual([]);
+      expect(world.searches).toEqual(["NEWA"]);
+      expect(world.stocks.map((r) => r.pair)).toEqual(["NEWA"]);
+      expect(world.rpcs.filter((r) => r.startsWith("stockmacd_follow "))).toEqual(['stockmacd_follow ["NEWA"]']);
+      expect(followedCount()).toBe(50);
+      expect(world.unrouted).toEqual([]);
+    });
+
+    it("at 50: a share another user follows is saved with no search and no count (still 50); one of the 22 nobody follows is refused by the locked call (409)", async () => {
+      fill(50);
+      const h = await instance();
+      const a = await tick(h, "userA", madeUp(7));
+      expect(a.status).toBe(200);
+      expect(rowsOf("userA")).toEqual([`${madeUp(7)} 15min`]);
+      expect(followedCount()).toBe(50);
+      const b = await tick(h, "userA", "AAPL");
+      expect([b.status, b.body]).toEqual([409, CAP_FULL]);
+      expect(rowsOf("userA")).toEqual([`${madeUp(7)} 15min`]);
+      expect(world.searches).toEqual([]);
+      // (no early count for a share someone follows: the save, then the status's count; then the 22's refusal)
+      expect(world.rpcs).toEqual([`stockmacd_follow ["${madeUp(7)}"]`, "stockmacd_followed_count", 'stockmacd_follow ["AAPL"]']);
+    });
+
+    it("set_many: a batch that would take the total past 50 is refused (409) and nothing of it is saved; at 45, ten of the 22 nobody follows: refused at 45", async () => {
+      fill(48);
+      const h = await instance();
+      const a = await tickMany(h, "userA", ["AAPL", "MSFT", "NVDA"]);
+      expect([a.status, a.body]).toEqual([409, CAP_FULL]);
+      expect(rowsOf("userA")).toEqual([]);
+      const b = await tickMany(h, "userA", ["AAPL", "MSFT"]);
+      expect(b.status).toBe(200);
+      expect(rowsOf("userA")).toEqual(["AAPL 15min", "MSFT 15min"]);
+      expect(followedCount()).toBe(50);
+      resetWorld();
+      fill(45);
+      const c = await tickMany(h, "userA", STOCKMACD_PAIRS.slice(0, 10) as string[]);
+      expect([c.status, c.body]).toEqual([409, CAP_FULL]);
+      expect(rowsOf("userA")).toEqual([]);
+      expect(followedCount()).toBe(45);
+      expect(world.searches).toEqual([]);
+      expect(world.rpcs).toEqual([`stockmacd_follow ${JSON.stringify(STOCKMACD_PAIRS.slice(0, 10))}`]);
+    });
+
+    it("51 rows put in by hand (a statement sent by hand, or v41's set during a rollback): a re-tick of a followed share is saved; a new share is refused at once, with no search", async () => {
+      fill(51);
+      world.subs.push(follow("userA", madeUp(3)));
+      world.searchQuotes = () => [quote("NEWA")];
+      const h = await instance();
+      const a = await tick(h, "userA", madeUp(3), { lang: "en" });
+      expect(a.status).toBe(200);
+      expect(world.subs.filter((r) => r.user_id === "userA").map((r) => [r.pair, r.lang, r.created_at])).toEqual([[madeUp(3), "en", iso(clock)]]);
+      expect(followedCount()).toBe(51);
+      const b = await tick(h, "userB", "NEWA");
+      expect([b.status, b.body]).toEqual([409, CAP_FULL]);
+      const c = await tick(h, "userB", "AAPL");
+      expect([c.status, c.body]).toEqual([409, CAP_FULL]);
+      expect(world.searches).toEqual([]);
+      expect(rowsOf("userB")).toEqual([]);
+    });
+
+    it("the locked call's answer is read as exactly true or exactly false: null, a string, a number, a list, nothing, or any answer that is not ok gives 500 save_failed and nothing is saved", async () => {
+      const h = await instance();
+      for (const ans of [
+        { status: 200, text: "null" }, { status: 200, text: '"true"' }, { status: 200, text: "1" }, { status: 200, text: "[true]" },
+        { status: 200, text: "" }, { status: 500, text: '{"message":"boom"}' }, { status: 500, text: "true" }, { status: 400, text: "false" },
+      ]) {
+        resetWorld();
+        world.followAnswer = ans;
+        const a = await tick(h, "userA", "AAPL");
+        expect([a.status, a.body], JSON.stringify(ans)).toEqual([500, SAVE_FAILED]);
+        const b = await tickMany(h, "userA", ["AAPL", "MSFT"]);
+        expect([b.status, b.body], JSON.stringify(ans)).toEqual([500, SAVE_FAILED]);
+        expect(rowsOf("userA")).toEqual([]);
+      }
+      resetWorld();
+      world.followAnswer = { status: 200, text: "false" };
+      expect((await tick(h, "userA", "AAPL")).body).toEqual(CAP_FULL);
+    });
+  });
+
+  describe("v42 the refusals (spec 4.2)", () => {
+    it("set: lowercase, no .T, a trailing space, the 1-hour chart, a pair that is not a string: 400 invalid_request, nothing read, searched or saved", async () => {
+      const h = await instance();
+      for (const [pair, interval] of [["aapl", "15min"], ["7203", "15min"], ["IBM ", "15min"], ["7203.t", "15min"], ["AAPL", "1h"], ["7203.T", "1h"], [123, "15min"], [null, "15min"]]) {
+        const a = await call(h, "userA", { action: "set", pair, interval, on: true, rule: "stockmacd", lang: "ja" });
+        expect([a.status, a.body], String(pair)).toEqual([400, { ok: false, error: "invalid_request" }]);
+        const b = await call(h, "userA", { action: "set", pair, interval, on: false, rule: "stockmacd", lang: "ja" });
+        expect(b.status, String(pair)).toBe(400);
+      }
+      expect(world.searches).toEqual([]);
+      expect(world.rpcs).toEqual([]);
+      expect(world.subsQueries).toEqual([]);
+    });
+
+    it("set_many on: a share neither of the 22 nor the user's own is refused (400) and nothing is saved; the 22 and the user's own are saved; a malformed one is refused", async () => {
+      world.subs = [follow("userA", "NEWA"), follow("userB", "NEWB")];
+      const h = await instance();
+      const a = await tickMany(h, "userA", ["AAPL", "NEWB"]);
+      expect([a.status, a.body]).toEqual([400, { ok: false, error: "invalid_request" }]);
+      expect(rowsOf("userA")).toEqual(["NEWA 15min"]);
+      const b = await tickMany(h, "userA", ["aapl"]);
+      expect(b.status).toBe(400);
+      const c = await tickMany(h, "userA", ["AAPL", "NEWA"]);
+      expect(c.status).toBe(200);
+      expect(rowsOf("userA").sort()).toEqual(["AAPL 15min", "NEWA 15min"]);
+      expect(world.searches).toEqual([]);
+      // the user's rows read once for it (by user, rule and chart)
+      expect(world.subsQueries.filter((x) => x.startsWith("user_id=eq.userA&rule=eq.stockmacd"))).toEqual([
+        "user_id=eq.userA&rule=eq.stockmacd&interval=eq.15min&select=pair",
+        "user_id=eq.userA&rule=eq.stockmacd&interval=eq.15min&select=pair",
+      ]);
+    });
+
+    it("no plan: 403 plan_required before any count, search or read of the share's followers; unticking any share, plan or not, deletes the row", async () => {
+      world.plans.set("userA", null);
+      world.searchQuotes = () => [quote("NEWA")];
+      const h = await instance();
+      for (const r of [await tick(h, "userA", "NEWA"), await tick(h, "userA", "AAPL"), await tickMany(h, "userA", ["AAPL"])]) {
+        expect([r.status, r.body]).toEqual([403, { ok: false, error: "plan_required" }]);
+      }
+      expect(world.searches).toEqual([]);
+      expect(world.rpcs).toEqual([]);
+      expect(world.subsQueries).toEqual([]);
+      world.subs = [follow("userA", "NEWA"), follow("userA", "AAPL"), follow("userA", "BRK-B"), follow("userB", "NEWA")];
+      const off = await tick(h, "userA", "NEWA", { on: false });
+      expect(off.status).toBe(200);
+      expect(rowsOf("userA")).toEqual(["AAPL 15min", "BRK-B 15min"]);
+      expect(rowsOf("userB")).toEqual(["NEWA 15min"]);
+      const offMany = await tickMany(h, "userA", ["AAPL", "BRK-B"], false);
+      expect(offMany.status).toBe(200);
+      expect(rowsOf("userA")).toEqual([]);
+      world.plans.set("userB", "light");
+      expect((await tick(h, "userB", "NEWA", { on: false })).status).toBe(200);
+      expect(world.subs).toEqual([]);
+    });
+  });
+
+  describe("v42 Yahoo's search when a share nobody follows is first added (spec 2.2, 4.2 set step 2)", () => {
+    it("a quote with the symbol, an equity on an allowed exchange: saved, its name stored cleaned (a name in the request body ignored); a Tokyo share on JPX too", async () => {
+      world.searchQuotes = (q) => (q === "example" ? [quote("NEWB"), quote("NEWA", { longname: "  Example\nHoldings  ", shortname: "Ex" })] : q === "130A.T" ? [quote("130A.T")] : []);
+      const h = await instance();
+      const a = await tick(h, "userA", "NEWA", { q: "example", name: "Not Yahoo's" });
+      expect(a.status).toBe(200);
+      expect(world.stocks).toEqual([{ pair: "NEWA", name: "Example Holdings", checked_at: iso(clock), last_bar_at: null, bars: null, noted_at: null }]);
+      expect(a.text).not.toContain("Not Yahoo's");
+      expect(world.searches).toEqual(["example"]);
+      const b = await tick(h, "userA", "130A.T");
+      expect(b.status).toBe(200);
+      expect(world.stocks.map((r) => [r.pair, r.name])).toEqual([["NEWA", "Example Holdings"], ["130A.T", "Example Holdings"]]);
+      expect(world.searches).toEqual(["example", "130A.T"]);
+      expect(rowsOf("userA")).toEqual(["NEWA 15min", "130A.T 15min"]);
+      // each name is kept by spec 4.2 set step 2(c)'s upsert
+      expect(world.stockWriteAsks).toEqual(Array(2).fill("?on_conflict=pair resolution=merge-duplicates,return=minimal"));
+    });
+
+    it("as an ETF, over the counter (PNK), a Tokyo symbol off JPX, or absent: 422 stock_not_found; nothing stored, no row, no locked call", async () => {
+      const h = await instance();
+      for (const [sym, quotes] of [
+        ["NEWA", [quote("NEWA", { quoteType: "ETF" })]],
+        ["NEWA", [quote("NEWA", { exchange: "PNK" })]],
+        ["130A.T", [quote("130A.T", { exchange: "OSA" })]],
+        ["NEWA", [quote("NEWB"), quote("NEWAB")]],
+        ["NEWA", []],
+      ] as const) {
+        resetWorld();
+        world.searchQuotes = () => [...quotes];
+        const a = await tick(h, "userA", sym);
+        expect([a.status, a.body], JSON.stringify(quotes)).toEqual([422, { ok: false, error: "stock_not_found" }]);
+        expect(world.stocks).toEqual([]);
+        expect(world.subs).toEqual([]);
+        expect(world.rpcs).toEqual(["stockmacd_followed_count"]);
+        expect(world.searches).toEqual([sym]);
+      }
+    });
+
+    it("Yahoo answering 5xx, or not answering in time: 503 stock_check_unavailable, nothing saved; a 400 (a word Yahoo will not search for) finds nothing, as the chart reads it", async () => {
+      const h = await instance();
+      for (const [status, throws] of [[503, false], [500, false], [429, false], [200, true]] as const) {
+        resetWorld();
+        world.searchQuotes = () => [quote("NEWA")];
+        world.searchStatus = status;
+        world.searchThrows = throws;
+        const a = await tick(h, "userA", "NEWA", { q: "example" });
+        expect([a.status, a.body], `${status} ${throws}`).toEqual([503, { ok: false, error: "stock_check_unavailable" }]);
+        // (an error is not "no hit": the symbol is not searched after it)
+        expect(world.searches).toEqual(["example"]);
+        expect(world.stocks).toEqual([]);
+        expect(world.subs).toEqual([]);
+      }
+      resetWorld();
+      world.searchStatus = 400;
+      const b = await tick(h, "userA", "NEWA");
+      expect([b.status, b.body]).toEqual([422, { ok: false, error: "stock_not_found" }]);
+    });
+
+    it("never searched for one of the 22 or a share someone already follows (no count either)", async () => {
+      world.subs = [follow("userB", "NEWA")];
+      world.searchQuotes = () => [quote("NEWA")];
+      const h = await instance();
+      expect((await tick(h, "userA", "NEWA", { q: "example" })).status).toBe(200);
+      expect((await tick(h, "userA", "7203.T", { q: "toyota" })).status).toBe(200);
+      expect(world.searches).toEqual([]);
+      expect(world.stocks).toEqual([]);
+      expect(world.rpcs.filter((r) => r === "stockmacd_followed_count")).toHaveLength(2);
+      // (both counts are the status's, after each save)
+    });
+
+    it("q not ASCII or not isStockQuery: the symbol is searched; a q search without the symbol, then a symbol search with it: saved, two searches; q equal to the symbol: one search", async () => {
+      const h = await instance();
+      for (const q of ["ソニー", "<b>", "a".repeat(41), 42, ""]) {
+        resetWorld();
+        world.searchQuotes = (x) => (x === "NEWA" ? [quote("NEWA")] : [quote("OTHR")]);
+        expect((await tick(h, "userA", "NEWA", { q })).status, String(q)).toBe(200);
+        expect(world.searches, String(q)).toEqual(["NEWA"]);
+      }
+      resetWorld();
+      world.searchQuotes = (x) => (x === "NEWA" ? [quote("NEWA")] : [quote("OTHR")]);
+      expect((await tick(h, "userA", "NEWA", { q: " example " })).status).toBe(200);
+      expect(world.searches).toEqual(["example", "NEWA"]);
+      resetWorld();
+      world.searchQuotes = () => [quote("OTHR")];
+      const c = await tick(h, "userA", "NEWA", { q: "NEWA" });
+      expect([c.status, c.body]).toEqual([422, { ok: false, error: "stock_not_found" }]);
+      expect(world.searches).toEqual(["NEWA"]);
+    });
+
+    it("the signal_alert_stocks upsert failing: 500 save_failed, no locked call, no subscription; the followers' read failing: 500 save_failed before any search", async () => {
+      world.searchQuotes = () => [quote("NEWA")];
+      world.stocksWriteStatus = 500;
+      const h = await instance();
+      const a = await tick(h, "userA", "NEWA");
+      expect([a.status, a.body]).toEqual([500, SAVE_FAILED]);
+      expect(world.rpcs).toEqual(["stockmacd_followed_count"]);
+      expect(world.subs).toEqual([]);
+      resetWorld();
+      world.searchQuotes = () => [quote("NEWA")];
+      world.subsFailAt = 1;
+      const b = await tick(h, "userA", "NEWA");
+      expect([b.status, b.body]).toEqual([500, SAVE_FAILED]);
+      expect(world.searches).toEqual([]);
+      expect(world.subs).toEqual([]);
+    });
+  });
+
+  describe("v42 the share's name in its mail (spec 4.1, 7)", () => {
+    const named = (sym: string, s: IndicatorSignal, name: string | null | undefined): IndicatorSignal => ({ ...s, pair: sym, stockName: name });
+    const SOURCE_NAMED_JA = "足と値段と銘柄の名前は Yahoo Finance の公開データ（公式の配信ではないため、止まることがあります）で、アプリの株のチャートと同じです。注文の前にアプリで最新の状態を確認してください。\nhttps://fx-tactical.jp/";
+    const SOURCE_NAMED_EN = "The bars, the price and the stock's name are Yahoo Finance's public data (not an official feed; it may stop), the same as the app's stock chart. Check the latest state in the app before you place an order:\nhttps://fx-tactical.jp/";
+
+    it("a stored name (Example Holdings) in the ja and en subject and first line, and the source line naming it Yahoo's; everything else as a listed share's mail on the same bar", () => {
+      const s = named("XYZ", usSig(I_BUY), "Example Holdings");
+      const ja = renderStockMail(s, "ja");
+      expect(ja.subject).toBe("【Sextant】Example Holdings（XYZ）15分足 買い（BUY）: 青い線が下の端の96%で確定（株の MACD）");
+      expect(ja.text.split("\n\n")[0]).toBe("Example Holdings（XYZ、米国）の15分足で、MACD の逆張りの買い（BUY）の合図が出ました。");
+      expect(ja.text).toContain(`\n\n${SOURCE_NAMED_JA}\n\n${STOP_JA}`);
+      expect(ja.text).not.toContain(ITEM11_JA);
+      expect(ja.text).toBe(renderStockMail(usSig(I_BUY), "ja").text.replace("アップル（AAPL、", "Example Holdings（XYZ、").replace(ITEM11_JA, SOURCE_NAMED_JA));
+      const en = renderStockMail(s, "en");
+      expect(en.subject).toBe("[Sextant] Example Holdings (XYZ) 15-minute BUY: the MACD line closed at 96% of the bottom (Stock MACD)");
+      expect(en.text.split("\n\n")[0]).toBe("A MACD fade BUY signal on Example Holdings (XYZ, US), 15-minute chart.");
+      expect(en.text).toBe(renderStockMail(usSig(I_BUY), "en").text.replace("Apple (AAPL, ", "Example Holdings (XYZ, ").replace(ITEM11_EN, SOURCE_NAMED_EN));
+      // a Tokyo share's stored name serves the English mail too (one string, as Yahoo's search gave it)
+      const t = named("130A.T", tokyoSig(T_MID), "Example Holdings");
+      expect(renderStockMail(t, "en").subject).toBe("[Sextant] Example Holdings (130A.T) 15-minute SELL (short sale): the MACD line closed at 96% of the top (Stock MACD)");
+      expect(renderStockMail(t, "ja").text.split("\n\n")[0]).toBe("Example Holdings（130A.T、東証）の15分足で、MACD の逆張りの売り（SELL）の合図が出ました。株の売りは空売りです。");
+    });
+
+    it("no stored name (none, null, or the symbol itself): the code once, never 「XYZ（XYZ）」; the source line today's", () => {
+      for (const name of [undefined, null, "XYZ"]) {
+        const ja = renderStockMail(named("XYZ", usSig(I_BUY), name), "ja");
+        expect(ja.subject, String(name)).toBe("【Sextant】XYZ 15分足 買い（BUY）: 青い線が下の端の96%で確定（株の MACD）");
+        expect(ja.text.split("\n\n")[0]).toBe("XYZ（米国）の15分足で、MACD の逆張りの買い（BUY）の合図が出ました。");
+        expect(ja.text).toContain(`\n\n${ITEM11_JA}\n\n${STOP_JA}`);
+        expect(ja.text).not.toContain("XYZ（XYZ");
+        const en = renderStockMail(named("XYZ", usSig(I_BUY), name), "en");
+        expect(en.subject).toBe("[Sextant] XYZ 15-minute BUY: the MACD line closed at 96% of the bottom (Stock MACD)");
+        expect(en.text.split("\n\n")[0]).toBe("A MACD fade BUY signal on XYZ (US), 15-minute chart.");
+        expect(en.text).toContain(`\n\n${ITEM11_EN}\n\n${STOP_EN}`);
+        expect(en.text).not.toContain("XYZ (XYZ");
+      }
+      const sell = renderStockMail(named("BRK-B", usSig(I_SELL), null), "ja");
+      expect(sell.subject).toBe("【Sextant】BRK-B 15分足 売り（SELL・空売り）: 青い線が上の端の96%で確定（株の MACD）");
+      expect(sell.text.split("\n\n")[0]).toBe("BRK-B（米国）の15分足で、MACD の逆張りの売り（SELL）の合図が出ました。株の売りは空売りです。");
+      const tokyo = renderStockMail(named("130A.T", tokyoSig(T_MID), null), "en");
+      expect(tokyo.subject).toBe("[Sextant] 130A.T 15-minute SELL (short sale): the MACD line closed at 96% of the top (Stock MACD)");
+      expect(tokyo.text.split("\n\n")[0]).toBe("A MACD fade SELL signal on 130A.T (Tokyo), 15-minute chart. A SELL on a share is a short sale.");
+    });
+
+    it("the 22's mails: their own names whatever is stored, so byte for byte the mails pinned above (v41's texts)", () => {
+      for (const s of [usSig(I_BUY), usSig(I_LAST), tokyoSig(T_LUNCH), tokyoSig(T_MID)]) {
+        for (const lang of ["ja", "en"] as const) {
+          expect(renderStockMail({ ...s, stockName: "Example Holdings" }, lang)).toEqual(renderStockMail(s, lang));
+          expect(renderStockMail({ ...s, stockName: null }, lang)).toEqual(renderStockMail(s, lang));
+        }
+      }
+      expect(stockNameOf("AAPL", "ja", "Example Holdings")).toBe("アップル");
+      expect(stockNameOf("7203.T", "en", null)).toBe("Toyota Motor");
+      expect(stockNameOf("XYZ", "ja", "Example Holdings")).toBe("Example Holdings");
+      expect(stockNameOf("XYZ", "en")).toBeNull();
+      expect(stockNameOf("XYZ", "ja", "XYZ")).toBeNull();
+      expect(isListedStock("AAPL")).toBe(true);
+      expect(isListedStock("XYZ")).toBe(false);
+      expect(STOCKMACD_CAP).toBe(50);
+    });
+
+    it("stockNameClean: control characters made spaces, runs of spaces one, trimmed, cut to 100 code points (no half of a surrogate pair left); null when empty, not a string, or the symbol", () => {
+      expect(stockNameClean("Example\nHoldings\t\t Co\u007f", "XYZ")).toBe("Example Holdings Co");
+      expect(stockNameClean("\u0000Example   Holdings\r\n", "XYZ")).toBe("Example Holdings");
+      expect(stockNameClean("E".repeat(150), "XYZ")).toBe("E".repeat(100));
+      // the 100th UTF-16 unit is the first half of a surrogate pair: a cut by units would leave it alone
+      const long = "a".repeat(99) + "😀" + "tail";
+      expect(long.slice(0, 100).charCodeAt(99)).toBeGreaterThanOrEqual(0xd800);
+      expect(JSON.stringify(long.slice(0, 100))).toContain("\\ud83d");
+      const cut = stockNameClean(long, "XYZ")!;
+      expect(cut).toBe("a".repeat(99) + "😀");
+      expect([...cut]).toHaveLength(100);
+      expect(cut).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+      expect(JSON.stringify(cut)).not.toMatch(/\\ud[89a-f]/i);
+      for (const v of ["", "   ", "\n\t", 42, null, undefined, {}, "XYZ", " XYZ\n"]) expect(stockNameClean(v, "XYZ"), JSON.stringify(v)).toBeNull();
+    });
+
+    it("through the run: a stored name in the follower's mail; a quote with no longname or shortname is stored with no name, and its mail writes the code once", async () => {
+      world.searchQuotes = (q) => (q === "BRK-B" ? [quote("BRK-B", { longname: undefined, shortname: "  " })] : []);
+      world.stocks = [{ pair: "XYZ", name: "Example Holdings", checked_at: null, last_bar_at: null, bars: null, noted_at: null }];
+      world.subs = [follow("userA", "XYZ")];
+      const h = await instance();
+      expect((await tick(h, "userB", "BRK-B", { lang: "en" })).status).toBe(200);
+      expect(world.stocks.find((r) => r.pair === "BRK-B")).toMatchObject({ name: null });
+      const s0 = await run(h, after(I_BUY, 0));
+      expect(readOf(s0, "XYZ")).toMatchObject({ judged: true, signals: ["stockmacd:BUY"] });
+      expect(readOf(s0, "BRK-B")).toMatchObject({ judged: true, signals: ["stockmacd:BUY"] });
+      expect(mails().sort()).toEqual([
+        "userA: 【Sextant】Example Holdings（XYZ）15分足 買い（BUY）: 青い線が下の端の96%で確定（株の MACD）",
+        "userB: [Sextant] BRK-B 15-minute BUY: the MACD line closed at 96% of the bottom (Stock MACD)",
+      ]);
+      expect(world.sent.find((m) => m.to.startsWith("userA"))!.text).toBe(renderStockMail(named("XYZ", usSig(I_BUY), "Example Holdings"), "ja").text);
+      expect(world.sent.find((m) => m.to.startsWith("userB"))!.text).toBe(renderStockMail(named("BRK-B", usSig(I_BUY), null), "en").text);
+      // the name goes into no row (signalRow and the claim's body list their fields)
+      for (const r of world.alerts) expect(JSON.stringify(r)).not.toContain("Example");
+    });
+  });
+
+  describe("v42 the status call's stockmacd block (spec 4.2)", () => {
+    const T0 = Date.parse("2026-11-22T12:00:00Z");
+    it("pairs: the 22, then the user's own '15min' shares in their rows' order; shares keyed by the symbol; followed counts every user's; another user's share never in pairs or shares; no user id anywhere in the answer", async () => {
+      world.subs = [
+        { ...follow("userA", "NEWB"), created_at: "2026-11-22T10:00:00.000Z" },
+        { ...follow("userA", "7203.T"), created_at: "2026-11-22T09:00:00.000Z" },
+        { ...follow("userA", "NEWA"), created_at: "2026-11-22T11:00:00.000Z" },
+        { ...follow("userA", "OLDX", "ja", "1h"), created_at: "2026-11-22T08:00:00.000Z" },
+        { user_id: "userA", pair: "USD/JPY", interval: "1h", rule: "macdx", lang: "ja", created_at: "2026-11-22T07:00:00.000Z" },
+        { ...follow("userB", "SECRT"), created_at: "2026-11-22T06:00:00.000Z" },
+      ];
+      world.stocks = [
+        { pair: "NEWB", name: "Example\nTrading", checked_at: null, last_bar_at: "2026-11-21T20:45:00+00:00", bars: 812, noted_at: "2026-11-22T00:20:00+00:00" },
+        { pair: "7203.T", name: "a stored name of one of the 22", checked_at: null, last_bar_at: "2026-11-21T06:15:00+00:00", bars: 590, noted_at: "2026-11-22T00:20:00+00:00" },
+        { pair: "SECRT", name: "Example Secret", checked_at: null, last_bar_at: null, bars: null, noted_at: null },
+      ];
+      const h = await instance();
+      clock = T0;
+      const a = await call(h, "userA", { action: "status" });
+      expect(a.status).toBe(200);
+      const b = a.body.indicator!.stockmacd!;
+      expect(b).toEqual({
+        pairs: [...STOCKMACD_PAIRS, "NEWB", "NEWA"],
+        intervals: ["15min"],
+        cap: 50,
+        followed: 4,
+        shares: {
+          NEWB: { name: "Example Trading", last_bar_at: "2026-11-21T20:45:00.000Z", bars: 812, stale: false },
+          "7203.T": { name: null, last_bar_at: "2026-11-21T06:15:00.000Z", bars: 590, stale: false },
+          NEWA: { name: null, last_bar_at: null, bars: null, stale: false },
+        },
+      });
+      // the user's own rows as today, in their created_at order
+      expect(a.body.subscriptions).toEqual([
+        { pair: "USD/JPY", interval: "1h", rule: "macdx" },
+        { pair: "OLDX", interval: "1h", rule: "stockmacd" },
+        { pair: "7203.T", interval: "15min", rule: "stockmacd" },
+        { pair: "NEWB", interval: "15min", rule: "stockmacd" },
+        { pair: "NEWA", interval: "15min", rule: "stockmacd" },
+      ]);
+      for (const no of ["SECRT", "Example Secret", "userB", "00000000-0000-4000-8000-", "OLDX\":{"]) expect(a.text, no).not.toContain(no);
+      // the user's own address is in the answer as today (email); the user's id nowhere else
+      expect(a.body.email).toBe("userA@example.test");
+      expect(a.text.split('"email":"userA@example.test"').join("")).not.toContain("userA");
+      // the shares' read: one, of the user's own shares only
+      expect(world.reads.filter((r) => r.startsWith("signal_alert_stocks"))).toEqual(["signal_alert_stocks pair,name,last_bar_at,bars"]);
+    });
+
+    it("stale: the newest bar the run read more than 7 days ago (7 days exactly is not); no note: not stale", async () => {
+      world.subs = [follow("userA", "NEWA"), follow("userA", "NEWB"), follow("userA", "NEWC")];
+      world.stocks = [
+        { pair: "NEWA", name: null, last_bar_at: new Date(T0 - 7 * 24 * H).toISOString(), bars: 700, noted_at: null },
+        { pair: "NEWB", name: null, last_bar_at: new Date(T0 - 7 * 24 * H - 1).toISOString(), bars: 700, noted_at: null },
+      ];
+      const h = await instance();
+      clock = T0;
+      const shares = (await call(h, "userA", { action: "status" })).body.indicator!.stockmacd!.shares as Record<string, { stale: boolean }>;
+      expect([shares.NEWA.stale, shares.NEWB.stale, shares.NEWC.stale]).toEqual([false, true, false]);
+    });
+
+    it("followed is null when the count cannot be read (an error, a string, a negative or a fraction); the block stays; the shares' read failing leaves nulls", async () => {
+      world.subs = [follow("userA", "NEWA")];
+      world.stocks = [{ pair: "NEWA", name: "Example Holdings", last_bar_at: null, bars: null, noted_at: null }];
+      const h = await instance();
+      for (const ans of [{ status: 500, text: "{}" }, { status: 200, text: '"12"' }, { status: 200, text: "-1" }, { status: 200, text: "12.5" }, { status: 200, text: "null" }]) {
+        world.countAnswer = ans;
+        expect((await call(h, "userA", { action: "status" })).body.indicator!.stockmacd, JSON.stringify(ans)).toMatchObject({ cap: 50, followed: null });
+      }
+      world.countAnswer = null;
+      world.stocksReadStatus = 503;
+      expect((await call(h, "userA", { action: "status" })).body.indicator!.stockmacd).toMatchObject({
+        followed: 1, shares: { NEWA: { name: null, last_bar_at: null, bars: null, stale: false } },
+      });
+    });
+
+    it("a share followed again after a gap (one of the 22 too) shows no old note: the locked call clears it when it saves a share nobody followed; a share someone still follows keeps its note", async () => {
+      const old = new Date(T0 - 30 * 24 * H).toISOString();
+      world.stocks = [
+        { pair: "NEWA", name: "Example Holdings", checked_at: old, last_bar_at: old, bars: 700, noted_at: old },
+        { pair: "AAPL", name: null, checked_at: null, last_bar_at: old, bars: 650, noted_at: old },
+        { pair: "NEWC", name: "Example Works", checked_at: old, last_bar_at: old, bars: 610, noted_at: old },
+      ];
+      world.subs = [follow("userB", "NEWC")];
+      world.searchQuotes = (q) => (q === "NEWA" ? [quote("NEWA", { longname: "Example Holdings Renamed" })] : []);
+      const h = await instance();
+      clock = T0;
+      await tick(h, "userA", "NEWA");
+      await tick(h, "userA", "AAPL");
+      const s = await tick(h, "userA", "NEWC");
+      expect(s.body.indicator!.stockmacd!.shares).toEqual({
+        NEWA: { name: "Example Holdings Renamed", last_bar_at: null, bars: null, stale: false },
+        AAPL: { name: null, last_bar_at: null, bars: null, stale: false },
+        NEWC: { name: "Example Works", last_bar_at: new Date(Date.parse(old)).toISOString(), bars: 610, stale: true },
+      });
+      expect(world.searches).toEqual(["NEWA"]);
+    });
+
+    // v42 (spec 6.1): the screen's normalizer reads this block as the function sends it, so the screen's rows, names and
+    // notes rest on the real answer, not only on the hand-made statuses of "v42 the stock MACD tab" above
+    it("the screen's normalizer (src/lib/signalAlerts.ts) reads the real answer's block: the pairs, the cap, the count, each own share's name and note", async () => {
+      world.subs = [
+        { ...follow("userA", "NEWB"), created_at: "2026-11-22T10:00:00.000Z" },
+        { ...follow("userA", "7203.T"), created_at: "2026-11-22T09:00:00.000Z" },
+        { ...follow("userB", "SECRT"), created_at: "2026-11-22T06:00:00.000Z" },
+      ];
+      world.stocks = [
+        { pair: "NEWB", name: "Example Holdings", checked_at: null, last_bar_at: new Date(T0 - 8 * 24 * H).toISOString(), bars: 412, noted_at: null },
+        { pair: "7203.T", name: null, checked_at: null, last_bar_at: "2026-11-21T06:15:00+00:00", bars: 812, noted_at: null },
+      ];
+      const h = await instance();
+      clock = T0;
+      const a = await call(h, "userA", { action: "status" });
+      expect(a.status).toBe(200);
+      expect(normalizeAlertSettings(a.body)!.indicator!.stockmacd).toEqual({
+        pairs: [...STOCKMACD_PAIRS, "NEWB"],
+        intervals: ["15min"],
+        cap: 50,
+        followed: 3,
+        shares: {
+          NEWB: { name: "Example Holdings", lastBarAt: new Date(T0 - 8 * 24 * H).toISOString(), bars: 412, stale: true },
+          "7203.T": { name: null, lastBarAt: "2026-11-21T06:15:00.000Z", bars: 812, stale: false },
+        },
+      });
+      // a refusal reads as its code, as callSignalAlerts throws it (it keeps the code only)
+      fill(50, "userZ");
+      const refused = await tick(h, "userA", "NEWC");
+      expect([refused.status, refused.body]).toEqual([409, CAP_FULL]);
+      expect(normalizeAlertSettings(refused.body)).toBeNull();
+    });
+  });
+
+  describe("v42 the run (spec 4.2; section 9 \"The run\")", () => {
+    const ROW_ID = "00000000-0000-4000-8000-";
+    it("any shape is read and judged: made-up XYZ and BRK-B on the US bars, 130A.T on Tokyo's", async () => {
+      world.subs = [follow("userA", "XYZ"), follow("userA", "BRK-B")];
+      const s0 = await fresh(after(I_BUY, 0));
+      for (const sym of ["XYZ", "BRK-B"]) {
+        expect(readOf(s0, sym), sym).toMatchObject({ judged: true, newest: dt(times[I_BUY]), signals: ["stockmacd:BUY"], fade: { fresh: true, entry: "BUY", price: closes[I_BUY] } });
+      }
+      expect(s0).toMatchObject({ subscriptions: 2, shares: 2, sent: 2 });
+      expect(mails().sort()).toEqual([
+        "userA: 【Sextant】BRK-B 15分足 買い（BUY）: 青い線が下の端の96%で確定（株の MACD）",
+        "userA: 【Sextant】XYZ 15分足 買い（BUY）: 青い線が下の端の96%で確定（株の MACD）",
+      ]);
+      expect(world.alerts.map((r) => `${r.pair} ${r.rule}`).sort()).toEqual([`BRK-B ${STOCKMACD_RULE_ID}`, `XYZ ${STOCKMACD_RULE_ID}`]);
+      clean();
+      resetWorld();
+      world.subs = [follow("userA", "130A.T")];
+      world.yahooLag = 15 * MIN;
+      const s1 = await fresh(TOKYO.ends[T_MID] + 15 * MIN + 1_000);
+      expect(readOf(s1, "130A.T")).toMatchObject({ judged: true, newest: dt(TOKYO.times[T_MID]), signals: ["stockmacd:SELL"], fade: { fresh: true, entry: "SELL", price: TOKYO.closes[T_MID] } });
+      expect(mails()).toEqual(["userA: 【Sextant】130A.T 15分足 売り（SELL・空売り）: 青い線が上の端の96%で確定（株の MACD）"]);
+      clean();
+    });
+
+    it("1,500 rows over two pages, read by key (the second from the first's last id, then an empty page); the ids go into no record", async () => {
+      const shares = ["XYZ", "BRK-B", "NVDA"];
+      for (let k = 0; k < 1500; k++) world.subs.push(follow(`u${k}`, shares[k % 3]));
+      const s0 = await fresh(after(I_BUY + 1, 0));
+      expect(s0).toMatchObject({ ok: true, subscriptions: 1500, shares: 3 });
+      const ids = world.subs.map((r) => String(r.id)).sort();
+      expect(world.subsQueries).toEqual([
+        "rule=eq.stockmacd&interval=eq.15min&select=id%2Cuser_id%2Cpair%2Cinterval%2Clang%2Crule&order=id.asc&limit=1000",
+        `rule=eq.stockmacd&interval=eq.15min&select=id%2Cuser_id%2Cpair%2Cinterval%2Clang%2Crule&order=id.asc&limit=1000&id=gt.${ids[999]}`,
+        `rule=eq.stockmacd&interval=eq.15min&select=id%2Cuser_id%2Cpair%2Cinterval%2Clang%2Crule&order=id.asc&limit=1000&id=gt.${ids[1499]}`,
+      ]);
+      expect(JSON.stringify(s0)).not.toContain(ROW_ID);
+      expect(world.sent).toEqual([]);
+      clean();
+    });
+
+    it("an untick between two pages leaves no other row unread (by key; an offset would skip one)", async () => {
+      const shares = ["XYZ", "BRK-B", "NVDA"];
+      for (let k = 0; k < 1500; k++) world.subs.push(follow(`u${k}`, shares[k % 3]));
+      // the last row's share is one nobody else follows, so a row skipped would show in the record
+      world.subs.push(follow("u1500", "AMZN"));
+      world.afterSubsRead = (n) => {
+        if (n === 1) world.subs.splice(10, 1);
+      };
+      const s0 = await fresh(after(I_BUY + 1, 0));
+      expect(s0).toMatchObject({ subscriptions: 1501, shares: 4 });
+      expect(s0.reads!.map((r) => r.pair).sort()).toEqual(["AMZN", "BRK-B", "NVDA", "XYZ"]);
+      // (an offset paging would have read 1,499 rows past the untick: the 1,001st row moves back into the first page)
+      clean();
+    });
+
+    it("a failed page (a 503, or a body that is not a list) ends the run: subscriptions_unread, no Yahoo read, no read of signal_alert_stocks", async () => {
+      for (const [failAt, notListAt] of [[2, 0], [1, 0], [0, 2], [0, 1]]) {
+        resetWorld();
+        for (let k = 0; k < 1500; k++) world.subs.push(follow(`u${k}`, "XYZ"));
+        world.subsFailAt = failAt;
+        world.subsNotListAt = notListAt;
+        const s = await fresh(after(I_BUY, 0));
+        expect(s, `${failAt} ${notListAt}`).toEqual({ ok: false, mode: "stocks", version: "signal-alerts-v42-2026-11-22", email_configured: true, error: "subscriptions_unread", took_ms: 0 });
+        expect(world.yahoo).toEqual([]);
+        expect(world.log.filter((x) => x.includes("signal_alert_stocks"))).toEqual([]);
+        expect(world.sent).toEqual([]);
+      }
+    });
+
+    it("'1h' rows are not read: the read asks for the '15min' rows only", async () => {
+      world.subs = [follow("userA", "XYZ", "ja", "1h"), follow("userA", "AAPL", "ja", "1h")];
+      const s0 = await fresh(after(I_BUY, 0));
+      expect(s0).toMatchObject({ ok: true, subscriptions: 0, shares: 0 });
+      expect(world.subsQueries.every((x) => x.startsWith("rule=eq.stockmacd&interval=eq.15min&"))).toBe(true);
+      expect(world.yahoo).toEqual([]);
+    });
+
+    it("one daily note a share a UTC day across new instances, in one request after the loop (the newest bar's open, the closed bars' count); the next UTC day a new one", async () => {
+      world.subs = [follow("userA", "XYZ"), follow("userA", "AAPL")];
+      world.stocks = [{ pair: "XYZ", name: "Example Holdings", checked_at: null, last_bar_at: null, bars: null, noted_at: "2026-01-01T00:00:00+00:00" }];
+      const t0 = after(I_BUY + 1, 0);
+      clock = t0;
+      const want = stockBarsOf("XYZ", yahooAnswer("XYZ"), t0)!.bars;
+      for (const m of [0, 1, 2, 3, 5, 14]) await fresh(after(I_BUY + 1, m));
+      expect(world.stockWrites).toHaveLength(1);
+      const note = { last_bar_at: iso(want[want.length - 1].open_ms), bars: want.filter((b) => b.closed).length, noted_at: iso(t0) };
+      expect(world.stockWrites[0]).toEqual([{ pair: "XYZ", ...note }, { pair: "AAPL", ...note }]);
+      expect(note.bars).toBeGreaterThanOrEqual(600);
+      // the name is left as it was (not in the note)
+      expect(world.stocks).toEqual([
+        { pair: "XYZ", name: "Example Holdings", checked_at: null, ...note },
+        { pair: "AAPL", name: null, checked_at: null, ...note },
+      ]);
+      // the first run's requests: the two pages, the stored rows, the two Yahoo reads, then the one write
+      const first = world.log.slice(0, world.log.indexOf("POST signal_alert_stocks") + 1).filter((x) => !x.includes("track_outcomes_sweep_token"));
+      expect(first).toEqual(["GET signal_alert_subscriptions", "GET signal_alert_subscriptions", "GET signal_alert_stocks", "GET yahoo chart", "GET yahoo chart", "POST signal_alert_stocks"]);
+      // the next weekday's session (the next UTC day): one more
+      await fresh(after(I_BUY + 1 + 26, 0));
+      await fresh(after(I_BUY + 1 + 26, 1));
+      expect(world.stockWrites).toHaveLength(2);
+      expect((world.stockWrites[1] as Row[]).map((r) => r.pair).sort()).toEqual(["AAPL", "XYZ"]);
+      // each is spec 4.2's upsert (a plain insert would fail on the rows already there: the fake answers 409 as
+      // PostgREST does)
+      expect(world.stockWriteAsks).toEqual(Array(2).fill("?on_conflict=pair resolution=merge-duplicates,return=minimal"));
+      clean();
+    });
+
+    it("a failing note write leaves the judgment as it was (logged without its URL); a failing read of signal_alert_stocks: the code alone in the mail, no note, the judgment as it was", async () => {
+      const logged: string[] = [];
+      const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+        logged.push(args.map(String).join(" "));
+      });
+      try {
+        const base = async (setup: () => void) => {
+          resetWorld();
+          world.subs = [follow("userA", "XYZ"), follow("userB", "XYZ", "en")];
+          world.stocks = [{ pair: "XYZ", name: "Example Holdings", checked_at: null, last_bar_at: null, bars: null, noted_at: null }];
+          setup();
+          const s = await fresh(after(I_BUY, 0));
+          return { reads: s.reads, sent: s.sent, mails: mails(), alerts: world.alerts.map((r) => `${r.user_id} ${r.side} ${r.entry}`) };
+        };
+        const ok = await base(() => {});
+        expect(ok.mails[0]).toContain("Example Holdings（XYZ）");
+        const writeFails = await base(() => {
+          world.stocksWriteStatus = 500;
+        });
+        expect(writeFails).toEqual(ok);
+        expect(world.stockWrites).toHaveLength(1);
+        const failed = logged.filter((l) => l.startsWith("stockmacd notes not written:"));
+        expect(failed).toHaveLength(1);
+        for (const no of ["sb.test", "http", "userA"]) expect(failed[0], no).not.toContain(no);
+        const readFails = await base(() => {
+          world.stocksReadStatus = 503;
+        });
+        expect(readFails.reads).toEqual(ok.reads);
+        expect(readFails.alerts).toEqual(ok.alerts);
+        expect(readFails.mails).toEqual([
+          "userA: 【Sextant】XYZ 15分足 買い（BUY）: 青い線が下の端の96%で確定（株の MACD）",
+          "userB: [Sextant] XYZ 15-minute BUY: the MACD line closed at 96% of the bottom (Stock MACD)",
+        ]);
+        expect(world.stockWrites).toEqual([]);
+        expect(logged.filter((l) => l.startsWith("signal_alert_stocks unread:"))).toEqual(["signal_alert_stocks unread: 503"]);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    // 50 made-up Tokyo shares (9A00.T … 9E90.T), Yahoo 15 minutes behind, read at a close whose bar has no entry
+    const TOKYO50 = Array.from({ length: 50 }, (_, k) => `9${String.fromCharCode(65 + Math.floor(k / 10))}${k % 10}0.T`);
+    const tokyoAt = (m: number) => TOKYO.ends[T_MID - 1] + 15 * MIN + m * MIN + 1_000;
+
+    it("50 Tokyo shares at 530 ms a read (production's figure, docs §8.156): every one read, none left, took_ms 26,500; each read's ms in its entry", async () => {
+      world.subs = TOKYO50.map((p) => follow("userA", p));
+      world.yahooLag = 15 * MIN;
+      world.yahooDelayMs = 530;
+      const s0 = await fresh(tokyoAt(0));
+      expect(s0.reads!.filter((r) => r.skipped === "budget")).toEqual([]);
+      expect(s0.reads!.map((r) => r.pair).sort()).toEqual([...TOKYO50].sort());
+      expect(s0.reads!.every((r) => r.ms === 530 && r.judged === true)).toBe(true);
+      expect(s0).toMatchObject({ subscriptions: 50, shares: 50, took_ms: 26_500, sent: 0 });
+      clean();
+    });
+
+    it("at 700 ms a read: 42 read and the rest skipped: \"budget\"; on a new instance each minute no share is left in two runs in a row", async () => {
+      world.subs = TOKYO50.map((p) => follow("userA", p));
+      world.yahooLag = 15 * MIN;
+      world.yahooDelayMs = 700;
+      const left: string[][] = [];
+      for (let m = 0; m < 6; m++) {
+        const s = await fresh(tokyoAt(m));
+        const out = s.reads!.filter((r) => r.skipped === "budget").map((r) => String(r.pair));
+        expect(out, `minute ${m}`).toHaveLength(8);
+        expect(s.reads!.filter((r) => r.skipped === undefined), `minute ${m}`).toHaveLength(42);
+        // reads start at 0, 0.7, …, 28.7 s; the next would start at 29.4 s, with under 1 s left
+        expect(s.took_ms).toBe(29_400);
+        left.push(out);
+      }
+      for (let m = 1; m < left.length; m++) expect(left[m].filter((p) => left[m - 1].includes(p)), `minutes ${m - 1} and ${m}`).toEqual([]);
+      // the leftovers are the last eight of the subscriptions' order, then the first eight, by the minute's parity
+      expect(new Set(left.flat())).toEqual(new Set([...TOKYO50.slice(0, 8), ...TOKYO50.slice(42)]));
+    });
+
+    it("a read that hangs is cut at the smaller of 5 s and the budget left; none is started with under 1 s of the budget left; each read's ms in its entry", async () => {
+      const US8 = STOCKMACD_PAIRS.filter((p) => !p.endsWith(".T"));
+      const spy = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
+        world.timeouts.push(ms);
+        const signal = new AbortController().signal as AbortSignal & { cutAfterMs?: number };
+        signal.cutAfterMs = ms;
+        return signal;
+      });
+      try {
+        // (18:00:01 UTC, an even minute: the subscriptions' order, NVDA … TSLA)
+        const when = after(I_BUY + 1, 0);
+        expect(Math.floor(when / MIN) % 2).toBe(0);
+        const scene = async (metaHangs: boolean) => {
+          resetWorld();
+          world.subs = US8.map((p) => follow("userA", p));
+          world.yahooLag = 16 * MIN;
+          for (const p of ["NVDA", "INTC", "AAPL", "MSFT", "GOOGL"]) world.hangFor.add(p);
+          world.delayFor.set("AMZN", 2_500);
+          if (metaHangs) world.hangFor.add("META");
+          else world.delayFor.set("META", 1_700);
+          return await fresh(when);
+        };
+        // five reads hang to their 5 s (25 s), AMZN takes 2.5 s (27.5 s), META hangs and is cut at the 2.5 s left
+        const a = await scene(true);
+        expect(world.timeouts).toEqual([5_000, 5_000, 5_000, 5_000, 5_000, 5_000, 2_500]);
+        expect(a.reads!.map((r) => [r.pair, r.error ?? r.skipped ?? "read", r.ms ?? null])).toEqual([
+          ["NVDA", "yahoo_unavailable", 5_000], ["INTC", "yahoo_unavailable", 5_000], ["AAPL", "yahoo_unavailable", 5_000],
+          ["MSFT", "yahoo_unavailable", 5_000], ["GOOGL", "yahoo_unavailable", 5_000], ["AMZN", "read", 2_500],
+          ["META", "yahoo_unavailable", 2_500], ["TSLA", "budget", null],
+        ]);
+        expect(a.took_ms).toBe(30_000);
+        // META takes 1.7 s (29.2 s): TSLA is not started with 0.8 s left (v41 would have, with its 10 s)
+        const b = await scene(false);
+        expect(world.timeouts).toEqual([5_000, 5_000, 5_000, 5_000, 5_000, 5_000, 2_500]);
+        expect(b.reads!.map((r) => [r.pair, r.error ?? r.skipped ?? "read", r.ms ?? null]).slice(5)).toEqual([["AMZN", "read", 2_500], ["META", "read", 1_700], ["TSLA", "budget", null]]);
+        expect(b.took_ms).toBe(29_200);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("a read whose answer comes but whose body is cut by its timeout is yahoo_unavailable (not yahoo_no_bars), its ms the timeout's; the next share is read", async () => {
+      const spy = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms: number) => {
+        world.timeouts.push(ms);
+        const c = new AbortController();
+        const signal = c.signal as AbortSignal & { cutAfterMs?: number; cutNow?: () => void };
+        signal.cutAfterMs = ms;
+        signal.cutNow = () => c.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+        return signal;
+      });
+      try {
+        // (an even minute: the subscriptions' order, XYZ then AAPL)
+        world.subs = [follow("userA", "XYZ"), follow("userA", "AAPL")];
+        world.cutInBodyFor.add("XYZ");
+        world.yahooDelayMs = 400;
+        const s = await fresh(after(I_BUY + 1, 0));
+        expect(world.timeouts).toEqual([5_000, 5_000]);
+        expect(readOf(s, "XYZ")).toEqual({ pair: "XYZ", error: "yahoo_unavailable", ms: 5_000 });
+        expect(readOf(s, "AAPL")).toMatchObject({ judged: true, ms: 400 });
+        expect(s.took_ms).toBe(5_400);
+        // (no daily note for the share whose body was cut: only AAPL's)
+        expect((world.stockWrites as Row[][]).map((w) => w.map((x) => x.pair))).toEqual([["AAPL"]]);
+        clean();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("a run with nothing due makes no request to signal_alert_stocks (spec 4.2: it is read before the run's first Yahoo read, and only then): past the last close's half hour; on a warm instance 10 s after a read and a minute later", async () => {
+      world.subs = [follow("userA", "XYZ"), follow("userB", "AAPL")];
+      world.stocks = [{ pair: "XYZ", name: "Example Holdings", checked_at: null, last_bar_at: null, bars: null, noted_at: null }];
+      const stockReads = () => world.log.filter((x) => x === "GET signal_alert_stocks").length;
+      // a fresh instance with followers and no close due
+      const s0 = await fresh(after(I_LAST, 31));
+      expect(s0).toMatchObject({ ok: true, subscriptions: 2, shares: 2, reads: [] });
+      expect([stockReads(), world.yahoo.length]).toEqual([0, 0]);
+      // a warm instance: its first run reads the stored rows once, then Yahoo for each share
+      const h = await instance();
+      const t1 = after(I_BUY + 1, 0);
+      const s1 = await run(h, t1);
+      expect(s1.reads!.map((r) => r.pair).sort()).toEqual(["AAPL", "XYZ"]);
+      expect([stockReads(), world.yahoo.length]).toEqual([1, 2]);
+      // 10 s later (inside each share's 50 s) and a minute later (each close done): nothing read, the table not asked
+      for (const when of [t1 + 10_000, after(I_BUY + 1, 1)]) {
+        const s = await run(h, when);
+        expect(s.reads, iso(when)).toEqual([]);
+        expect([stockReads(), world.yahoo.length], iso(when)).toEqual([1, 2]);
+      }
+      clean();
     });
   });
 });

@@ -3,7 +3,8 @@ import { AlertTriangle, Bell, Loader2, Mail } from "lucide-react";
 import { toast } from "sonner";
 import { useLocale } from "@/lib/i18n";
 import { priceDecimals } from "@/lib/candleTime";
-import { isStock, stockName } from "@/lib/stocks";
+import { isStock, stockName, type StockHit } from "@/lib/stocks";
+import StockPicker from "@/components/StockPicker";
 import {
   ALERT_RULES,
   AlertRequestError,
@@ -20,6 +21,8 @@ import {
 interface Props {
   // Injected by tests; the app uses the real function
   call?: (body: Record<string, unknown>) => Promise<AlertSettings>;
+  // v42: the stock MACD tab's search (StockPicker); injected by tests, the app uses the live chart's
+  loadSearch?: (q: string) => Promise<StockHit[]>;
 }
 
 const fmtR = (v: number) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(2)}R`;
@@ -27,6 +30,12 @@ const pct = (v: number) => `${Math.round(v * 100)}%`;
 // Below this many settled signals the numbers are read as noise (a 95%
 // interval on a win rate near 35% is still about ±17 points at 30)
 const ENOUGH = 30;
+
+// v42 (research/allstocks-prod-spec.md 3.1, 4.1): the function's STOCKMACD_CAP, used for the refusal's toast only when
+// the status on screen sends no cap (a v41 server's); a v42 status sends it
+const STOCKMACD_CAP_FALLBACK = 50;
+// v42 (6.4 stockmacdStale): "2026-11-14", the date in Japan time of a time
+const jstDate = (iso: string) => new Date(Date.parse(iso) + 9 * 3_600_000).toISOString().slice(0, 10);
 
 // "09-25 19:15" in Japan time, which is how the rest of the app writes times
 const jst = (iso: string) => {
@@ -46,7 +55,11 @@ const jst = (iso: string) => {
 // #345: and gold's 1 hour from v27).
 // #291: and the owner's video's way (liquidity sweep + EMA cross), on its own
 // chart (gold's 1-minute).
-const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
+// v42 (research/allstocks-prod-spec.md 3.3, 6.3): the stock MACD email on any share
+// Yahoo's search finds, at most 50 for all users together: the count of the shares
+// followed, the search (StockPicker), the refusals by their code, and each own
+// share's row with its stored name and notes.
+const SignalAlertSettings = ({ call = callSignalAlerts, loadSearch }: Props) => {
   const { t, locale } = useLocale();
   const a = t.alerts;
   const [settings, setSettings] = useState<AlertSettings | null>(null);
@@ -68,13 +81,31 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
     void load();
   }, [load]);
 
+  // v42 (research/allstocks-prod-spec.md 6.3): a refused save says why by its code under the stock MACD (every other
+  // rule's saveFailed, as before); after stock_cap_full the status is read again, so that the count line and the full
+  // message match the cap (callSignalAlerts keeps only the code, and the old status would stay on screen)
+  const saveRefused = async (err: unknown, onRule: AlertRule) => {
+    const code = err instanceof AlertRequestError ? err.code : null;
+    if (onRule !== "stockmacd") {
+      toast.error(a.saveFailed);
+      return;
+    }
+    if (code === "stock_cap_full") {
+      toast.error(a.stockmacdCapRefused(settings?.indicator?.stockmacd?.cap ?? STOCKMACD_CAP_FALLBACK));
+      await load();
+    } else if (code === "stock_not_found") toast.error(a.stockmacdNotFound);
+    else if (code === "stock_check_unavailable") toast.error(a.stockmacdCheckFailed);
+    else toast.error(a.saveFailed);
+  };
+
   const toggle = async (pair: string, interval: string, on: boolean) => {
     const key = `${rule}|${pair}|${interval}`;
+    const onRule = rule;
     setBusy(key);
     try {
-      setSettings(await call({ action: "set", pair, interval, on, rule, lang: locale }));
-    } catch {
-      toast.error(a.saveFailed);
+      setSettings(await call({ action: "set", pair, interval, on, rule: onRule, lang: locale }));
+    } catch (err) {
+      await saveRefused(err, onRule);
     } finally {
       setBusy(null);
     }
@@ -82,11 +113,25 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
 
   // #155: a timeframe across every pair offered, at once
   const toggleMany = async (charts: Array<{ pair: string; interval: string }>, on: boolean, key: string) => {
+    const onRule = rule;
     setBusy(key);
     try {
-      setSettings(await call({ action: "set_many", rule, on, charts, lang: locale }));
-    } catch {
-      toast.error(a.saveFailed);
+      setSettings(await call({ action: "set_many", rule: onRule, on, charts, lang: locale }));
+    } catch (err) {
+      await saveRefused(err, onRule);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // v42 (6.3): a share picked in the stock MACD tab's search, ticked on its one chart, with the words typed when the
+  // hit was shown (the function confirms a share nobody follows yet by Yahoo's search with them)
+  const pickStock = async (hit: StockHit, q: string) => {
+    setBusy(`stockmacd|${hit.symbol}|15min`);
+    try {
+      setSettings(await call({ action: "set", pair: hit.symbol, interval: "15min", on: true, rule: "stockmacd", lang: locale, q }));
+    } catch (err) {
+      await saveRefused(err, "stockmacd");
     } finally {
       setBusy(null);
     }
@@ -219,18 +264,41 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
                 // A server that does not send them (older than v23, v24 for the video's way,
                 // or not yet deployed) has nothing to tick: say so rather than draw an empty table
                 // (#387: and the EMA 20 / 200 way has its own, the six's 15 minutes)
-                // (#391: and the MACD email on shares has its own, the 22 shares' 1 hour)
+                // (#391: and the MACD email on shares has its own: v41 the 22 shares' 15 minutes; v42 the 22 and the
+                // user's own shares beyond them, so a v42 server always sends rows and the block's absence alone says
+                // "not available")
                 // (#395: and a sharp rise or fall has its own, the six's 1 hour)
                 const ind = rule === "macdx" ? settings.indicator.macdx : rule === "sweepx" ? settings.indicator.sweepx : rule === "emarm" ? settings.indicator.emarm : rule === "stockmacd" ? settings.indicator.stockmacd : rule === "spike" ? settings.indicator.spike : settings.indicator;
                 if (!ind || ind.pairs.length === 0) {
                   return <p className="text-xs text-warning" data-testid={`signal-alerts-${rule}-unavailable`}>{a.macdxUnavailable}</p>;
                 }
                 const offered = (iv: string) => ind.pairs.filter((p) => indicatorChartOffered(settings, p, iv, rule));
+                // v42 (research/allstocks-prod-spec.md 6.3): the stock MACD's own block (its cap, count and own shares)
+                const stock = rule === "stockmacd" ? settings.indicator.stockmacd : null;
+                const allLabel = stock ? a.stockmacdAllRow : a.allPairs;
                 return (
+                  <>
+                  {/* v42 (6.3): above the grid, from a v42 server only (one that sends the cap): the shares followed by all
+                      users together against the cap, or that the count could not be read (no guess), and the search */}
+                  {stock && stock.cap !== null && (
+                    <div className="space-y-1.5" data-testid="stockmacd-head">
+                      {stock.followed !== null ? (
+                        <>
+                          <p className="text-[11px] text-foreground" data-testid="stockmacd-count">{a.stockmacdCount(stock.followed, stock.cap)}</p>
+                          {stock.followed >= stock.cap && (
+                            <p className="text-[11px] text-warning" data-testid="stockmacd-full">{a.stockmacdFull(stock.cap)}</p>
+                          )}
+                        </>
+                      ) : (
+                        <p className="text-[11px] text-muted-foreground" data-testid="stockmacd-count-unread">{a.stockmacdCountUnread}</p>
+                      )}
+                      <StockPicker onPick={(hit, q) => void pickStock(hit, q)} disabled={busy !== null || !settings.allowed} loadSearch={loadSearch} />
+                    </div>
+                  )}
                   <table className="w-full text-xs" data-testid="signal-alerts-grid">
                     <thead>
                       <tr className="text-muted-foreground">
-                        <th className="text-left font-normal py-1">{a.pairHeader}</th>
+                        <th className="text-left font-normal py-1">{stock ? a.stockmacdHeader : a.pairHeader}</th>
                         {ind.intervals.map((iv) => (
                           <th key={iv} className="font-normal py-1 text-center">{a.intervals[iv] ?? iv}</th>
                         ))}
@@ -240,7 +308,7 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
                       {/* (#291: not for a rule offered on one chart) */}
                       {ind.pairs.length > 1 && (
                       <tr className="border-t border-border/50" data-testid="signal-alerts-all-row">
-                        <td className="py-1 text-foreground font-semibold">{a.allPairs}</td>
+                        <td className="py-1 text-foreground font-semibold">{allLabel}</td>
                         {ind.intervals.map((iv) => {
                           const pairs = offered(iv);
                           const n = pairs.filter((p) => isFollowing(settings, p, iv, rule)).length;
@@ -256,7 +324,7 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
                                 }}
                                 disabled={disabled}
                                 onChange={() => void toggleMany(pairs.map((pair) => ({ pair, interval: iv })), !all, `${rule}|all|${iv}`)}
-                                aria-label={`${a.allPairs} ${a.intervals[iv] ?? iv} ${a.ruleTabs[rule]}`}
+                                aria-label={`${allLabel} ${a.intervals[iv] ?? iv} ${a.ruleTabs[rule]}`}
                                 data-testid={`signal-alert-${rule}-all-${iv}`}
                                 className="h-4 w-4 accent-primary disabled:opacity-40"
                               />
@@ -265,12 +333,24 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
                         })}
                       </tr>
                       )}
-                      {ind.pairs.map((pair) => (
+                      {ind.pairs.map((pair) => {
+                        // #391: a share named beside its symbol (v42: a share beyond the 22 by the name stored from
+                        // Yahoo's search, sent in `shares`; the 22 by the app's own names)
+                        const share = stock?.shares[pair] ?? null;
+                        const name = isStock(pair) ? share?.name ?? stockName(pair, locale) : null;
+                        return (
                         <tr key={pair} className="border-t border-border/50">
                           <td className="py-1 font-mono text-foreground">
                             {pair}
-                            {/* #391: a share named beside its symbol */}
-                            {isStock(pair) && stockName(pair, locale) && <span className="ml-1 font-sans text-muted-foreground">{stockName(pair, locale)}</span>}
+                            {name && <span className="ml-1 font-sans text-muted-foreground">{name}</span>}
+                            {/* v42 (2.3, 6.3): what the app read of the share from Yahoo, when it says the share is not
+                                judged as it should be: the newest bar more than 7 days old, fewer than 600 bars */}
+                            {share?.stale && share.lastBarAt !== null && (
+                              <span className="block font-sans text-[10px] text-warning" data-testid={`stockmacd-stale-${pair}`}>{a.stockmacdStale(jstDate(share.lastBarAt))}</span>
+                            )}
+                            {share && share.bars !== null && share.bars < 600 && (
+                              <span className="block font-sans text-[10px] text-warning" data-testid={`stockmacd-short-${pair}`}>{a.stockmacdShortBars(share.bars)}</span>
+                            )}
                           </td>
                           {ind.intervals.map((iv) => {
                             if (!indicatorChartOffered(settings, pair, iv, rule)) {
@@ -299,9 +379,11 @@ const SignalAlertSettings = ({ call = callSignalAlerts }: Props) => {
                             );
                           })}
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
+                  </>
                 );
               })()
             ) : (

@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { isStockSymbol } from "@/lib/stocks";
 
 // #105: the email-alert settings as the signal-alerts function returns them.
 // Everything arrives as JSON; anything malformed is dropped rather than drawn.
@@ -140,6 +141,14 @@ export interface AlertRow {
   result: AlertResult | null;
 }
 
+// v42 (research/allstocks-prod-spec.md 4.2, 6.1): a followed share's line of the stock MACD block
+export interface StockShare {
+  name: string | null;
+  lastBarAt: string | null;
+  bars: number | null;
+  stale: boolean;
+}
+
 export interface AlertSettings {
   allowed: boolean;
   emailConfigured: boolean;
@@ -165,8 +174,14 @@ export interface AlertSettings {
     sweepx: { pairs: string[]; intervals: string[] } | null;
     // #387: the EMA 20 / 200 way's (the six, 15 minutes), likewise
     emarm: { pairs: string[]; intervals: string[] } | null;
-    // #391: the MACD email on shares (the 22 shares, 1 hour), likewise
-    stockmacd: { pairs: string[]; intervals: string[] } | null;
+    // #391: the MACD email on shares, likewise (v41: their 15-minute chart). v42 (research/allstocks-prod-spec.md 4.2,
+    // 6.1): any share Yahoo's search finds, at most `cap` distinct shares for all users together: `pairs` the 22 listed
+    // from the start, then this user's own shares beyond them; `followed` the shares followed by all users together
+    // (null when the server could not read it); `shares` each share this user follows, keyed by its symbol: its stored
+    // name (null for the 22, which the screen names itself), the newest bar the run read from Yahoo and the count of its
+    // closed bars, and whether that bar is more than 7 days old. A v41 server sends none of the three: `cap` and
+    // `followed` null, `shares` empty
+    stockmacd: { pairs: string[]; intervals: string[]; cap: number | null; followed: number | null; shares: Record<string, StockShare> } | null;
     // #395: a sharp rise or fall's (the six, 1 hour), likewise
     spike: { pairs: string[]; intervals: string[] } | null;
   } | null;
@@ -271,6 +286,40 @@ const alertRow = (v: unknown): AlertRow | null => {
   };
 };
 
+// v42 (research/allstocks-prod-spec.md 6.1): the stock MACD block, read from the server's object keyed by the symbol
+// with snake_case fields; a key that is not a share symbol, or a value that is not an object, is dropped, and so is a
+// field of the wrong kind (it reads as null, `stale` as false)
+const stockShareOf = (v: unknown): StockShare | null => {
+  const x = rec(v);
+  if (!x) return null;
+  const at = str(x.last_bar_at);
+  const bars = num(x.bars);
+  return {
+    name: str(x.name),
+    lastBarAt: at !== null && Number.isFinite(Date.parse(at)) ? at : null,
+    bars: bars !== null && Number.isInteger(bars) && bars >= 0 ? bars : null,
+    stale: x.stale === true,
+  };
+};
+const stockmacdOf = (v: unknown): NonNullable<AlertSettings["indicator"]>["stockmacd"] => {
+  const b = rec(v);
+  if (!b) return null;
+  const shares: Record<string, StockShare> = {};
+  for (const [p, sv] of Object.entries(rec(b.shares) ?? {})) {
+    const s = isStockSymbol(p) ? stockShareOf(sv) : null;
+    if (s) shares[p] = s;
+  }
+  const cap = num(b.cap);
+  const followed = num(b.followed);
+  return {
+    pairs: strings(b.pairs),
+    intervals: strings(b.intervals),
+    cap: cap !== null && Number.isInteger(cap) && cap > 0 ? cap : null,
+    followed: followed !== null && Number.isInteger(followed) && followed >= 0 ? followed : null,
+    shares,
+  };
+};
+
 export const normalizeAlertSettings = (value: unknown): AlertSettings | null => {
   const s = rec(value);
   if (!s || s.ok !== true || typeof s.allowed !== "boolean" || typeof s.email_configured !== "boolean") return null;
@@ -301,7 +350,7 @@ export const normalizeAlertSettings = (value: unknown): AlertSettings | null => 
         macdx: macdx ? { pairs: strings(macdx.pairs), intervals: strings(macdx.intervals), limited: macdxLimited } : null,
         sweepx: rec(ind.sweepx) ? { pairs: strings(rec(ind.sweepx)!.pairs), intervals: strings(rec(ind.sweepx)!.intervals) } : null,
         emarm: rec(ind.emarm) ? { pairs: strings(rec(ind.emarm)!.pairs), intervals: strings(rec(ind.emarm)!.intervals) } : null,
-        stockmacd: rec(ind.stockmacd) ? { pairs: strings(rec(ind.stockmacd)!.pairs), intervals: strings(rec(ind.stockmacd)!.intervals) } : null,
+        stockmacd: stockmacdOf(ind.stockmacd),
         spike: rec(ind.spike) ? { pairs: strings(rec(ind.spike)!.pairs), intervals: strings(rec(ind.spike)!.intervals) } : null,
       }
       : null,

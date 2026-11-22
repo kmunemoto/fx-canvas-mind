@@ -576,7 +576,9 @@ grant execute on function public.stockmacd_follow(uuid, jsonb, text, timestamptz
   level before the release.
 - **Applied** with the owner's confirmation through the Supabase connector, before the function (OPS:13333; the order
   of MIG/20261031160000:13-14), and read back: `pg_get_constraintdef` of the pair check, the table's columns and RLS,
-  the two functions' definitions (md5 of their source against the file's), their grants, `show
+  the two functions' definitions (md5 of their source against the file's), their grants, whether `anon` or
+  `authenticated` holds any right on the table or either function (`has_table_privilege`, `has_function_privilege`:
+  booleans, all false; Supabase's default rights in `public` would give them all, which the REVOKEs take away), `show
   default_transaction_isolation`, and of `pg_roles.rolconfig` for `authenticator` and `service_role` only the
   `default_transaction_isolation=` entries (no other setting is printed); and the total row count of
   `signal_alert_subscriptions` (a count only, for econ's read, 4.4). The reads return definitions and counts only, no
@@ -756,10 +758,18 @@ share left for the budget in two runs in a row; an error in `set`; an FX 15-minu
 pairs' minute-0 judgments in the share sessions 30 s or more later than outside them in most quarter hours.
 How: revert only `supabase/functions/**` and `src/**` (the function, the screen, the texts and the tests) on main, and
 keep `MIG/20261122010000_stockmacd_any_share.sql` in main, as production keeps its schema; give the reverted function
-its own `FUNCTION_VERSION` (for example `signal-alerts-v41-rollback-<date>`, and the test line that names it), so that
-the runs' records tell the rollback from the original v41. The push redeploys all eight functions (4.4): on a weekday
-the merge minute is chosen clear of the quarter-hour sweeps and the FX closes, or postmortem is paused first
-(OPS:832-835). Publish the reverted screen. The migration stays: v41 does not use the table or the functions and the
+its own `FUNCTION_VERSION` (for example `signal-alerts-v41-rollback-<date>`), so that the runs' records tell the
+rollback from the original v41. The reverted tests pin v41's version, so the rollback PR also changes, in src/test,
+the six `toContain` pins of `signal-alerts-v41-2026-11-20` (amdpo3-alerts.test.tsx:138, emarm-alerts.test.tsx:182,
+indicator-alerts.test.tsx:1247, macd-fade-alerts.test.ts:1723, spike-alerts.test.tsx:257 and
+stockmacd-alerts.test.tsx:967 at fb7b74d) to the rollback's version, and keeps v42's literal `SWITCH_DATE` line of
+signal-alert-settings.test.tsx in place of fb7b74d's (:32-34), which reads `FUNCTION_VERSION` with a regex that a
+rollback version does not match, so that the whole file stops at load; that line is not pointed at the rollback,
+since 〔switch〕 stays v41's 2026-11-20 (sweepx-alerts.test.ts:295 and stockmacd-alerts.test.tsx:1390 match by prefix
+and pass as they are). The whole suite is run on the rollback tree before it is merged. The push redeploys all eight
+functions (4.4): on a weekday the merge minute is chosen clear of the quarter-hour sweeps and the FX closes, or
+postmortem is paused first (OPS:832-835). Publish the reverted screen. The migration stays: v41 does not use the
+table or the functions and the
 wider check is harmless to it. Under v41 the rows of shares outside the 22 are not read (SA/index.ts:1598-1600 with
 v41's predicate), so their followers get no mail, and v41 refuses to untick them (SA/index.ts:2159-2162); v41's `set`
 and `set_many` add rows of the 22 with no cap, so the count can pass 50 (3.2). If the rollback lasts, the rows outside

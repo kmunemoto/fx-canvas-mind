@@ -1719,8 +1719,9 @@ describe("v41 the function's code, read as text", () => {
     return out;
   };
 
-  it("is v41", () => {
-    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v41-2026-11-20";');
+  // (v42 changed the shares' email only: any share, research/allstocks-prod-spec.md; the pairs' and gold's fade as v41)
+  it("is v42", () => {
+    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v42-2026-11-22";');
   });
 
   it("the fade is judged in its own try / catch after the other rules' mails; its price from the run's own read of the pair's own chart (fadeQuotes keyed by pair and chart, spec 3.2 item 5); unsettled only on an error; one side a bar", () => {
