@@ -1,0 +1,219 @@
+# 全銘柄 #93 (read only): how many shares can the share email's run read from Yahoo in one run, and does Yahoo keep
+# answering when the run reads that many every minute?
+#
+# The owner's choice (2026-11-21, option 1): no list of listed shares is kept in the app (JPX's and Nasdaq Trader's
+# terms ask for permission before their lists are used again); a share found by Yahoo's search, as the app's search
+# finds it, may be followed for the email. So how many shares the email can follow is bounded by how many Yahoo answers
+# the run (signal-alerts, mode "stocks", once a minute) can read. That run reads one share after another, Yahoo's
+# 15-minute bars over 60 days (live-chart/stocks.ts yahooChartUrl, User-Agent "Mozilla/5.0", 10 s timeout), and starts
+# no read once it has spent 30 seconds (signal-alerts/stocks.ts STOCK_RUN_BUDGET_MS). A Tokyo share is read about once
+# a minute through the session (Yahoo's Tokyo bars come some 15 minutes late), so N Tokyo shares followed are about N
+# reads a minute.
+#
+# This reads as that run does, from GitHub's runner (not from Supabase's: a different address, so Yahoo may treat it
+# differently; said so with the numbers):
+#   1. find shares with the app's search (Yahoo's search endpoint, English names of well-known companies; Japanese words
+#      are refused by Yahoo), kept as the app keeps them (an EQUITY on a US exchange, or Tokyo's JPX), up to TARGET of
+#      each market;
+#   2. read every share found once, one after another (cold): status, time, bytes, rows;
+#   3. for MINUTES minutes, at the start of each minute, read PER_MINUTE of them one after another, starting no read
+#      after 30 seconds (the run's budget), as the run would with that many Tokyo shares followed; stop early if Yahoo
+#      refuses 10 or more in a minute;
+#   4. read PER_MINUTE of them once more with 4 at a time, to see what reading in parallel would give.
+#
+# This repository is public, so its Actions logs are too, and Yahoo's terms say 「You must not redistribute information
+# displayed on or provided by Yahoo Finance」 (help.yahoo.com/kb/SLN2310.html): no price, no name and no symbol is
+# printed, only counts, HTTP statuses, times, sizes and row counts. At most about 900 requests in all.
+name: yahoo-capacity-probe
+on:
+  push:
+    branches:
+      - claude/app-confirmation-jvmk03
+    paths:
+      - .github/workflows/yahoo-capacity-probe.yml
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Minutes of reading PER_MINUTE shares every minute"
+        required: false
+        default: "10"
+      per_minute:
+        description: "Shares read at the start of each minute (one after another, 30 s budget)"
+        required: false
+        default: "60"
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Read Yahoo as the share email's run does (counts, statuses and times only)
+        env:
+          MINUTES: ${{ github.event.inputs.minutes || '10' }}
+          PER_MINUTE: ${{ github.event.inputs.per_minute || '60' }}
+        run: |
+          python3 - <<'PY'
+          import concurrent.futures as cf, datetime, json, os, re, statistics, time, urllib.error, urllib.parse, urllib.request
+          UA = {"User-Agent": "Mozilla/5.0"}
+          MINUTES = max(1, min(15, int(os.environ["MINUTES"])))
+          PER_MINUTE = max(1, min(80, int(os.environ["PER_MINUTE"])))
+          TARGET = max(60, (PER_MINUTE + 1) // 2)
+          BUDGET_S = 30.0
+          # as live-chart/stocks.ts: isStockSymbol, US_EXCHANGES, parseYahooSearch
+          US_RE = re.compile(r"^[A-Z]{1,5}(-[A-Z]{1,2})?$")
+          JP_RE = re.compile(r"^[0-9][0-9A-Z]{3}\.T$")
+          US_EX = {"NMS", "NGM", "NCM", "NYQ", "ASE", "PCX", "BTS"}
+          now = lambda: datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+          def pct(xs, p):
+              if not xs:
+                  return None
+              s = sorted(xs)
+              return s[min(len(s) - 1, int(round(p / 100 * (len(s) - 1))))]
+          def fmt_ms(v):
+              return "-" if v is None else f"{v / 1000:.2f} s"
+          def get(url, timeout):
+              t0 = time.monotonic()
+              try:
+                  with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout) as r:
+                      body = r.read()
+                      status = r.status
+              except urllib.error.HTTPError as e:
+                  status, body = e.code, b""
+              except Exception as e:
+                  status, body = type(e).__name__, b""
+              return status, (time.monotonic() - t0) * 1000, body
+          # 1. the app's search (yahooSearchUrl, with more quotes per answer)
+          WORDS = [
+              "apple", "microsoft", "nvidia", "amazon", "alphabet", "meta", "tesla", "intel", "broadcom", "oracle",
+              "salesforce", "adobe", "netflix", "cisco", "qualcomm", "texas instruments", "micron", "ibm", "paypal",
+              "visa", "mastercard", "jpmorgan", "bank of america", "wells fargo", "goldman", "morgan stanley",
+              "citigroup", "berkshire", "exxon", "chevron", "pfizer", "merck", "johnson", "abbvie", "eli lilly",
+              "walmart", "costco", "home depot", "nike", "starbucks", "mcdonald", "coca-cola", "pepsico", "procter",
+              "disney", "boeing", "caterpillar", "ford", "general motors", "uber",
+              "toyota", "sony", "honda", "nissan", "mitsubishi", "mitsui", "sumitomo", "hitachi", "panasonic",
+              "toshiba", "canon", "nikon", "fujitsu", "softbank", "rakuten", "kddi", "nippon telegraph", "nomura",
+              "daiwa", "mizuho", "resona", "seven & i", "aeon", "fast retailing", "nintendo", "bandai namco", "capcom",
+              "konami", "sega sammy", "shiseido", "kao", "takeda", "astellas", "daiichi sankyo", "eisai", "chugai",
+              "otsuka", "kirin", "asahi group", "ajinomoto", "kikkoman", "yamaha", "suzuki motor", "mazda", "subaru",
+              "isuzu", "denso", "bridgestone", "komatsu", "kubota", "fanuc", "keyence", "murata", "tdk", "kyocera",
+              "omron", "shin-etsu", "tokyo electron", "advantest", "lasertec", "disco", "renesas", "rohm",
+              "east japan railway", "central japan railway", "ana holdings", "japan airlines", "japan post",
+              "japan tobacco", "inpex", "eneos", "nippon steel", "jfe", "marubeni", "itochu", "sojitz", "orix",
+              "daikin", "secom", "recruit", "oriental land", "nitori", "olympus", "terumo", "sysmex", "hoya", "ricoh",
+              "brother industries", "seiko", "casio",
+          ]
+          found = {"us": [], "jp": []}
+          seen = set()
+          search_status = {}
+          searches = 0
+          for w in WORDS:
+              if len(found["us"]) >= TARGET and len(found["jp"]) >= TARGET:
+                  break
+              url = "https://query2.finance.yahoo.com/v1/finance/search?" + urllib.parse.urlencode(
+                  {"q": w, "quotesCount": 20, "newsCount": 0, "lang": "ja-JP", "region": "JP"})
+              status, ms, body = get(url, 10)
+              searches += 1
+              search_status[status] = search_status.get(status, 0) + 1
+              if status != 200:
+                  time.sleep(1)
+                  continue
+              try:
+                  quotes = json.loads(body).get("quotes") or []
+              except Exception:
+                  quotes = []
+              for x in quotes:
+                  sym = x.get("symbol") if isinstance(x, dict) else None
+                  if not isinstance(sym, str) or x.get("quoteType") != "EQUITY" or sym in seen:
+                      continue
+                  ex = x.get("exchange") or ""
+                  if JP_RE.match(sym) and ex == "JPX":
+                      m = "jp"
+                  elif US_RE.match(sym) and ex in US_EX:
+                      m = "us"
+                  else:
+                      continue
+                  if len(found[m]) < TARGET:
+                      found[m].append(sym)
+                      seen.add(sym)
+              time.sleep(0.3)
+          print(f"[{now()} UTC] 1. search: {searches} searches, statuses {search_status}; shares kept: US {len(found['us'])}, Tokyo {len(found['jp'])} (target {TARGET} each)", flush=True)
+          # interleave the markets, so that any PER_MINUTE of them hold both
+          syms = []
+          for i in range(max(len(found["us"]), len(found["jp"]))):
+              for m in ("jp", "us"):
+                  if i < len(found[m]):
+                      syms.append((m, found[m][i]))
+          if not syms:
+              raise SystemExit("no share found: nothing to read")
+          def chart(sym):
+              url = f"https://query1.finance.yahoo.com/v8/finance/chart/{urllib.parse.quote(sym)}?interval=15m&range=60d&includePrePost=false"
+              status, ms, body = get(url, 10)
+              rows = None
+              if status == 200:
+                  try:
+                      r = json.loads(body)["chart"]["result"][0]
+                      rows = len(r.get("timestamp") or [])
+                  except Exception:
+                      rows = -1
+              return status, ms, len(body), rows
+          def report(label, res, wall_s):
+              st = {}
+              for r in res:
+                  st[r[0]] = st.get(r[0], 0) + 1
+              ok = [r for r in res if r[0] == 200]
+              ms = [r[1] for r in ok]
+              print(f"  {label}: {len(res)} reads in {wall_s:.1f} s; statuses {st}; time per answered read p50 {fmt_ms(pct(ms, 50))}, p90 {fmt_ms(pct(ms, 90))}, p99 {fmt_ms(pct(ms, 99))}, max {fmt_ms(max(ms) if ms else None)}; bytes p50 {pct([r[2] for r in ok], 50)}; rows p50 {pct([r[3] for r in ok], 50)} (min {min([r[3] for r in ok], default=None)}); empty or unreadable answers {sum(1 for r in ok if not r[3] or r[3] < 0)}", flush=True)
+          # 2. every share once, one after another
+          print(f"[{now()} UTC] 2. every share once, one after another ({len(syms)} shares)", flush=True)
+          t0 = time.monotonic()
+          cold = []
+          in_budget = None
+          for m, s in syms:
+              cold.append(chart(s) + (m,))
+              if in_budget is None and time.monotonic() - t0 >= BUDGET_S:
+                  in_budget = len(cold)
+          wall = time.monotonic() - t0
+          report("all", cold, wall)
+          for m, name in (("us", "US"), ("jp", "Tokyo")):
+              report(name, [r for r in cold if r[4] == m], wall)
+          print(f"  reads started within the first {BUDGET_S:.0f} s: {in_budget if in_budget is not None else len(cold)}", flush=True)
+          # 3. PER_MINUTE shares at the start of each minute, the run's 30 s budget
+          use = syms[:PER_MINUTE]
+          print(f"[{now()} UTC] 3. {len(use)} shares at the start of each minute for {MINUTES} minutes (one after another, no read started after {BUDGET_S:.0f} s)", flush=True)
+          total = {"reads": 0, "skipped": 0}
+          all_st = {}
+          first_refusal = None
+          for k in range(MINUTES):
+              nxt = (int(time.time()) // 60 + 1) * 60
+              time.sleep(max(0, nxt - time.time()))
+              t0 = time.monotonic()
+              res = []
+              skipped = 0
+              for m, s in use:
+                  if time.monotonic() - t0 >= BUDGET_S:
+                      skipped += 1
+                      continue
+                  res.append(chart(s) + (m,))
+              wall = time.monotonic() - t0
+              total["reads"] += len(res)
+              total["skipped"] += skipped
+              refused = sum(1 for r in res if r[0] != 200)
+              for r in res:
+                  all_st[r[0]] = all_st.get(r[0], 0) + 1
+              if refused and first_refusal is None:
+                  first_refusal = (k + 1, [r[0] for r in res if r[0] != 200][:5])
+              report(f"minute {k + 1} ({now()} UTC), not started for the budget {skipped}", res, wall)
+              if refused >= 10:
+                  print("  stopped: 10 or more reads not answered in one minute", flush=True)
+                  break
+          print(f"  in all: {total['reads']} reads, {total['skipped']} not started for the budget; statuses {all_st}; first minute with a read not answered: {first_refusal}", flush=True)
+          # 4. the same shares once, 4 at a time
+          print(f"[{now()} UTC] 4. {len(use)} shares once, 4 at a time", flush=True)
+          time.sleep(5)
+          t0 = time.monotonic()
+          with cf.ThreadPoolExecutor(max_workers=4) as ex:
+              par = list(ex.map(lambda ms: chart(ms[1]) + (ms[0],), use))
+          report("4 at a time", par, time.monotonic() - t0)
+          print(f"[{now()} UTC] done", flush=True)
+          PY

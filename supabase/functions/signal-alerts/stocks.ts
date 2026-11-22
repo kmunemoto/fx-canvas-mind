@@ -37,29 +37,43 @@
 // is in. How the closing points join the bar before them is parseYahooChart's (live-chart/stocks.ts), unchanged here;
 // it is not yet fitted to 15-minute bars (the spec's 3.3 item 6), so no text here says that a session's last bar is
 // judged on its closing price.
+//
+// v42 (research/allstocks-prod-spec.md 2, 3, 4.1 and 7): any share the app's chart search would offer may be followed,
+// not only the 22 (the owner, 2026-11-21: 「1で」, 「50銘柄まで（おすすめ）」). The rule's chart is told by the symbol's
+// shape (isStockmacdChart: live-chart/stocks.ts isStockSymbol, on the 15-minute chart); which shares may be added, and
+// the cap of 50 distinct shares for all users together (STOCKMACD_CAP), are index.ts's `set` (Yahoo's search at the
+// time a share is first added) and the database's public.stockmacd_follow. A share outside the 22 is named in its mail
+// by the name Yahoo's search gave when it was added (stored in public.signal_alert_stocks, cleaned by stockNameClean),
+// or by its code alone; the judgment is unchanged.
 
 import type { Candle } from "../analyze/indicators.ts";
 import { barOpenMs } from "../analyze/state.ts";
 import { ZONE_BARS } from "../_shared/macd-level.ts";
 import { FADE_PCT, FADE_SHARE, fadeCloseEntryAt, fadeRuleId, type FadeEntry } from "../_shared/macd-fade.ts";
-import { parseYahooChart, stockDecimals, stockMarketOf } from "../live-chart/stocks.ts";
+import { isStockSymbol, parseYahooChart, stockDecimals, stockMarketOf } from "../live-chart/stocks.ts";
 // (indicators.ts imports this file too: nothing of it is used here while the module is loaded, only inside the mails)
 import type { IndicatorSignal } from "./indicators.ts";
 import { APP_URL, assemble, clock, tfLabel, type Lang, type Mail } from "./logic.ts";
 
-// The shares measured in docs §8.133 (the live chart's list, src/lib/stocks.ts), in its order
+// The 22 listed from the start: the screen's rows before any search (the shares docs §8.133 measured); v42: any share
+// of the search may be followed too (the live chart's list, src/lib/stocks.ts, in its order)
 export const STOCKMACD_PAIRS: readonly string[] = [
   "NVDA", "INTC", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA",
   "7203.T", "6758.T", "9984.T", "8306.T", "6861.T", "9983.T", "8035.T", "7974.T", "9432.T", "6501.T", "7267.T",
   "6920.T", "4063.T", "8058.T",
 ];
+// v42 (research/allstocks-prod-spec.md 3.1): at most this many distinct shares are followed on the 15-minute chart,
+// all users together (enforced by public.stockmacd_follow, not here)
+export const STOCKMACD_CAP = 50;
+export const isListedStock = (p: string) => STOCKMACD_PAIRS.includes(p);
 // v41 (research/macdfade15min-prod-spec.md 3.3 item 1): the shares' 15-minute chart (v40's was the 1-hour one). This
 // one constant drives isStockmacdChart, the run's subscriptions, the bars read (Yahoo's `15m`), the status call, set /
 // set_many and the rule id
 export const STOCKMACD_INTERVALS = ["15min"] as const;
+// v42 (research/allstocks-prod-spec.md 4.1): the symbol's shape (a US ticker or a Tokyo code on ".T"), not the list;
+// the cap is the database call's
 export const isStockmacdChart = (pair: unknown, interval: unknown): boolean =>
-  typeof pair === "string" && typeof interval === "string" && STOCKMACD_PAIRS.includes(pair) &&
-  (STOCKMACD_INTERVALS as readonly string[]).includes(interval);
+  isStockSymbol(pair) && typeof interval === "string" && (STOCKMACD_INTERVALS as readonly string[]).includes(interval);
 // The rule's id (its own, so the FX record and the morning check's never take it in; it starts with "stockmacd", as
 // the app reads the rule back from it). #391: the 95% email's was stockmacd_12_26_9_w600_1h_z95of120_v1, never written
 // again; #397: the ride's three, stockmacd_12_26_9_w600_1h_ride90to96of120_{in,at,out}_v2, written no more from v40.
@@ -97,7 +111,19 @@ const NAMES: Record<string, { ja: string; en: string }> = {
   "4063.T": { ja: "信越化学工業", en: "Shin-Etsu Chemical" },
   "8058.T": { ja: "三菱商事", en: "Mitsubishi Corporation" },
 };
-export const stockNameOf = (sym: string, lang: Lang): string => NAMES[sym]?.[lang] ?? sym;
+// v42 (research/allstocks-prod-spec.md 4.1 and 7): the 22's own names; another share's stored one (Yahoo's search's,
+// cleaned by stockNameClean); else null (the mail writes the code alone, not "XYZ（XYZ）")
+export const stockNameOf = (sym: string, lang: Lang, stored: string | null = null): string | null =>
+  NAMES[sym]?.[lang] ?? (stored === sym ? null : stored);
+// v42: a name as it is stored or mailed: the control characters (U+0000-U+001F, U+007F) made spaces, runs of spaces
+// made one, trimmed, cut to 100 code points (so no half of a surrogate pair is left); null when empty, not a string,
+// or the symbol itself (a Yahoo hit with no longname or shortname has its symbol as its name)
+export const stockNameClean = (v: unknown, sym: string): string | null => {
+  if (typeof v !== "string") return null;
+  // eslint-disable-next-line no-control-regex
+  const s = [...v.replace(/[\u0000-\u001F\u007F]/g, " ").replace(/ {2,}/g, " ").trim()].slice(0, 100).join("");
+  return s === "" || s === sym ? null : s;
+};
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -310,7 +336,10 @@ export const renderStockMail = (s: IndicatorSignal, lang: Lang): Mail => {
   const edge = f ? (top ? f.top : f.bottom) : null;
   const mx = macdText(s.pair, edge);
   const mark = edge === null ? null : FADE_SHARE * edge;
-  const name = stockNameOf(s.pair, lang);
+  // v42 (research/allstocks-prod-spec.md 7): the 22's own name, another share's stored one (Yahoo's search's), else
+  // none: then the code alone. A stored name is named Yahoo's in the source line
+  const name = stockNameOf(s.pair, lang, s.stockName ?? null);
+  const yahooName = name !== null && NAMES[s.pair] === undefined;
   const open = Date.parse(s.barTime);
   // the bar's end (stockBarEnd), as the run gives it
   const close = Date.parse(s.closedAt);
@@ -326,8 +355,10 @@ export const renderStockMail = (s: IndicatorSignal, lang: Lang): Mail => {
     const side = buy ? "BUY" : "SELL";
     const end = top ? "top" : "bottom";
     const market = jp ? "Tokyo" : "US";
-    return assemble(`[Sextant] ${name} (${s.pair}) ${tf} ${buy ? "BUY" : "SELL (short sale)"}: the MACD line closed at ${FADE_PCT}% of the ${end} (Stock MACD)`, [
-      `A MACD fade ${side} signal on ${name} (${s.pair}, ${market}), ${tf} chart.${buy ? "" : " A SELL on a share is a short sale."}`,
+    const label = name === null ? `${s.pair} ` : `${name} (${s.pair}) `;
+    const on = name === null ? `${s.pair} (${market})` : `${name} (${s.pair}, ${market})`;
+    return assemble(`[Sextant] ${label}${tf} ${buy ? "BUY" : "SELL (short sale)"}: the MACD line closed at ${FADE_PCT}% of the ${end} (Stock MACD)`, [
+      `A MACD fade ${side} signal on ${on}, ${tf} chart.${buy ? "" : " A SELL on a share is a short sale."}`,
       [
         `Bar judged: the ${tf} bar that closed at ${clock(close, 0)} UTC (${clock(close, 9)} JST)`,
         `At this bar's close the MACD line (blue) was at ${FADE_PCT}% or more of the ${end} of the MACD pane of the newest ${ZONE_BARS} bars (${tf}) (the ${top ? "highest" : "lowest"} of the blue line, the orange line and the bars), measured from the zero line. At the close of the bar before, it was below ${FADE_PCT}%. It is the ${end}, so this is a fade ${side} signal.`,
@@ -343,15 +374,17 @@ export const renderStockMail = (s: IndicatorSignal, lang: Lang): Mail => {
         " The price when it arrives may differ from the close above (the difference has not been measured).",
       "Not measured on shares.",
       `This rule is Sextant's own, not a published indicator. ${FADE_PCT}%, judging at the bar's close, judging shares on ${tf} bars, the MACD pane of the newest ${ZONE_BARS} ${tf} bars, the fade side (shares included) and stating no take-profit or stop price are the app owner's choices. That pane is the same as the app's ${tf} chart's.`,
-      `The bars and the price are Yahoo Finance's public data (not an official feed; it may stop), the same as the app's stock chart. Check the latest state in the app before you place an order:\n${APP_URL}`,
+      `${yahooName ? "The bars, the price and the stock's name are" : "The bars and the price are"} Yahoo Finance's public data (not an official feed; it may stop), the same as the app's stock chart. Check the latest state in the app before you place an order:\n${APP_URL}`,
       "To stop these emails, open Settings → Email alerts in the app and untick the share under Stock MACD.\nThis is reference information, not investment advice. Every trading decision is your own.",
     ]);
   }
   const sideJ = `${buy ? "買い" : "売り"}（${s.side}）`;
   const end = top ? "上" : "下";
   const market = jp ? "東証" : "米国";
-  return assemble(`【Sextant】${name}（${s.pair}）${tf} ${buy ? "買い（BUY）" : "売り（SELL・空売り）"}: 青い線が${end}の端の${FADE_PCT}%で確定（株の MACD）`, [
-    `${name}（${s.pair}、${market}）の${tf}で、MACD の逆張りの${sideJ}の合図が出ました。${buy ? "" : "株の売りは空売りです。"}`,
+  const labelJ = name === null ? `${s.pair} ` : `${name}（${s.pair}）`;
+  const onJ = name === null ? `${s.pair}（${market}）` : `${name}（${s.pair}、${market}）`;
+  return assemble(`【Sextant】${labelJ}${tf} ${buy ? "買い（BUY）" : "売り（SELL・空売り）"}: 青い線が${end}の端の${FADE_PCT}%で確定（株の MACD）`, [
+    `${onJ}の${tf}で、MACD の逆張りの${sideJ}の合図が出ました。${buy ? "" : "株の売りは空売りです。"}`,
     [
       `判定した足: ${clock(close, 9)}（日本時間）に確定した${tf}`,
       `この足の終わりで、青い線（MACD）が、新しい${ZONE_BARS}本（${tf}）の MACD の枠の${end}の端（青い線・オレンジの線・棒の${top ? "一番高い" : "一番低い"}所）の${FADE_PCT}%以上（0の線から測って）でした。一つ前の足の終わりでは、${FADE_PCT}%に届いていませんでした。${end}の端なので、逆張りの${sideJ}の合図です。`,
@@ -367,7 +400,7 @@ export const renderStockMail = (s: IndicatorSignal, lang: Lang): Mail => {
       "届いた時の値段は、上の終値と違うことがあります（その差は測っていません）。",
     "株では測っていません。",
     `この決まりは Sextant 独自のもので、公開されているインジケーターではありません。${FADE_PCT}%・足の確定で判定すること・株を${tf}で判定すること・MACD の枠を${tf}の新しい${ZONE_BARS}本にすること・逆張りの向き（株にも当てはめること）・利確と損切りの値段を書かないことは、アプリのオーナーが決めたものです。この枠は、アプリの${tf}のチャートの枠と同じです。`,
-    `足と値段は Yahoo Finance の公開データ（公式の配信ではないため、止まることがあります）で、アプリの株のチャートと同じです。注文の前にアプリで最新の状態を確認してください。\n${APP_URL}`,
+    `${yahooName ? "足と値段と銘柄の名前は" : "足と値段は"} Yahoo Finance の公開データ（公式の配信ではないため、止まることがあります）で、アプリの株のチャートと同じです。注文の前にアプリで最新の状態を確認してください。\n${APP_URL}`,
     "この通知を止めるには、アプリの「設定」→「メール通知」の「株の MACD」でチェックを外してください。\n本メールは参考情報であり、投資助言ではありません。取引の最終判断はご自身の責任で行ってください。",
   ]);
 };
