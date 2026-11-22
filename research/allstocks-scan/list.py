@@ -32,7 +32,7 @@ NASDAQ_HEADER = ["Symbol", "Security Name", "Market Category", "Test Issue", "Fi
 OTHER_HEADER = ["ACT Symbol", "Security Name", "Exchange", "CQS Symbol", "ETF", "Round Lot Size", "Test Issue", "NASDAQ Symbol"]
 # the kinds of a US security kept: common and ordinary shares, ADRs, and the other share kinds (REITs, business
 # development companies, registry and voting shares); left out: warrants, rights, units, preferred shares, notes and
-# debentures, closed-end funds
+# debentures, closed-end funds and other funds and exchange-traded notes named as such
 US_KEPT = {"common", "adr", "other"}
 
 
@@ -54,7 +54,9 @@ def us_kind(name):
         return "preferred"
     if re.search(r"\bnotes?\b|debenture", low):
         return "note"
-    if "closed end fund" in low or "closed-end fund" in low:
+    # funds and exchange-traded notes the ETF column does not mark (seen in the first run, 2026-11-22: an ETN on VIX
+    # futures and a credit fund were kept as "other")
+    if "closed end fund" in low or "closed-end fund" in low or re.search(r"\bfund\b|\betns?\b|exchange traded|exchange-traded", low):
         return "fund"
     if "american depositary" in low or "american depository" in low or re.search(r"\bads\b|\badss\b", low):
         return "adr"
