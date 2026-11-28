@@ -131,6 +131,9 @@ import {
   type IndicatorSignal,
   type KlineFile,
 } from "./indicators.ts";
+// v43: the five pairs' 5-minute chart's ended files from GMO, checked against
+// the kept copies' index (public.gmo_kline_index)
+import { KLINE_DIRECT_BUDGET_MS, KLINE_DIRECT_TRIES, isKlineDirectChart, keptIndexOf, klineDigest, symbolsOf, type KeptSum } from "./kline-direct.ts";
 // v40 (docs §8.155): the MACD email as the fade at a closed 1-hour bar, the
 // code research/macdfade-prod-check.ts holds to the study's entries (v41: at
 // a closed bar of each pair's own chart, 15-minute or 1-hour). (#397: v39's
@@ -449,26 +452,57 @@ import type { Candle } from "../analyze/indicators.ts";
 // the pairs' old '15min' and '1h' rows are deleted, and the release's report
 // says it is live, as v41's did (docs §8.156). Until then its digest goes by
 // v42's map (the old rows, not the '5min' ones).
-// The 5-minute reads' cost (an estimate, not measured): the five charts are
-// read at 36 minutes an hour (the close and 1 and 3 minutes after), and a run
-// on a new instance (the usual case) reads each chart's kept GMO files again
-// from public.gmo_kline_files (preload). With 8 days of them that was some
-// 5.4 non-empty weekday files a pair (up to 6), each of both sides (a
-// 288-bar file about 31 KB as stored), about 1.7 MB a run for the five and
-// some 60 MB an hour (perhaps some 8 times less if the answers are counted
-// gzipped); v42's 'macdx' reads were some 4 to 5 MB an hour. So the
-// 5-minute chart's span is cut to the days its walk can ask for
-// (indicators.ts klinePreloadDays: 6, not 8): some 4.0 non-empty files a
-// pair (the file counts are a probe's, of the walk over made-up files),
-// about 1.25 MB a run and some 45 MB an hour, still about ten times v42's.
-// After the release: read files.table in the run's answers
-// (net._http_response) and the project's egress in its usage, in the first
-// hours; if it is too much for the plan, the rollback is the pairs back on
-// v42's charts (MACDH_INTERVAL_OF) with their '15min' and '1h' rows (kept
-// until the morning check has read the new form). (A row keeping each
-// chart's last judged bar, so the runs 1 and 3 minutes after a close on new
-// instances skip a bar already judged, would cut some two thirds more; it
-// needs a new table, a migration, and the owner's decision.)
+// The 5-minute reads' cost. Measured in production on 2026-11-28
+// (octet_length(body::text) over public.gmo_kline_files: the stored JSON
+// text, not the bytes on the wire): the kept 5-minute files are 23,925 bytes
+// on average (at most 30,802; 502 files), the 15-minute ones 8,371 and the
+// 1-hour ones 2,145. Every other number here is an estimate, not measured.
+// The five charts are read at 36 minutes an hour (the close and 1 and 3
+// minutes after), and a run on a new instance (the usual case) read each
+// chart's kept files again from the table (preload): over the 6 days its walk
+// can ask for (indicators.ts klinePreloadDays; 8 before), some 4.0 non-empty
+// files a pair, each of both sides (the count is a probe's, of the walk over
+// made-up files), some 0.96 MB a run for the five, some 34 MB an hour and
+// some 18 GB a month at some 520 open hours, against the organization's 5 GB
+// a month (Supabase's Free plan, the organization's plan as read on
+// 2026-11-28); v42's 'macdx' reads were some 4 to 5 MB an
+// hour. So the five charts take their ended files from GMO
+// (kline-direct.ts; keptIndex and directFetcher below), each used only when
+// it equals the kept copy bar for bar (the same count and digest), else that
+// kept copy alone is read from the table: the bars judged are the kept
+// copies', as before. The table sends a run the index of what it keeps
+// (public.gmo_kline_index, migration 20261128130000): at most some 60 rows of
+// some 70 bytes, some 4.4 KB, and a kept copy (some 24 KB) only after GMO's
+// answer failed twice, was cut short or differed, or past the 30 s guard;
+// with an assumed 0.2% of the kept files read so, some 6 KB a run and some
+// 0.12 GB a month (each 1% more adds some 0.11 GB a month; were the two
+// digests never to agree, some 11 GB, which files.mismatch shows). The price:
+// some 876 GMO requests an hour more for these charts (the probe's 4.87 ended
+// files a pair a run; with the 488 an hour v43 asked for their live files,
+// some 2.8 times as many), and some 5 s more a 5-minute run (24 more requests
+// at GMO_GAP_MS; GMO's answer times not measured), so the later pairs' fade
+// mails and the sharp rise's come some 5 s later at those minutes, and those
+// seconds come out of the run's one FETCH_BUDGET_MS before the 15-minute and
+// 1-hour charts are read (gmoCharts go 5min first), which matters only for a
+// run already near it (how long runs take was not measured);
+// KLINE_DIRECT_BUDGET_MS bounds it when GMO is slow. GMO's rate limit was not
+// checked (its documentation could not be reached; docs/OPERATIONS.md says it
+// has none, which nobody verified). The migration goes in BEFORE this
+// function (docs/OPERATIONS.md §6.1 item 5; nothing in the repository applies
+// migrations, and a merge to main deploys the function): until it is in, each
+// run's index read fails (files.index_failed 1) and the run reads as v43's
+// first build did, some 34 MB an hour. After the release, in the run's answers
+// (net._http_response): files.index_failed 0, files.indexed some 40 to 60,
+// files.matched about files.direct, files.mismatch, files.fallback and
+// files.hole near 0; and the project's egress in its usage. The rollback:
+// drop the function public.gmo_kline_index (at once, no redeploy: each run
+// then reads as v43's first build did, the preload); if that is too much for
+// the plan, the pairs back on v42's charts (MACDH_INTERVAL_OF) with their
+// '15min' and '1h' rows (kept until the morning check has read the new form).
+// (A row keeping each chart's last judged bar, so the runs 1 and 3 minutes
+// after a close on new instances skip a bar already judged, would bring GMO's
+// requests back below v43's; it needs a new table, a migration, and the
+// owner's decision.)
 // v43 too, the shares: Shin-Etsu Chemical (4063.T) judged on its 1-hour bars,
 // the owner's 「信越化学工業 のメールは1時間足で判断して」 (2026-11-27); every
 // other share on its 15-minute bars as in v42. One map says it (stocks.ts
@@ -559,7 +593,10 @@ interface IndicatorSub {
 //
 // GMO's ended files (indicators.ts "GMO's files, kept"): those this instance
 // has read, by klineFileKey; the table keeps them across instances, and each
-// chart's are read from it once an instance
+// chart's are read from it once an instance (v43: the five pairs' 5-minute
+// chart's from GMO, each checked against the table's index of its kept
+// copies, kline-direct.ts; nothing more is kept for it, here or in a table:
+// the index is read again each run)
 const klineMemory = new Map<string, unknown>();
 const KLINE_MEMORY_MAX = 6000;
 // (#395: and how many days of them, a chart's read being 600 bars and the
@@ -921,7 +958,15 @@ Deno.serve(async (req: Request) => {
       const deadline = Date.now() + FETCH_BUDGET_MS;
       const reads: JsonRecord[] = [];
       const fired: IndicatorSignal[] = [];
-      const files = { memory: 0, table: 0, ended: 0, live: 0, stale: 0 };
+      // (v43, the five pairs' 5-minute chart, kline-direct.ts: `direct` GMO's
+      // answers asked for kept ended files, tries included; `matched` those
+      // equal to the kept copy; `mismatch` sound ones that were not;
+      // `fallback` kept copies read from the table one at a time; `hole` kept
+      // files had from neither (GMO's answer and the table's read both
+      // failed), the chart then not judged; `indexed` the index's rows, -1
+      // when it was not read; `index_failed` 1 when its read failed, and the
+      // run read as before)
+      const files = { memory: 0, table: 0, ended: 0, live: 0, stale: 0, direct: 0, matched: 0, mismatch: 0, fallback: 0, hole: 0, indexed: -1, index_failed: 0 };
 
       // GMO, a request at a time; once it says it is down for maintenance,
       // no more
@@ -996,6 +1041,112 @@ Deno.serve(async (req: Request) => {
           files.table++;
         }
         klinePreloaded.set(key, Math.max(klinePreloaded.get(key) ?? 0, days));
+      };
+      // v43 (kline-direct.ts): the five pairs' 5-minute chart, read 36 minutes
+      // an hour, mostly on new instances, takes its ended files from GMO, each
+      // checked against the copy the table keeps, instead of the preload's six
+      // days of them. What the table keeps of those charts' symbols in the
+      // preload's span: one short row a file (its bars' count and digest),
+      // read once a run, at the first of those charts not skipped. null when
+      // it could not be read (an answer that is not 2xx, rows not of its
+      // shape, a request that failed): then each chart reads as before
+      let directUntil = 0;
+      let keptIndexRead: Promise<Map<string, KeptSum> | null> | null = null;
+      const keptIndex = (): Promise<Map<string, KeptSum> | null> => {
+        keptIndexRead ??= (async () => {
+          const name = GMO_INTERVALS["5min"].name;
+          try {
+            const symbols = [...new Set(gmoCharts.filter((c) => isKlineDirectChart(c.pair, c.interval)).map((c) => GMO_SYMBOLS[c.pair]))].sort();
+            const since = jstDayKey(nowMs - klinePreloadDays("5min", HISTORY_BARS + 1) * 24 * 60 * MIN);
+            const res = await rest("rpc/gmo_kline_index", { method: "POST", body: JSON.stringify({ p_interval: name, p_symbols: symbols, p_since: since }) });
+            if (!res.ok) {
+              console.error("kline index failed:", res.status);
+              await res.body?.cancel();
+              files.index_failed = 1;
+              return null;
+            }
+            const index = keptIndexOf(await res.json().catch(() => null), name);
+            if (index === null) {
+              console.error("kline index failed:", "rows");
+              files.index_failed = 1;
+              return null;
+            }
+            files.indexed = index.size;
+            // past this, kept files are read from the table (GMO slow); never
+            // past the run's deadline, as chartFetcher's reads again
+            directUntil = Math.min(Date.now() + KLINE_DIRECT_BUDGET_MS, deadline);
+            return index;
+          } catch (err) {
+            console.error("kline index failed:", errText(err));
+            files.index_failed = 1;
+            return null;
+          }
+        })();
+        return keptIndexRead;
+      };
+      // One kept file's body, from the table; null when it could not be read
+      const keptFile = async (f: KlineFile): Promise<unknown> => {
+        try {
+          const rows = await readRows(
+            `gmo_kline_files?symbol=eq.${encodeURIComponent(f.symbol)}&price_type=eq.${encodeURIComponent(f.priceType)}&interval=eq.${encodeURIComponent(f.interval)}&date_key=eq.${encodeURIComponent(f.date)}&select=body`,
+          );
+          return rows.length > 0 ? rows[0].body : null;
+        } catch (err) {
+          console.error("kline file read failed:", errText(err));
+          return null;
+        }
+      };
+      // chartFetcher, but an ended file the index has and this instance does
+      // not is GMO's answer when it equals the kept copy (the same bars'
+      // count and digest), else the kept copy from the table; GMO is asked
+      // KLINE_DIRECT_TRIES times at most, and not past directUntil (the 30 s
+      // guard, at most the run's deadline) or once it is down for
+      // maintenance. When the table's read fails too, GMO's sound answer is
+      // used (as v43 did after a failed preload); with none, the file is a
+      // hole (files.hole) and its chart is not judged this run. GMO's answer
+      // is never stored here, so a kept copy is never written over. Live
+      // files and files not kept go to chartFetcher (#171's reads again; GMO,
+      // and kept)
+      const directFetcher = (closeMs: number, stepMs: number, index: Map<string, KeptSum>): Fetcher => {
+        const base = chartFetcher(closeMs, stepMs);
+        return async (url) => {
+          const f = klineFileOf(url);
+          if (!f || !klineFileEnded(f.date, nowMs)) return base(url);
+          const k = klineFileKey(f);
+          const kept = index.get(k);
+          if (kept === undefined || klineMemory.has(k)) return base(url);
+          let got: unknown = null;
+          for (let tries = 1; tries <= KLINE_DIRECT_TRIES && Date.now() < directUntil && !maintenance; tries++) {
+            files.direct++;
+            got = await paced(url);
+            if (keepableKlines(got) || maintenance || Date.now() + STALE_RETRY_MS >= directUntil) break;
+            if (tries < KLINE_DIRECT_TRIES) await sleep(STALE_RETRY_MS);
+          }
+          if (keepableKlines(got)) {
+            if ((got as { data: unknown[] }).data.length === kept.n && (await klineDigest(got)) === kept.h) {
+              if (klineMemory.size >= KLINE_MEMORY_MAX) klineMemory.clear();
+              klineMemory.set(k, got);
+              files.matched++;
+              return got;
+            }
+            files.mismatch++;
+          }
+          // the kept copy, v43's own source (read under maintenance too, so
+          // the history has no hole)
+          const body = await keptFile(f);
+          if (keepableKlines(body)) {
+            if (klineMemory.size >= KLINE_MEMORY_MAX) klineMemory.clear();
+            klineMemory.set(k, body);
+            files.fallback++;
+            return body;
+          }
+          if (keepableKlines(got)) return got;
+          // neither: the read would lack this day and the walk go on to an
+          // older one, 600 bars with a day left out (in v43 the preload had
+          // it); counted, so that the chart is not judged
+          files.hole++;
+          return null;
+        };
       };
       // Each fresh signal to each follower of its chart, once (the claim's
       // unique key)
@@ -1287,12 +1438,23 @@ Deno.serve(async (req: Request) => {
           reads.push({ pair: c.pair, interval: c.interval, skipped: maintenance ? "maintenance" : "deadline" });
           continue;
         }
-        await preload(c.pair, c.interval);
+        // v43: the five pairs' 5-minute chart by the kept files' index, when
+        // it was read and holds a row of the pair (else, and every other
+        // chart, the preload)
+        const direct = isKlineDirectChart(c.pair, c.interval);
+        const index = direct ? await keptIndex() : null;
+        const usable = index !== null && symbolsOf(index).has(GMO_SYMBOLS[c.pair]);
+        if (!usable) await preload(c.pair, c.interval);
         // the chart's history read (the chart's own function), rounded as
         // drawn; #171: not from an answer GMO made before the close it is for
-        const fetcher = chartFetcher(latestCloseMs(c.interval, nowMs), step);
+        const fetcher = usable ? directFetcher(latestCloseMs(c.interval, nowMs), step, index) : chartFetcher(latestCloseMs(c.interval, nowMs), step);
+        const holes = files.hole;
         const quotes = await fetchLiveQuotes(c.pair, c.interval, nowMs, deadline, fetcher, HISTORY_BARS + 1);
-        if (!quotes || quotes.length === 0) {
+        // (v43: nor a read that lacks a kept file, directFetcher's hole, as it
+        // would judge 600 bars with a day left out: the chart is judged by a
+        // later due run that reads it whole, or not at all, as when a read
+        // fails)
+        if (!quotes || quotes.length === 0 || files.hole > holes) {
           reads.push({ pair: c.pair, interval: c.interval, error: maintenance ? "maintenance" : "unavailable" });
           continue;
         }

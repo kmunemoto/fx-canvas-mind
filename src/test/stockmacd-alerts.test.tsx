@@ -2023,8 +2023,10 @@ describe("v42 the migration file (supabase/migrations/20261122010000_stockmacd_a
     expect(from).toBeGreaterThan(100);
     expect(mig).toBe(spec.slice(from, spec.indexOf("```\n", from)));
     const names = readdirSync("supabase/migrations").filter((f) => f.endsWith(".sql")).sort();
-    expect(names[names.length - 1]).toBe("20261122010000_stockmacd_any_share.sql");
-    expect(names[names.length - 2]).toBe("20261113140000_morning_check_v9_fix.sql");
+    // (v43's index of the kept 5-minute files is the one file after it)
+    const at = names.indexOf("20261122010000_stockmacd_any_share.sql");
+    expect(names.slice(at + 1)).toEqual(["20261128130000_gmo_kline_index.sql"]);
+    expect(names[at - 1]).toBe("20261113140000_morning_check_v9_fix.sql");
   });
 
   it("the pair check: 20261031160000's 21 FX and gold literals, unchanged and in order, its 22 share literals gone, and the two shapes; each pattern equal to live-chart/stocks.ts's (its [.] read as \\.), with no backslash", () => {

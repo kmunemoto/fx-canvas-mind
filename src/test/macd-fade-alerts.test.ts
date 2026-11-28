@@ -26,11 +26,13 @@
 // (src/test/stockmacd-alerts.test.tsx).
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
 import {
   MACDH_FADE_VERSION_OF,
   MACDH_INTERVAL_OF,
   MACDH_INTERVALS,
   MACDH_PAIRS,
+  STALE_RETRY_MS,
   ULTRA_RULE_ID,
   fadeSignal,
   freshFor,
@@ -54,6 +56,7 @@ import { jstDayKey, type QuoteCandle } from "../../supabase/functions/track-outc
 import { fetchRecentQuotes } from "../../supabase/functions/analyze/price-source";
 import { APP_URL, renderTestMail } from "../../supabase/functions/signal-alerts/logic";
 import { HISTORY_BARS } from "../../supabase/functions/live-chart/logic";
+import { KLINE_DIRECT_BUDGET_MS } from "../../supabase/functions/signal-alerts/kline-direct";
 
 const H = 3_600_000;
 const MIN = 60_000;
@@ -260,7 +263,8 @@ describe("v43 the ids and the charts, per pair (spec 3.2 items 1 to 4, 3.6 and 3
           };
           const got = await fetchRecentQuotes("USD/JPY", "5min", HISTORY_BARS + 1, now, Number.POSITIVE_INFINITY, fetcher);
           expect(got?.bars.length, new Date(now).toISOString()).toBe(HISTORY_BARS + 1);
-          // index.ts preload: the kept files with date_key >= jstDayKey(now - days a day)
+          // index.ts preload: the kept files with date_key >= jstDayKey(now - days a day) (v43: and keptIndex's p_since,
+          // the index of them the five pairs' 5-minute chart reads instead: the harness below holds it to this)
           const since = jstDayKey(now - days * DAY);
           for (const k of asked.filter((x) => klineFileEnded(x, now))) {
             expect(k >= since, `${new Date(now).toISOString()} roll ${roll} holiday ${holiday}: ${k} < ${since}`).toBe(true);
@@ -862,15 +866,39 @@ const world = {
   requests: [] as string[],
   unrouted: [] as string[],
   ids: 0,
+  // v43 (kline-direct.ts): public.gmo_kline_index's answer made to fail (a status, or "throw": the request itself
+  // fails), rows answered in place of the table's (a malformed answer), the bodies it was called with; GMO's answer to
+  // a 5-minute file (`${date}|${side}`) made wrong: "null" (a 503, every time), "null_once" (a 503, once), "short"
+  // (its last bar cut), "close" (its last bar's close 2.000 higher), "maint" (down for maintenance, status 5); a delay
+  // (ms) GMO's next answer to an ended 5-minute file takes once; the query of every gmo_kline_files read; the bytes the
+  // database's answers to gmo_kline_files reads and to the index held
+  failIndex: null as null | number | "throw",
+  indexRows: null as unknown,
+  indexCalls: [] as Array<Record<string, unknown>>,
+  gmoFault: new Map<string, string>(),
+  gmoDelayOnce: 0,
+  klineGets: [] as string[],
+  dbBytes: 0,
+  // (the fixer's) one kept 5-minute file's read alone (`${date}|${side}`, keptFile's select=body) made to fail: a
+  // status, or "throw" (the request itself fails); the preload's read answering 500; the time (ms) the index's answer
+  // takes; the clock and `${date}|${side}` of each GMO request for a 5-minute file
+  failKept: new Map<string, number | "throw">(),
+  failPreload: false,
+  indexDelay: 0,
+  gmoAsked: [] as Array<[number, string]>,
 };
 const resetWorld = () => {
   Object.assign(world, {
     subs: [], alerts: [], sent: [], gold: null, gmoCalls: 0, reads: [], requests: [], unrouted: [], ids: 0, failAlertsRead: false,
     twelveKey: false, twelveUpTo: -1, twelveCalls: 0, twelveCredits: 0, me: "userM", subPosts: [], subDeletes: [],
+    failIndex: null, indexRows: null, indexCalls: [], gmoDelayOnce: 0, klineGets: [], dbBytes: 0,
+    failPreload: false, indexDelay: 0, gmoAsked: [],
   });
   world.klineFiles.clear();
   world.failPlanFor.clear();
   world.failAuthFor.clear();
+  world.gmoFault.clear();
+  world.failKept.clear();
 };
 let clock = 0;
 
@@ -938,6 +966,29 @@ const whereOf = (u: URL): ((r: Row) => boolean) => {
 const pick = (r: Row, select: string | null): Row => (select === null || select === "*" ? { ...r } : Object.fromEntries(select.split(",").map((c) => [c, r[c] ?? null])));
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 const empty = (status: number) => new Response(null, { status });
+// v43: public.gmo_kline_index as its migration's SQL reads (supabase/migrations/20261128130000_gmo_kline_index.sql),
+// modelled here apart from kline-direct.ts: the kept files of p_interval, of a symbol of p_symbols, with date_key >=
+// p_since, status 0 and data a list; per file its symbol, price_type, date_key, its bars' count, and the first 16 hex
+// digits of the SHA-256 of a line a bar (e ->> each of openTime, open, high, low and close, concat dropping a NULL,
+// joined by ','), the lines joined by chr(10), '' for none; ordered by symbol, price_type, date_key
+const sqlField = (e: unknown, k: string): string => {
+  if (typeof e !== "object" || e === null || Array.isArray(e)) return "";
+  const v = (e as Row)[k];
+  return v === undefined || v === null ? "" : typeof v === "string" ? v : JSON.stringify(v);
+};
+const keptIndexModel = (args: Row): Row[] =>
+  [...world.klineFiles.values()]
+    .filter((r) => {
+      const b = r.body as Row;
+      return r.interval === args.p_interval && (args.p_symbols as string[]).includes(String(r.symbol)) && String(r.date_key) >= String(args.p_since) &&
+        typeof b === "object" && b !== null && b.status === 0 && Array.isArray(b.data);
+    })
+    .sort((a, b) => [a.symbol, a.price_type, a.date_key].join("|").localeCompare([b.symbol, b.price_type, b.date_key].join("|")))
+    .map((r) => {
+      const data = (r.body as { data: unknown[] }).data;
+      const text = data.map((e) => ["openTime", "open", "high", "low", "close"].map((k) => sqlField(e, k)).join(",")).join("\n");
+      return { s: r.symbol, p: r.price_type, d: r.date_key, n: data.length, h: createHash("sha256").update(Buffer.from(text, "utf8")).digest("hex").slice(0, 16) };
+    });
 
 const fakeFetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
   const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -949,7 +1000,22 @@ const fakeFetch = async (input: string | URL | Request, init?: RequestInit): Pro
     // USD/JPY's and EUR/JPY's 5-minute, 15-minute and 1-hour files (the same waves); any other: nothing
     const iv = GMO_IV[u.searchParams.get("interval") ?? ""];
     if (!["USD_JPY", "EUR_JPY"].includes(u.searchParams.get("symbol") ?? "") || iv === undefined) return reply({ status: 0, data: [], responsetime: iso(clock) });
-    return reply(gmoFile(iv, u.searchParams.get("priceType")!, u.searchParams.get("date")!));
+    const date = u.searchParams.get("date")!;
+    const side = u.searchParams.get("priceType")!;
+    if (iv === "5min") world.gmoAsked.push([clock, `${date}|${side}`]);
+    // v43: a slow answer, and the answers made wrong (world.gmoFault), on the 5-minute files only
+    if (iv === "5min" && world.gmoDelayOnce > 0 && klineFileEnded(date, clock)) {
+      clock += world.gmoDelayOnce;
+      world.gmoDelayOnce = 0;
+    }
+    const fault = iv === "5min" ? world.gmoFault.get(`${date}|${side}`) : undefined;
+    if (fault === "null_once") world.gmoFault.delete(`${date}|${side}`);
+    if (fault === "null" || fault === "null_once") return reply({ status: 1, messages: [{ message_code: "ERR-503" }] }, 503);
+    if (fault === "maint") return reply({ status: 5, messages: [{ message_code: "ERR-5201", message_string: "MAINTENANCE." }] });
+    const file = gmoFile(iv, side, date);
+    if (fault === "short") return reply({ ...file, data: file.data.slice(0, -1) });
+    if (fault === "close") return reply({ ...file, data: file.data.map((b, k) => (k === file.data.length - 1 ? { ...b, close: (Number(b.close) + 2).toFixed(3) } : b)) });
+    return reply(file);
   }
   // Twelve Data's time_series of gold's 1-hour bars, newest first, up to bar world.twelveUpTo
   if (url.startsWith("https://api.twelvedata.com/time_series")) {
@@ -1004,8 +1070,29 @@ const fakeFetch = async (input: string | URL | Request, init?: RequestInit): Pro
     const uid = u.searchParams.get("id")!.slice(3);
     return world.failPlanFor.has(uid) ? reply({ message: "boom" }, 503) : reply([{ plan: "light" }]);
   }
+  // v43: the index of the kept files (kline-direct.ts), as the migration's SQL gives it (keptIndexModel)
+  if (table === "rpc/gmo_kline_index" && method === "POST") {
+    world.indexCalls.push(body);
+    clock += world.indexDelay;
+    if (world.failIndex === "throw") throw new TypeError(`error sending request for url (${url})`);
+    if (world.failIndex !== null) return reply({ code: "PGRST202", message: "Could not find the function" }, world.failIndex);
+    const text = JSON.stringify(world.indexRows !== null ? world.indexRows : keptIndexModel(body));
+    world.dbBytes += text.length;
+    return new Response(text, { status: 200, headers: { "Content-Type": "application/json" } });
+  }
   if (table === "gmo_kline_files") {
-    if (method === "GET") return reply([...world.klineFiles.values()].filter(where).map((r) => pick(r, select)));
+    if (method === "GET") {
+      world.klineGets.push(u.search);
+      if (world.failPreload && u.search.includes("select=price_type,date_key,body")) return reply({ message: "boom" }, 500);
+      if (u.search.endsWith("&select=body")) {
+        const fail = world.failKept.get(`${u.searchParams.get("date_key")!.slice(3)}|${u.searchParams.get("price_type")!.slice(3)}`);
+        if (fail === "throw") throw new TypeError(`error sending request for url (${url})`);
+        if (fail !== undefined) return reply({ message: "boom" }, fail);
+      }
+      const text = JSON.stringify([...world.klineFiles.values()].filter(where).map((r) => pick(r, select)));
+      world.dbBytes += text.length;
+      return new Response(text, { status: 200, headers: { "Content-Type": "application/json" } });
+    }
     if (method === "POST") {
       world.klineFiles.set(`${body.symbol}|${body.price_type}|${body.interval}|${body.date_key}`, body);
       return empty(201);
@@ -1788,6 +1875,479 @@ describe("v43 the fade in the function, each pair on its own chart (the five pai
     expect(world.sent[0].text).toContain("金 1時間足（MACD の逆張り）");
     expect(world.sent[0].text).not.toContain("AAPL 1時間足");
   });
+
+  // ---- v43 (kline-direct.ts): the five pairs' 5-minute chart takes its ended files from GMO, each checked against the
+  // kept copy's row in the index (public.gmo_kline_index, modelled by keptIndexModel), the kept copy read alone when
+  // GMO's answer is not it; every other chart, and a run whose index cannot be read, as before
+
+  describe("v43 the five pairs' 5-minute chart: its ended files from GMO, each checked against the index of the kept copies", () => {
+    // a run and what it asked the database and GMO for: its index calls, its gmo_kline_files reads (the preloads, the
+    // one-file reads), its stores, the bytes the database sent for both, its GMO requests
+    const run = async (h: Handler, t: number) => {
+      const r0 = world.requests.length;
+      const g0 = world.klineGets.length;
+      const i0 = world.indexCalls.length;
+      const b0 = world.dbBytes;
+      const m0 = world.gmoCalls;
+      const s = await sweep(h, t);
+      const gets = world.klineGets.slice(g0);
+      return {
+        s,
+        files: s.files as Record<string, number>,
+        index: world.indexCalls.slice(i0),
+        gets,
+        preloads: gets.filter((q) => q.includes("select=price_type,date_key,body")),
+        one: gets.filter((q) => q.endsWith("&select=body")).map((q) => {
+          const p = new URLSearchParams(q);
+          return `${p.get("date_key")!.slice(3)}|${p.get("price_type")!.slice(3)}`;
+        }).sort(),
+        stores: world.requests.slice(r0).filter((r) => r === "POST gmo_kline_files").length,
+        bytes: world.dbBytes - b0,
+        gmo: world.gmoCalls - m0,
+      };
+    };
+    const freshRun = async (t: number) => run(await instance(), t);
+    // the chart's record but for when it was judged (judged_after_ms: the GMO reads take longer this way)
+    const record = (s: Summary, pair = "USD/JPY") => {
+      const r = readOf(s, pair);
+      if (!r) return undefined;
+      const { judged_after_ms: _after, ...rest } = r;
+      return rest;
+    };
+    // the preload's span (index.ts preload: klinePreloadDays of HISTORY_BARS + 1 bars), which the walk test above holds
+    // the walk's ended files to
+    const since = (t: number) => jstDayKey(t - klinePreloadDays("5min", HISTORY_BARS + 1) * 24 * H);
+    // the ended files the walk reads at the SELL bar's close (2026-07-06 02:55 UTC, a Monday): Thursday's and Friday's
+    // (JST days 20260702 and 20260703, 288 bars each) and Saturday's (20260704, no bar), both sides
+    const KEPT = ["20260702", "20260703", "20260704"].flatMap((d) => ["ASK", "BID"].map((p) => `USD_JPY|${p}|5min|${d}`)).sort();
+
+    it("minute 0, a fresh instance, nothing kept: the index read (no row), then v43's way (the preload, GMO's ended files read and kept); minutes 1 and 3, fresh: one index call each, for USD_JPY over the preload's span, no 5-minute preload, every kept file GMO's answer equal to it, nothing stored, the same record, nobody mailed twice", async () => {
+      world.subs = [follow("userA"), follow("userC", "en")];
+      const r0 = await freshRun(at(I_SELL, 0));
+      expect(judged(r0.s)).toMatchObject({ newest: iso(times[I_SELL]), bars: 600, signals: ["macdx:SELL"], fade: { fresh: true, entry: "SELL", price: bid(closes[I_SELL]) } });
+      expect(r0.index).toEqual([{ p_interval: "5min", p_symbols: ["USD_JPY"], p_since: since(at(I_SELL, 0)) }]);
+      expect(since(at(I_SELL, 0))).toBe("20260630");
+      expect(r0.files).toEqual({ memory: 0, table: 0, ended: 6, live: 2, stale: 0, direct: 0, matched: 0, mismatch: 0, fallback: 0, hole: 0, indexed: 0, index_failed: 0 });
+      expect(r0.preloads).toHaveLength(1);
+      expect(r0.stores).toBe(6);
+      expect([...world.klineFiles.keys()].sort()).toEqual(KEPT);
+      expect(world.sent).toHaveLength(2);
+      for (const m of [1, 3]) {
+        const r = await freshRun(at(I_SELL, m));
+        expect(r.index, `minute ${m}`).toEqual([{ p_interval: "5min", p_symbols: ["USD_JPY"], p_since: since(at(I_SELL, m)) }]);
+        expect(r.preloads, `minute ${m}`).toEqual([]);
+        expect(r.one, `minute ${m}`).toEqual([]);
+        expect(r.stores, `minute ${m}`).toBe(0);
+        expect(r.files, `minute ${m}`).toEqual({ memory: 0, table: 0, ended: 0, live: 2, stale: 0, direct: 6, matched: 6, mismatch: 0, fallback: 0, hole: 0, indexed: 6, index_failed: 0 });
+        expect(record(r.s), `minute ${m}`).toEqual(record(r0.s));
+        expect(r.s.sent ?? 0).toBe(0);
+        // the index's answer is all the database sent for the chart: six short rows
+        expect(r.bytes, `minute ${m}`).toBeLessThan(800);
+      }
+      expect(world.sent).toHaveLength(2);
+      clean();
+    });
+
+    it("the index not read: an answer of 404 (the migration not applied yet) or 500, a request that fails, rows not of its shape: index_failed 1, the run reads as v43 did (the preload, files.table), the same record; what is logged names no address", async () => {
+      world.subs = [follow("userA")];
+      const r0 = await freshRun(at(I_SELL, 0));
+      const want = record(r0.s);
+      const rows = () => keptIndexModel({ p_interval: "5min", p_symbols: ["USD_JPY"], p_since: "20260101" });
+      expect(rows()).toHaveLength(6);
+      const modes: Array<[string, () => void]> = [
+        ["404", () => (world.failIndex = 404)],
+        ["500", () => (world.failIndex = 500)],
+        ["throw", () => (world.failIndex = "throw")],
+        ["no list", () => (world.indexRows = { rows: rows() })],
+        ["a date of 7 digits", () => (world.indexRows = [{ ...rows()[0], d: "2026070" }, ...rows().slice(1)])],
+        ["n a string", () => (world.indexRows = [{ ...rows()[0], n: String(rows()[0].n) }, ...rows().slice(1)])],
+        ["h in capitals", () => (world.indexRows = [...rows().slice(1), { ...rows()[0], h: String(rows()[0].h).toUpperCase() }])],
+      ];
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        for (const [name, mode] of modes) {
+          world.failIndex = null;
+          world.indexRows = null;
+          mode();
+          errors.mockClear();
+          const r = await freshRun(at(I_SELL, 1));
+          expect(r.index, name).toHaveLength(1);
+          expect(r.files, name).toMatchObject({ index_failed: 1, indexed: -1, direct: 0, matched: 0, fallback: 0, table: 6, ended: 0 });
+          expect(r.preloads, name).toHaveLength(1);
+          expect(r.stores, name).toBe(0);
+          expect(record(r.s), name).toEqual(want);
+          const said = errors.mock.calls.map((c) => c.map(String).join(" "));
+          expect(said.filter((x) => x.startsWith("kline index failed:")), name).toHaveLength(1);
+          for (const x of said) expect(x, name).not.toMatch(/https?:|sb\.test|user|@/);
+        }
+      } finally {
+        errors.mockRestore();
+      }
+      expect(world.sent).toHaveLength(1);
+      clean();
+    });
+
+    it("no index row of EUR_JPY: EUR/JPY's chart reads as v43 did (its preload, GMO's files read and kept), USD/JPY's from GMO checked; one index call for both", async () => {
+      world.subs = [follow("userA"), follow("userB", "ja", "EUR/JPY")];
+      const r0 = await freshRun(at(I_SELL, 0));
+      expect(r0.index).toEqual([{ p_interval: "5min", p_symbols: ["EUR_JPY", "USD_JPY"], p_since: since(at(I_SELL, 0)) }]);
+      expect(world.klineFiles.size).toBe(12);
+      for (const k of [...world.klineFiles.keys()]) if (k.startsWith("EUR_JPY|")) world.klineFiles.delete(k);
+      const r = await freshRun(at(I_SELL, 1));
+      expect(r.index).toHaveLength(1);
+      expect(r.files).toMatchObject({ indexed: 6, index_failed: 0, direct: 6, matched: 6, ended: 6, table: 0 });
+      expect(r.preloads).toHaveLength(1);
+      expect(r.preloads[0]).toContain("symbol=eq.EUR_JPY");
+      expect(r.stores).toBe(6);
+      expect(world.klineFiles.size).toBe(12);
+      for (const p of ["USD/JPY", "EUR/JPY"]) expect(record(r.s, p), p).toEqual(record(r0.s, p));
+      expect(record(r.s, "EUR/JPY")).toMatchObject({ signals: ["macdx:SELL"], fade: { entry: "SELL" } });
+      clean();
+    });
+
+    it("GMO's answer to a kept file cut short, or a close changed: mismatch, that file alone read from the table, the same record; a 503 twice: asked twice, then the kept copy; a 503 once: asked again a second later and matched, nothing read from the table", async () => {
+      world.subs = [follow("userA")];
+      const r0 = await freshRun(at(I_SELL, 0));
+      const want = record(r0.s);
+      expect(want).toMatchObject({ signals: ["macdx:SELL"], fade: { entry: "SELL" } });
+      const cases: Array<{ faults: Record<string, string>; files: Record<string, number>; one: string[] }> = [
+        { faults: { "20260703|BID": "short" }, files: { direct: 6, matched: 5, mismatch: 1, fallback: 1 }, one: ["20260703|BID"] },
+        { faults: { "20260703|BID": "close", "20260703|ASK": "close" }, files: { direct: 6, matched: 4, mismatch: 2, fallback: 2 }, one: ["20260703|ASK", "20260703|BID"] },
+        { faults: { "20260703|ASK": "null" }, files: { direct: 7, matched: 5, mismatch: 0, fallback: 1 }, one: ["20260703|ASK"] },
+        { faults: { "20260703|ASK": "null_once" }, files: { direct: 7, matched: 6, mismatch: 0, fallback: 0 }, one: [] },
+      ];
+      for (const c of cases) {
+        const name = JSON.stringify(c.faults);
+        world.gmoFault.clear();
+        for (const [k, v] of Object.entries(c.faults)) world.gmoFault.set(k, v);
+        const r = await freshRun(at(I_SELL, 1));
+        expect(r.files, name).toMatchObject({ ...c.files, indexed: 6, table: 0, ended: 0, index_failed: 0 });
+        expect(r.one, name).toEqual(c.one);
+        expect(r.stores, name).toBe(0);
+        expect(record(r.s), name).toEqual(want);
+      }
+      expect(world.sent).toHaveLength(1);
+      // the changed close bites: Friday's last bar (bar 827, 20:55 UTC) is in the pane of the 120 bars judged, and with
+      // its close 2.000 higher the bar would not be a SELL
+      const last = indexOf["5min"].get(Date.UTC(2026, 6, 3, 20, 55))!;
+      expect(last).toBeGreaterThan(I_SELL - 120);
+      const changed = closes.map((c, k) => (k === last ? Number((c + 2).toFixed(3)) : c));
+      expect(fadeCloseEntryAt(changed.slice(I_SELL - 599, I_SELL + 1))?.side).not.toBe("SELL");
+      clean();
+    });
+
+    it("a warm instance keeps what it read (GMO's answers equal to the copies, and a kept copy read for an answer that differed): at the next close nothing of it is asked for again, from GMO or the table", async () => {
+      world.subs = [follow("userA")];
+      await freshRun(at(I_SELL, 0));
+      world.gmoFault.set("20260703|BID", "close");
+      const h = await instance();
+      const r1 = await run(h, at(I_SELL, 1));
+      expect(r1.files).toMatchObject({ direct: 6, matched: 5, mismatch: 1, fallback: 1 });
+      // the next bar's close (the fault still on): the six ended files from this instance's memory
+      const r5 = await run(h, at(I_SELL + 1, 0));
+      expect(judged(r5.s)).toMatchObject({ newest: iso(times[I_SELL + 1]), bars: 600 });
+      expect(r5.files).toMatchObject({ memory: 6, direct: 0, matched: 0, mismatch: 0, fallback: 0, table: 0, ended: 0 });
+      expect(r5.one).toEqual([]);
+      expect(r5.stores).toBe(0);
+      clean();
+    });
+
+    it("a file not kept: read from GMO and stored once (v43's way for it), the others checked; the next fresh run finds it in the index and stores nothing", async () => {
+      world.subs = [follow("userA")];
+      const r0 = await freshRun(at(I_SELL, 0));
+      world.klineFiles.delete("USD_JPY|ASK|5min|20260703");
+      const r1 = await freshRun(at(I_SELL, 1));
+      expect(r1.files).toMatchObject({ indexed: 5, direct: 5, matched: 5, ended: 1, fallback: 0, table: 0 });
+      expect(r1.stores).toBe(1);
+      expect([...world.klineFiles.keys()].sort()).toEqual(KEPT);
+      const r3 = await freshRun(at(I_SELL, 3));
+      expect(r3.files).toMatchObject({ indexed: 6, direct: 6, matched: 6, ended: 0 });
+      expect(r3.stores).toBe(0);
+      for (const r of [r1, r3]) expect(record(r.s)).toEqual(record(r0.s));
+      clean();
+    });
+
+    it("past the 30 s guard (GMO slow) or GMO down for maintenance partway: the kept files left come from the table, the same record", async () => {
+      world.subs = [follow("userA")];
+      const r0 = await freshRun(at(I_SELL, 0));
+      // GMO's answer to the first ended file comes 31 s late: that day's two files were asked for before it came (and
+      // are GMO's), the four after it are the table's
+      world.gmoDelayOnce = KLINE_DIRECT_BUDGET_MS + 1_000;
+      const slow = await freshRun(at(I_SELL, 1));
+      expect(slow.files).toMatchObject({ direct: 2, matched: 2, mismatch: 0, fallback: 4, indexed: 6 });
+      expect(slow.one).toEqual(["20260702|ASK", "20260702|BID", "20260703|ASK", "20260703|BID"]);
+      expect(record(slow.s)).toEqual(record(r0.s));
+      // down for maintenance at the first ended file (its other side already asked for): the rest from the table
+      world.gmoFault.set("20260704|BID", "maint");
+      const maint = await freshRun(at(I_SELL, 3));
+      expect(maint.files).toMatchObject({ direct: 2, matched: 1, mismatch: 0, fallback: 5 });
+      expect(maint.one).toEqual(["20260702|ASK", "20260702|BID", "20260703|ASK", "20260703|BID", "20260704|BID"]);
+      expect(record(maint.s)).toEqual(record(r0.s));
+      clean();
+    });
+
+    // ---- (the fixer's) the faults the scenarios above leave out: a kept file's read alone failing, the index's failure
+    // kept for the run, the time between GMO's two tries, the run's deadline
+
+    // USD/JPY's kept 5-minute files of the eight days before `t`, both sides, as the runs of those days kept them
+    const seed = (t: number) => {
+      clock = t;
+      for (let d = 1; d <= 8; d++) {
+        const key = jstDayKey(t - d * 24 * H);
+        if (!klineFileEnded(key, t)) continue;
+        for (const side of ["BID", "ASK"]) world.klineFiles.set(`USD_JPY|${side}|5min|${key}`, { symbol: "USD_JPY", price_type: side, interval: "5min", date_key: key, body: gmoFile("5min", side, key) });
+      }
+    };
+    // two closes on Thursday 2026-07-09 that Wednesday's file (JST 20260708: 2026-07-07 21:00 to 07-08 21:00 UTC) left
+    // out of the read would change: at 00:35 UTC a SELL, none without that day; at 00:20 none, a SELL without it
+    const I35 = indexOf["5min"].get(Date.UTC(2026, 6, 9, 0, 35))!;
+    const I20 = indexOf["5min"].get(Date.UTC(2026, 6, 9, 0, 20))!;
+    const withoutWednesday = (i: number) => {
+      const lo = Date.UTC(2026, 6, 7, 21);
+      const hi = Date.UTC(2026, 6, 8, 21);
+      return fadeCloseEntryAt(closes.filter((_, k) => k <= i && !(times[k] >= lo && times[k] < hi)).slice(-600))?.side ?? null;
+    };
+
+    it("a kept file that neither GMO nor the table gave (GMO a 503 twice, down for maintenance from its answer on, or not asked past the 30 s guard; and its read alone failing, a 500 or the request): the chart is not judged and nobody is mailed (the walk would go on to an older day and judge 600 bars with a day left out); the next due minute, fresh and nothing failing, judges and mails as a clean run", async () => {
+      expect([entryAt(I35)?.side ?? null, withoutWednesday(I35)]).toEqual(["SELL", null]);
+      expect([entryAt(I20)?.side ?? null, withoutWednesday(I20)]).toEqual([null, "SELL"]);
+      const cases: Array<{ name: string; set: () => void; error: string }> = [
+        { name: "a 503 twice, its read a 500", set: () => (world.gmoFault.set("20260708|ASK", "null"), world.failKept.set("20260708|ASK", 500)), error: "unavailable" },
+        { name: "a 503 twice, its read failing", set: () => (world.gmoFault.set("20260708|ASK", "null"), world.failKept.set("20260708|ASK", "throw")), error: "unavailable" },
+        { name: "maintenance from its answer on, its read a 500", set: () => (world.gmoFault.set("20260708|ASK", "maint"), world.failKept.set("20260708|ASK", 500)), error: "maintenance" },
+        // (Wednesday's two files were asked for before GMO's slow answer came, Tuesday's after it: not asked)
+        { name: "past the 30 s guard, its read a 500", set: () => ((world.gmoDelayOnce = KLINE_DIRECT_BUDGET_MS + 1_000), world.failKept.set("20260707|ASK", 500)), error: "unavailable" },
+      ];
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        for (const i of [I35, I20]) {
+          resetWorld();
+          world.subs = [follow("userA")];
+          seed(at(i, 3));
+          const want = await freshRun(at(i, 3));
+          expect(judged(want.s)?.signals, iso(times[i])).toEqual(entryAt(i)?.side === "SELL" ? ["macdx:SELL"] : []);
+          expect(want.files).toMatchObject({ hole: 0, fallback: 0, mismatch: 0 });
+          const wantMails = mails();
+          for (const c of cases) {
+            const name = `${iso(times[i])} ${c.name}`;
+            resetWorld();
+            world.subs = [follow("userA")];
+            seed(at(i, 1));
+            c.set();
+            errors.mockClear();
+            const r1 = await freshRun(at(i, 1));
+            expect(readOf(r1.s), name).toEqual({ pair: "USD/JPY", interval: "5min", error: c.error });
+            expect(r1.files.hole, name).toBe(1);
+            expect(r1.stores, name).toBe(0);
+            expect(world.sent, name).toEqual([]);
+            for (const x of errors.mock.calls.map((m) => m.map(String).join(" "))) expect(x, name).not.toMatch(/https?:|sb\.test|user|@/);
+            world.gmoFault.clear();
+            world.failKept.clear();
+            world.gmoDelayOnce = 0;
+            const r3 = await freshRun(at(i, 3));
+            expect(r3.files, name).toMatchObject({ hole: 0, fallback: 0 });
+            expect(record(r3.s), name).toEqual(record(want.s));
+            expect(mails(), name).toEqual(wantMails);
+          }
+        }
+      } finally {
+        errors.mockRestore();
+      }
+      clean();
+    });
+
+    it("GMO's answer to a kept file differing (a close changed) and that file's read alone failing (a 500, or the request): GMO's answer is judged, not stored, as v43 judged GMO's answers when its preload failed (the same record), no hole", async () => {
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        for (const fail of [500, "throw"] as const) {
+          // v43's way: the index failing (404), the preload's read failing too, every ended file GMO's (and kept)
+          resetWorld();
+          world.subs = [follow("userA")];
+          seed(at(I35, 1));
+          world.gmoFault.set("20260708|ASK", "close");
+          world.failIndex = 404;
+          world.failPreload = true;
+          const v43 = await freshRun(at(I35, 1));
+          expect(v43.files).toMatchObject({ index_failed: 1, table: 0, direct: 0 });
+          expect(judged(v43.s)).toMatchObject({ bars: 600 });
+          // the direct way
+          resetWorld();
+          world.subs = [follow("userA")];
+          seed(at(I35, 1));
+          world.gmoFault.set("20260708|ASK", "close");
+          world.failKept.set("20260708|ASK", fail);
+          const r = await freshRun(at(I35, 1));
+          expect(r.files, String(fail)).toMatchObject({ mismatch: 1, fallback: 0, hole: 0, index_failed: 0 });
+          expect(r.one, String(fail)).toEqual(["20260708|ASK"]);
+          expect(r.stores, String(fail)).toBe(0);
+          expect(record(r.s), String(fail)).toEqual(record(v43.s));
+        }
+      } finally {
+        errors.mockRestore();
+      }
+      clean();
+    });
+
+    it("the index not read, two of the five pairs' charts followed: it is asked for once a run (its failure kept for the run as its rows are), and each chart reads as v43 did", async () => {
+      world.subs = [follow("userA"), follow("userB", "ja", "EUR/JPY")];
+      const r0 = await freshRun(at(I_SELL, 0));
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        for (const mode of [404, 500, "throw", "rows"] as const) {
+          world.failIndex = mode === "rows" ? null : mode;
+          world.indexRows = mode === "rows" ? { rows: [] } : null;
+          const r = await freshRun(at(I_SELL, 1));
+          expect(r.index, String(mode)).toHaveLength(1);
+          expect(r.files, String(mode)).toMatchObject({ index_failed: 1, indexed: -1, direct: 0, table: 12 });
+          expect(r.preloads, String(mode)).toHaveLength(2);
+          for (const p of ["USD/JPY", "EUR/JPY"]) expect(record(r.s, p), `${mode} ${p}`).toEqual(record(r0.s, p));
+        }
+      } finally {
+        errors.mockRestore();
+      }
+      clean();
+    });
+
+    it("GMO's 503 once: the second try a second (STALE_RETRY_MS) after the first, not at once", async () => {
+      world.subs = [follow("userA")];
+      await freshRun(at(I_SELL, 0));
+      world.gmoFault.set("20260703|ASK", "null_once");
+      world.gmoAsked = [];
+      const r = await freshRun(at(I_SELL, 1));
+      expect(r.files).toMatchObject({ direct: 7, matched: 6, fallback: 0 });
+      const tries = world.gmoAsked.filter(([, k]) => k === "20260703|ASK").map(([t]) => t);
+      expect(tries).toHaveLength(2);
+      expect(tries[1] - tries[0]).toBeGreaterThanOrEqual(STALE_RETRY_MS);
+      clean();
+    });
+
+    it("the index read late in a slow run (at some 89 s of the 90 s budget, FETCH_BUDGET_MS) and GMO a 503 on the first kept day: no try of a kept file past the run's deadline (the 30 s guard ends there too), its kept copies from the table, the chart judged as a clean run", async () => {
+      const BUDGET = 90_000;
+      expect(readFileSync("supabase/functions/signal-alerts/index.ts", "utf8")).toContain("const FETCH_BUDGET_MS = 90_000;");
+      world.subs = [follow("userA")];
+      const r0 = await freshRun(at(I_SELL, 0));
+      const start = at(I_SELL, 1);
+      world.indexDelay = BUDGET - 1_000;
+      for (const side of ["ASK", "BID"]) world.gmoFault.set(`20260704|${side}`, "null");
+      world.gmoAsked = [];
+      const r = await freshRun(start);
+      const kept = new Set(KEPT.map((k) => `${k.split("|")[3]}|${k.split("|")[1]}`));
+      const asked = world.gmoAsked.filter(([, k]) => kept.has(k));
+      expect(asked.length).toBeGreaterThan(0);
+      // (past it as the code says it, Date.now() > deadline; a try begun before it may wait its turn, GMO_GAP_MS, to it)
+      for (const [t, k] of asked) expect(t - start, k).toBeLessThanOrEqual(BUDGET);
+      // the 503's files not asked again (their second tries would come past the deadline) but read from the table;
+      // Friday's asked for at the deadline, GMO's; Thursday's, at it, not asked: the table's
+      expect(asked.filter(([, k]) => k.startsWith("20260704|"))).toHaveLength(2);
+      expect(asked.filter(([, k]) => k.startsWith("20260702|"))).toEqual([]);
+      expect(r.files).toMatchObject({ direct: 4, matched: 2, fallback: 4, hole: 0 });
+      expect(r.one).toEqual(["20260702|ASK", "20260702|BID", "20260704|ASK", "20260704|BID"]);
+      expect(record(r.s)).toEqual(record(r0.s));
+      clean();
+    });
+
+    it("the 1-hour charts, the sharp rise and a 15-minute chart never ask for the index (they read as v43 did); at minutes 2 and 4 nothing is asked for", async () => {
+      world.subs = [
+        { user_id: "userA", pair: "USD/JPY", interval: "1h", lang: "ja", rule: "ultra" },
+        { user_id: "userB", pair: "USD/JPY", interval: "1h", lang: "ja", rule: "spike" },
+        { user_id: "userC", pair: "EUR/JPY", interval: "15min", lang: "ja", rule: "emarm" },
+      ];
+      const t = htimes[G_SELL] + H + 1_000;
+      expect(gmoIntervalsDue(t)).toEqual(expect.arrayContaining(["5min", "15min", "1h"]));
+      const r = await freshRun(t);
+      expect(readOf(r.s, "USD/JPY", "1h")).toMatchObject({ bars: 600 });
+      expect(readOf(r.s, "EUR/JPY", "15min")).toBeDefined();
+      expect((r.s.reads ?? []).some((x) => x.spike === true)).toBe(true);
+      expect(world.indexCalls).toEqual([]);
+      expect(r.files).toMatchObject({ indexed: -1, index_failed: 0, direct: 0, matched: 0 });
+      expect(r.preloads.length).toBeGreaterThan(0);
+      // (the sharp rise's own table, public.spike_ranges, is not faked here)
+      expect(world.unrouted.every((x) => x.includes("spike_ranges"))).toBe(true);
+      // minutes 2 and 4 after a 5-minute close, the five pairs' chart followed: nothing asked for
+      resetWorld();
+      world.subs = [follow("userA"), follow("userB", "ja", "EUR/JPY")];
+      for (const m of [2, 4]) {
+        const q = await freshRun(at(I_SELL, m));
+        expect(q.index, `minute ${m}`).toEqual([]);
+        expect(q.gets, `minute ${m}`).toEqual([]);
+        expect(q.gmo, `minute ${m}`).toBe(0);
+      }
+      clean();
+    });
+
+    it("the egress guard: over the 36 due minutes of an hour, each on a fresh instance, the five pairs' 5-minute charts followed, the database sends at most some 6 KB a run for them (the index and any kept copy) after the first; v43's way (the index failing) some 100 KB or more", async () => {
+      const five = ["USD/JPY", "AUD/USD", "EUR/JPY", "AUD/JPY", "EUR/USD"];
+      const hour = Array.from({ length: 60 }, (_, m) => Date.UTC(2026, 6, 6, 3, m, 1)).filter((t) => [0, 1, 3].includes(new Date(t).getUTCMinutes() % 5));
+      expect(hour).toHaveLength(36);
+      const bytesOf = async (failIndex: number | null) => {
+        resetWorld();
+        world.subs = five.map((p) => follow("userA", "ja", p));
+        world.failIndex = failIndex;
+        const out: number[] = [];
+        for (const t of hour) out.push((await freshRun(t)).bytes);
+        return out;
+      };
+      const direct = await bytesOf(null);
+      expect(Math.max(...direct.slice(1))).toBeLessThanOrEqual(6_000);
+      // (the index holds the five symbols' kept files: USD/JPY's and EUR/JPY's, and the others' empty ones here)
+      expect(Math.min(...direct.slice(1))).toBeGreaterThan(1_000);
+      const v43 = await bytesOf(404);
+      expect(Math.min(...v43.slice(1))).toBeGreaterThan(100_000);
+      clean();
+    }, 120_000);
+
+    it("A/B over a trading day: every due minute from Tuesday 12:00 UTC to Wednesday 12:00 UTC (across GMO's roll at 21:00 UTC and 00:00 UTC, when a day's file ends), every run on a fresh instance, USD/JPY's and EUR/JPY's 5-minute charts followed: the index failing (v43's way) and read (the direct way) give the same records (bars, newest, signals, fade), the same mails and the same kept files", async () => {
+      const from = Date.UTC(2026, 6, 7, 12, 0);
+      const minutes: number[] = [];
+      for (let t = from; t < from + 24 * H; t += MIN) if ([0, 1, 3].includes(new Date(t).getUTCMinutes() % 5)) minutes.push(t + 1_000);
+      expect(minutes).toHaveLength(864);
+      const sequence = async (failIndex: number | null) => {
+        resetWorld();
+        world.subs = [follow("userA"), follow("userC", "en", "EUR/JPY")];
+        // the files kept by then: every ended file of the eight days before
+        clock = from;
+        for (let d = 1; d <= 8; d++) {
+          const key = jstDayKey(from - d * 24 * H);
+          if (!klineFileEnded(key, from)) continue;
+          for (const symbol of ["USD_JPY", "EUR_JPY"]) {
+            for (const side of ["BID", "ASK"]) world.klineFiles.set(`${symbol}|${side}|5min|${key}`, { symbol, price_type: side, interval: "5min", date_key: key, body: gmoFile("5min", side, key) });
+          }
+        }
+        world.failIndex = failIndex;
+        const records: unknown[] = [];
+        const sums: Record<string, number> = { direct: 0, matched: 0, table: 0, ended: 0, fallback: 0, mismatch: 0, index_failed: 0 };
+        for (const t of minutes) {
+          const s = await fresh(t);
+          records.push(["USD/JPY", "EUR/JPY"].map((p) => record(s, p) ?? null));
+          for (const k of Object.keys(sums)) sums[k] += (s.files as Record<string, number>)[k];
+        }
+        return {
+          records,
+          sums,
+          mails: world.sent.map((m) => [m.to, m.subject, m.text]),
+          kept: [...world.klineFiles.entries()].map(([k, v]) => [k, JSON.stringify((v.body as Row).data)]).sort(),
+        };
+      };
+      const a = await sequence(404);
+      const b = await sequence(null);
+      expect(b.records).toEqual(a.records);
+      expect(b.mails).toEqual(a.mails);
+      expect(b.kept).toEqual(a.kept);
+      // each way was the one meant: v43's read its kept files from the table every run, the direct one from GMO, and
+      // both read the day that ended at 00:00 UTC from GMO once and kept it (4 files)
+      expect(a.sums).toMatchObject({ direct: 0, matched: 0, index_failed: 864, ended: 4 });
+      expect(a.sums.table).toBeGreaterThan(864 * 8);
+      expect(b.sums).toMatchObject({ table: 0, mismatch: 0, fallback: 0, index_failed: 0, ended: 4 });
+      expect(b.sums.matched).toBe(b.sums.direct);
+      expect(b.sums.direct).toBeGreaterThan(864 * 4);
+      // the day held judgments (both charts at each 5-minute close's three reads) and emails to compare
+      const judgedReads = (a.records as Array<Array<Read | null>>).flat().filter((r) => r !== null && typeof r.fade === "object");
+      expect(judgedReads.length).toBe(2 * 864);
+      expect(a.mails.length).toBeGreaterThan(0);
+      expect(new Set(a.mails.map((m) => m[0])).size).toBe(2);
+      clean();
+    }, 600_000);
+  });
 });
 
 // ---- part 3: the function's code, read as text ------------------------------------------------------------------------
@@ -1959,5 +2519,55 @@ describe("v43 the function's code, read as text", () => {
     };
     walk("supabase/functions");
     expect(importers).toEqual([]);
+  });
+
+  it("v43 (kline-direct.ts): the index is asked for in keptIndex only, over the preload's own span; the preload is skipped only for a 5-minute chart of the five pairs whose index was read and holds its symbol; directFetcher stores nothing; the new error lines name no id or address; the migration's function reads only, in an empty search path, for the service role only", () => {
+    const code = codeOf(fn);
+    // one call of the index, in keptIndex, and the name nowhere else in the code
+    expect(firstArgs(fn, "rest").filter((c) => c.includes("gmo_kline_index"))).toEqual(['"rpc/gmo_kline_index"']);
+    expect(code.split("gmo_kline_index")).toHaveLength(2);
+    const kept = fn.slice(fn.indexOf("const keptIndex = ("), fn.indexOf("const keptFile = async ("));
+    expect(kept.length).toBeGreaterThan(500);
+    expect(kept).toContain('const res = await rest("rpc/gmo_kline_index", { method: "POST", body: JSON.stringify({ p_interval: name, p_symbols: symbols, p_since: since }) });');
+    expect(kept).toContain("keptIndexRead ??= (async () => {");
+    // its span is the preload's: jstDayKey(nowMs - days a day), days klinePreloadDays of HISTORY_BARS + 1 bars
+    expect(kept).toContain('const since = jstDayKey(nowMs - klinePreloadDays("5min", HISTORY_BARS + 1) * 24 * 60 * MIN);');
+    expect(fn).toContain("const preload = async (pair: string, interval: string, bars: number = HISTORY_BARS + 1) => {");
+    expect(fn).toContain('const days = spec.key === "day" ? klinePreloadDays(interval, bars) : Number.POSITIVE_INFINITY;');
+    expect(fn).toContain("? jstDayKey(nowMs - days * 24 * 60 * MIN)");
+    // the GMO loop: the preload only when the index cannot stand in for it
+    expect(fn).toContain("const direct = isKlineDirectChart(c.pair, c.interval);");
+    expect(fn).toContain("const index = direct ? await keptIndex() : null;");
+    expect(fn).toContain("const usable = index !== null && symbolsOf(index).has(GMO_SYMBOLS[c.pair]);");
+    expect(fn).toContain("if (!usable) await preload(c.pair, c.interval);");
+    expect(fn).toContain("const fetcher = usable ? directFetcher(latestCloseMs(c.interval, nowMs), step, index) : chartFetcher(latestCloseMs(c.interval, nowMs), step);");
+    // every preload( call: that one, and the sharp rise's 1-hour one (as before)
+    expect(firstArgs(code, "preload")).toEqual(["c.pair", "pair"]);
+    expect(code).toContain('await preload(pair, "1h", SPIKE.bars + 3);');
+    // keptIndex is reached only past the judged, deadline and maintenance checks
+    const loop = fn.slice(fn.indexOf("for (const c of gmoCharts) {"), fn.indexOf("const quotes = await fetchLiveQuotes(c.pair, c.interval, nowMs, deadline, fetcher, HISTORY_BARS + 1);"));
+    expect(loop.indexOf('skipped: maintenance ? "maintenance" : "deadline"')).toBeGreaterThan(0);
+    expect(loop.indexOf("await keptIndex()")).toBeGreaterThan(loop.indexOf('skipped: maintenance ? "maintenance" : "deadline"'));
+    // directFetcher: chartFetcher's way for live files and files not kept; GMO's answer never stored here
+    const df = fn.slice(fn.indexOf("const directFetcher = ("), fn.indexOf("// Each fresh signal to each follower of its chart"));
+    expect(df.length).toBeGreaterThan(500);
+    expect(df).toContain("const base = chartFetcher(closeMs, stepMs);");
+    expect(df).toContain("if (!f || !klineFileEnded(f.date, nowMs)) return base(url);");
+    expect(df).toContain("if (kept === undefined || klineMemory.has(k)) return base(url);");
+    expect(df).not.toContain("storeFile(");
+    expect(df).toContain("(got as { data: unknown[] }).data.length === kept.n && (await klineDigest(got)) === kept.h");
+    // the new error lines: a status, "rows" or errText (which takes out any URL), nothing of a follower
+    const errs = fn.split("\n").filter((l) => /console\.error\("kline (index|file read) failed:"/.test(l));
+    expect(errs).toHaveLength(4);
+    for (const l of errs) expect(l.trim(), l).toMatch(/^console\.error\("kline (index|file read) failed:", (res\.status|"rows"|errText\(err\))\);$/);
+    // the migration: a read-only SQL function, no write, its own empty search path, run by the service role only
+    const mig = readFileSync("supabase/migrations/20261128130000_gmo_kline_index.sql", "utf8");
+    expect(mig).toContain("revoke all on function public.gmo_kline_index(text, text[], text) from public, anon, authenticated;");
+    expect(mig).toContain("grant execute on function public.gmo_kline_index(text, text[], text) to service_role;");
+    const migCode = mig.split("\n").filter((l) => !l.trimStart().startsWith("--")).join("\n");
+    for (const w of ["create or replace function public.gmo_kline_index(p_interval text, p_symbols text[], p_since text)", "language sql", "\nstable\n", "security invoker", "set search_path = ''", "from public.gmo_kline_files f"]) expect(migCode, w).toContain(w);
+    expect(migCode).not.toMatch(/\b(insert|update|delete|truncate|merge|alter|drop|copy|definer|volatile)\b/i);
+    expect(migCode.match(/\bgrant\b/gi)).toHaveLength(1);
+    expect(migCode.match(/\brevoke\b/gi)).toHaveLength(1);
   });
 });
