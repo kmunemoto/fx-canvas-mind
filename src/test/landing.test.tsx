@@ -68,7 +68,8 @@ describe("the landing page's promises match the product", () => {
 
 // The sales page's three texts on the MACD fade (research/macdfade15min-prod-spec.md section 5, v41: each pair on its own
 // chart, USD/JPY and AUD/USD on 15-minute bars, EUR/JPY, AUD/JPY, EUR/USD and gold on 1-hour bars; research/
-// macdfade1h-prod-spec.md section 5 was v40's), word for word, ja and en, with 〔adverse〕 chosen per chart from the
+// macdfade1h-prod-spec.md section 5 was v40's; v43: the five pairs on 5-minute bars, gold on 1-hour bars, the three
+// texts v41's with the changes listed below), word for word, ja and en, with 〔adverse〕 chosen per chart from the
 // measured numbers the code holds (_shared/macd-fade-measured.ts FADE_MEASURED["15min"] and FADE_MEASURED["1h"]): no
 // percent and no measured number (the tests above, and the four forbidden-number patterns of the spec's 3.5), the fade
 // named first with why it is left out of the break-even comparison, and what the numbers cannot hide said without one.
@@ -103,26 +104,49 @@ describe("the sales page's texts on the MACD fade (research/macdfade15min-prod-s
     en: "It does not hide the record. How each rule did on past charts, and, for the rules whose results are recorded, whether each signal emailed reached its stop or its target first, are shown as they are, losing ones included. The MACD fade states no take-profit or stop price, and its results are not recorded or shown. Trade signals are judged on closed bars (the MACD fade too, at 15-minute or 1-hour closes, by pair) and never vanish or move afterwards.",
   };
   const answer = (d: typeof ja | typeof en, q: string) => d.lp.faqs.find((f: { q: string; a: string }) => f.q === q)!.a;
+  // v43 (signal-alerts v43; the owner, 2026-11-26 and 2026-11-27): the five pairs' fade emails on 5-minute bars, gold's on
+  // 1-hour bars. The three texts are section 5's above (v41's, held against the spec file below) with these changes,
+  // each found once: where the fade is judged (OTHER), and that the numbers were measured on 15-minute and 1-hour bars,
+  // not on the 5-minute bars the five pairs' emails are judged on (FAQ_WIN, HONEST). No spec file holds v43's
+  const once = (t: string, from: string, to: string) => {
+    expect(t.split(from).length - 1, from.slice(0, 40)).toBe(1);
+    return t.replace(from, to);
+  };
+  const FAQ_WIN_43 = {
+    ja: once(FAQ_WIN.ja, "MACD の逆張りは、5ペアを15分足と1時間足で測った数字が設定の注にあります。", "MACD の逆張りは、5ペアを15分足と1時間足で測った数字が設定の注にあります。5ペアのメールを判定する5分足では、測っていません。"),
+    en: once(FAQ_WIN.en, "in the settings' notes. ", "in the settings' notes. Its emails on the five pairs are judged on 5-minute bars, where it has not been measured. "),
+  };
+  const HONEST_43 = {
+    ja: once(HONEST.ja, "勝率では比べません。", "勝率では比べません。測ったのは15分足と1時間足で、5ペアのメールを判定する5分足では測っていません。"),
+    en: once(HONEST.en, "and is not compared by one. ", "and is not compared by one. It was measured on 15-minute and 1-hour bars; its emails on the five pairs are judged on 5-minute bars, where it has not been measured. "),
+  };
+  const OTHER_43 = {
+    ja: once(OTHER.ja, "（MACD の逆張りも、ペアごとに15分足か1時間足の確定で判定します）", "（MACD の逆張りも、5ペアは5分足、金は1時間足の確定で判定します）"),
+    en: once(OTHER.en, "(the MACD fade too, at 15-minute or 1-hour closes, by pair)", "(the MACD fade too, at 5-minute closes on the five pairs and 1-hour closes on gold)"),
+  };
 
-  it("are word for word as section 5 writes them, with the 〔adverse〕 chosen", () => {
-    expect(answer(ja, "勝率はどのくらいですか？")).toBe(FAQ_WIN.ja);
-    expect(answer(en, "What is the win rate?")).toBe(FAQ_WIN.en);
-    expect(ja.lp.honestBody).toBe(HONEST.ja);
-    expect(en.lp.honestBody).toBe(HONEST.en);
-    expect(answer(ja, "他のツールと何が違いますか？")).toBe(OTHER.ja);
-    expect(answer(en, "How is it different from other tools?")).toBe(OTHER.en);
-    for (const t of [FAQ_WIN.ja, HONEST.ja]) expect(t).toContain(ADVERSE.ja);
-    for (const t of [FAQ_WIN.en, HONEST.en]) expect(t).toContain(`${ADVERSE.en} `);
+  it("are word for word section 5's with v43's changes, with the 〔adverse〕 chosen", () => {
+    expect(answer(ja, "勝率はどのくらいですか？")).toBe(FAQ_WIN_43.ja);
+    expect(answer(en, "What is the win rate?")).toBe(FAQ_WIN_43.en);
+    expect(ja.lp.honestBody).toBe(HONEST_43.ja);
+    expect(en.lp.honestBody).toBe(HONEST_43.en);
+    expect(answer(ja, "他のツールと何が違いますか？")).toBe(OTHER_43.ja);
+    expect(answer(en, "How is it different from other tools?")).toBe(OTHER_43.en);
+    for (const t of [FAQ_WIN.ja, HONEST.ja, FAQ_WIN_43.ja, HONEST_43.ja]) expect(t).toContain(ADVERSE.ja);
+    for (const t of [FAQ_WIN.en, HONEST.en, FAQ_WIN_43.en, HONEST_43.en]) expect(t).toContain(`${ADVERSE.en} `);
+    // v41's per-pair words are gone from them
+    expect(OTHER_43.ja).not.toContain("ペアごとに15分足か1時間足");
+    expect(OTHER_43.en).not.toContain("by pair");
   });
 
   it("the honesty section on the page shows its text", () => {
     render(<Landing />);
-    expect(screen.getByTestId("lp-honest").textContent).toContain(HONEST.ja);
+    expect(screen.getByTestId("lp-honest").textContent).toContain(HONEST_43.ja);
   });
 
   it("the honesty section on the page shows its text in English too", () => {
     render(<Landing />, "/", "en");
-    expect(screen.getByTestId("lp-honest").textContent).toContain(HONEST.en);
+    expect(screen.getByTestId("lp-honest").textContent).toContain(HONEST_43.en);
   });
 
   it("〔adverse〕 is research/macdfade1h-prod-spec.md section 5's clauses, in its order, evaluated on each chart's run: met on both as written, on one with its chart in front, on neither left out", () => {
@@ -191,7 +215,7 @@ describe("the sales page's texts on the MACD fade (research/macdfade15min-prod-s
     const BACK_JA = /(必ず|いずれ|きっと|そのうち|やがて)[^。]{0,8}戻|戻ってく|戻ってき|戻るはず|戻ります/;
     const BACK_EN =
       /\b(always|will|surely|certainly|eventually)\s+(come|comes|go|goes)\s+back\b|\b(always|will|surely|certainly|eventually)\s+(return|returns|recover|recovers)\b|\bcomes?\s+back\s+(eventually|in\s+the\s+end)\b/i;
-    for (const t of [FAQ_WIN.ja, HONEST.ja, OTHER.ja, FAQ_WIN.en, HONEST.en, OTHER.en]) {
+    for (const t of [FAQ_WIN.ja, HONEST.ja, OTHER.ja, FAQ_WIN.en, HONEST.en, OTHER.en, FAQ_WIN_43.ja, HONEST_43.ja, OTHER_43.ja, FAQ_WIN_43.en, HONEST_43.en, OTHER_43.en]) {
       // no percent; the four forbidden-number patterns (both charts' runs, v40's, the durations, the per-pair comparison)
       expect(t).not.toMatch(/\d+(\.\d+)?\s?%/);
       for (const p of FORBIDDEN_NUMBERS) expect(t, p.source.slice(0, 30)).not.toMatch(p);

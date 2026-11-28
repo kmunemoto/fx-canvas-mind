@@ -4,9 +4,9 @@
 //
 // v41, per pair (the owner, 2026-11-19: each pair's email on the timeframe of its higher win rate; research/
 // macdfade15min-prod-spec.md section 1): USD/JPY and AUD/USD are mailed on 15-minute bars, EUR/JPY, AUD/JPY and EUR/USD
-// on 1-hour bars (signal-alerts indicators.ts MACDH_INTERVAL_OF; FADE_MAILED_ON below says the same, and
-// src/test/macd-fade.test.ts holds the two together). Each pair's mail reads the run of its own chart only (the
-// signal's interval is passed in as `tf`); nothing of the other chart's run appears in it. The two runs, never mixed:
+// on 1-hour bars (signal-alerts indicators.ts MACDH_INTERVAL_OF; v41's FADE_MAILED_ON said the same). Each pair's
+// mail read the run of its own chart only (the signal's interval was passed in as `tf`); nothing of the other chart's
+// run appeared in it. (v43, below: no mail carries a run's numbers.) The two runs, never mixed:
 //   "15min"  the study's TF=15min re-run on GMO's files read afresh (research/macdfade15-spec.md "Result of the re-run on
 //            GMO's files read afresh": Actions run 44535888012 on main 9ca2054); its summary.json is in the repository
 //            as research/ledger/macdfade15-summary.json. It replaces the first 15-minute run, 44077464383, which read
@@ -31,14 +31,28 @@
 // THE PARAGRAPH (section 4.5): the mail's (fadeMeasuredLine: one pair, on its own chart) and the notes' (fadeMeasuredNotes:
 // the five pairs of one chart, with the changes 4.5's "The notes' version" lists, and no others). Written as 4.5 says:
 // the bar's word from the run's chart (「15分足」 / "15-minute", 「1時間足」 / "1-hour"; any other chart stops the build);
-// 〔mailedOn〕 right after the first sentence (which pairs' mails are judged on this chart, from FADE_MAILED_ON; the
-// others' on the other chart; every number of the paragraph measured on this one); 〔from〕 / 〔to〕 in UTC (ja
+// 〔mailedOn〕 right after the first sentence (v41: which pairs' mails were judged on this chart, the others' on the
+// other chart, every number of the paragraph measured on this one; v43: all five pairs' emails judged on 5-minute
+// bars, every number of the paragraph measured on this chart, not on 5-minute bars); 〔from〕 / 〔to〕 in UTC (ja
 // 「2024年1月1日 0:00（UTC）」, en "1 January 2024, 00:00 UTC"); a mean to 2 decimals with its sign, a sum and the worst
 // to 1 with their sign, the largest loss on the way to 1 (the study's print); a minus as toFixed writes it ("-0.26");
 // thousands separators by one rule for ja and en (1,490; 2,243.6; -9,820.9); durations in minutes under 2 hours, hours
 // under 2 days, days beyond, to the nearest whole unit, 「約」 / "about" before one that was rounded; after the pair's
 // sentence (the notes': the five pairs' means), the per-pair chance sentence. The 〔open〕 = 0 and 〔tp〕 = 0 variants
 // are v40's (4.5: as research/macdfade1h-prod-spec.md 4.5); 〔trades〕 = 0 stops the build.
+//
+// v43 (the owner, 2026-11-26: 「fxと金は全て5分足に切り替えて」, then 「いや、もう本番変えて。 5分足に」, then, 2026-11-27,
+// 「金は1時間足で判断して」): all five pairs' emails are judged on 5-minute bars (FADE_MAILED_TF below; indicators.ts
+// MACDH_INTERVAL_OF says the same, and src/test/macd-fade.test.ts holds the two together); gold stays on 1-hour bars and
+// has no numbers. Nothing of the rule has been measured on 5-minute bars: there is no 5-minute run, and none is made up
+// here. The two runs of record above stay as they are (FadeTf, FADE_MEASURED), and the app's notes keep both paragraphs;
+// their 〔mailedOn〕 now says that all five pairs' emails are judged on 5-minute bars and that every number of the
+// paragraph was measured on the run's own bars, not on 5-minute bars (v41's said which pairs were mailed on which run's
+// chart, from FADE_MAILED_ON, which went: with every pair on 5-minute bars its lists would be empty, and the build, which
+// runs while this module loads, would have stopped signal-alerts, live-chart and the econ-calendar mailer). No mail
+// carries a measured paragraph any more: a pair's 5-minute mail says that it is not measured there
+// (FADE_NOT_MEASURED_ON_MAILED_TF, below). fadeMeasuredLine, the mail's form of the paragraph, is kept buildable for
+// the two runs (its tests hold section 4.5's text word for word) but is no mail's from v43.
 //
 // It imports nothing from the signal-alerts function (its indicators.ts imports this module, and the notes are built
 // while it loads: an import back would read indicators.ts's constants before they are set). Pure: no clock, no I/O.
@@ -200,11 +214,18 @@ export const FADE_MEASURED: Readonly<Record<FadeTf, FadeMeasured>> = {
   },
 };
 
-// 〔mailedOn〕 (section 4.5): the pairs whose mails are judged on each chart, in this order, the same as the function's
-// map (indicators.ts MACDH_INTERVAL_OF; src/test/macd-fade.test.ts pins the two together, and that no pair is in both)
-export const FADE_MAILED_ON: Readonly<Record<FadeTf, readonly string[]>> = {
-  "15min": ["USD/JPY", "AUD/USD"],
-  "1h": ["EUR/JPY", "AUD/JPY", "EUR/USD"],
+// v43: the chart all five pairs' emails are judged on, the same as the function's map for each of the five
+// (indicators.ts MACDH_INTERVAL_OF; src/test/macd-fade.test.ts pins the two together). Not a run's chart: nothing was
+// measured on it. (v41's FADE_MAILED_ON, which pairs were mailed on each run's chart, went with v43: its lists would
+// all be empty)
+export const FADE_MAILED_TF = "5min";
+
+// v43: what a pair's email says in place of a measured paragraph (renderFadeMail, the five pairs on FADE_MAILED_TF):
+// the rule is not measured on 5-minute bars, and the numbers that were measured, on 15-minute and 1-hour bars, are in
+// the app's settings notes (macdxNotes [7] and [8], FADE_MEASURED_NOTES below) and are not 5-minute numbers
+export const FADE_NOT_MEASURED_ON_MAILED_TF: Readonly<Record<FadeLang, string>> = {
+  ja: "この決まりは、5分足ではまだ測っていません（数字はありません）。15分足と1時間足で測った数字は、アプリの設定の注にあります（5分足の数字ではありません）。",
+  en: "This rule has not been measured on 5-minute bars (there are no numbers for them). The numbers measured on 15-minute and 1-hour bars are in the app's settings notes (they are not 5-minute numbers).",
 };
 
 // the part of a summary.json (research/macdfade15.ts summaryOf) the paragraph reads
@@ -311,31 +332,26 @@ const need = (v: number | null, what: string): number => {
 const hasRun = (tf: string): tf is FadeTf => Object.prototype.hasOwnProperty.call(FADE_MEASURED, tf);
 const runOf = (tf: string): FadeMeasured | undefined => (hasRun(tf) ? FADE_MEASURED[tf] : undefined);
 
-// the bar's word (section 4.5), from the run's chart: any other chart stops the build
+// the bar's word (section 4.5), from the run's chart (v43: and FADE_MAILED_TF's, for 〔mailedOn〕; no run is held on
+// it, so hasRun refuses a paragraph of it before any word is looked up): any other chart stops the build
 const barWord = (tf: string, lang: FadeLang): string => {
+  if (tf === "5min") return lang === "ja" ? "5分足" : "5-minute";
   if (tf === "15min") return lang === "ja" ? "15分足" : "15-minute";
   if (tf === "1h") return lang === "ja" ? "1時間足" : "1-hour";
-  throw new Error(`the measured paragraph: the run's chart is "${tf}", not 15min or 1h`);
+  throw new Error(`the measured paragraph: the chart is "${tf}", not 5min, 15min or 1h`);
 };
-const otherTf = (tf: FadeTf): FadeTf => (tf === "15min" ? "1h" : "15min");
 
-// "USD/JPY and AUD/USD", "EUR/JPY, AUD/JPY and EUR/USD" (no count word)
-const andList = (xs: readonly string[]): string => (xs.length === 1 ? xs[0] : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
-
-// 〔mailedOn〕 (section 4.5), the same in the mail and the notes: FADE_MAILED_ON[tf] in its order, then the run's other
-// pairs in the run's order (`pairJa` in ja, the codes in en). A pair of FADE_MAILED_ON[tf] that the run does not
-// hold, or an empty list on either side, cannot be written: the build stops.
+// 〔mailedOn〕 (section 4.5), the same in the mail and the notes. v43: all five pairs' emails are judged on
+// FADE_MAILED_TF's bars, and every number of the paragraph was measured on the run's own bars (`tf`), not on those.
+// (v41's sentence named the pairs mailed on each run's chart, from FADE_MAILED_ON.) It speaks of the run's pairs as the
+// five: a run that does not hold five pairs cannot be written, and the build stops.
 const mailedOnOf = (m: FadeMeasured, tf: FadeTf, lang: FadeLang): string => {
-  const on = FADE_MAILED_ON[tf];
-  const runPairs = m.pairs.map((p) => p.pair);
-  for (const p of on) if (!runPairs.includes(p)) throw new Error(`the measured paragraph: ${p}, mailed on ${tf}, is not among the run's pairs`);
-  const others = runPairs.filter((p) => !on.includes(p));
-  if (on.length === 0 || others.length === 0) throw new Error(`the measured paragraph: 〔mailedOn〕 of ${tf} has an empty list`);
+  if (m.pairs.length !== 5) throw new Error(`the measured paragraph: 〔mailedOn〕 speaks of five pairs, the run holds ${m.pairs.length}`);
   const here = barWord(tf, lang);
-  const there = barWord(otherTf(tf), lang);
+  const mailed = barWord(FADE_MAILED_TF, lang);
   return lang === "ja"
-    ? `この5ペアのうち、メールを${here}で判定するのは${on.map((p) => pairJa(p)).join("・")}です。${others.map((p) => pairJa(p)).join("・")}のメールは${there}で判定し、そのメールには${there}で測った数字を載せています（この段落の数字は、どのペアの分も、すべて${here}で測ったものです）。`
-    : `Of these five pairs, the email is judged on ${here} bars for ${andList(on)}. The emails of ${andList(others)} are judged on ${there} bars and carry the numbers measured on ${there} bars (every number in this paragraph, for every pair, was measured on ${here} bars).`;
+    ? `この5ペアのメールは、今はすべて${mailed}で判定しています。この段落の数字は、どのペアの分も、すべて${here}で測ったもので、${mailed}で測ったものではありません。`
+    : `The emails of all five pairs are now judged on ${mailed} bars. Every number in this paragraph, for every pair, was measured on ${here} bars, not on ${mailed} bars.`;
 };
 
 // 〔baseWhat〕 (section 4.5), from the run's chart; the same in the mail and the notes (it holds no 「このメール」)
@@ -479,10 +495,12 @@ const paragraphOf = (lang: FadeLang, pair: string | null, tf: string, m: FadeMea
   ].join(" ");
 };
 
-// The measured paragraph of a pair's email (section 4.3 item 9): `pair` one of the five pairs measured (gold and the
-// shares have no numbers: their mails say so instead), `tf` the chart the signal was judged on (the signal's
-// interval: renderFadeMail passes it, so the numbers and the bar's word are always that chart's). It throws if `tf`
-// has no run, if the run is not `tf`'s, or if `pair` is not among the run's pairs.
+// The measured paragraph in a pair's email's form (section 4.3 item 9): `pair` one of the five pairs measured (gold
+// and the shares have no numbers: their mails say so instead), `tf` the run's chart. v41 and v42's renderFadeMail
+// passed the signal's interval, so a mail's numbers and bar word were always its chart's. v43: no mail carries it
+// (the five pairs' emails are judged on 5-minute bars, where no run is held: renderFadeMail writes
+// FADE_NOT_MEASURED_ON_MAILED_TF instead); it is kept buildable for the two runs, and its tests hold section 4.5's text.
+// It throws if `tf` has no run (5min among them), if the run is not `tf`'s, or if `pair` is not among the run's pairs.
 export const fadeMeasuredLine = (lang: FadeLang, pair: string, tf: string, m: FadeMeasured | undefined = runOf(tf)): string => paragraphOf(lang, pair, tf, m);
 
 // The notes' version (section 5, macdxNotes [7] and [8]): one paragraph per chart, for that chart's five pairs
@@ -490,7 +508,9 @@ export const fadeMeasuredNotes = (lang: FadeLang, tf: string, m: FadeMeasured | 
 
 // the notes' paragraphs as built from FADE_MEASURED, one per chart, for the app's i18n texts to be pinned to
 // (src/lib/i18n ja / en macdxNotes [7] the 15-minute run's, [8] the 1-hour run's). Both are built while the module
-// loads: a run that cannot be written stops it (and the tests).
+// loads: a run that cannot be written stops it (and the tests), and with it every function that imports
+// signal-alerts' indicators.ts (signal-alerts, live-chart, the econ-calendar mailer). v43 keeps both (the five pairs
+// on 5-minute bars, where nothing was measured, leave nothing here that cannot be built).
 export const FADE_MEASURED_NOTES: Readonly<Record<FadeTf, Readonly<Record<FadeLang, string>>>> = {
   "15min": { ja: fadeMeasuredNotes("ja", "15min"), en: fadeMeasuredNotes("en", "15min") },
   "1h": { ja: fadeMeasuredNotes("ja", "1h"), en: fadeMeasuredNotes("en", "1h") },

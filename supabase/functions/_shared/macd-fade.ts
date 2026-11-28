@@ -24,11 +24,16 @@
 //
 // Pure: no clock, no I/O. One function for the pairs, gold and the shares. Imports macd.ts and macd-level.ts only
 // (not macd-ride.ts). The ids' versions and the charts' intervals are the function's (indicators.ts, stocks.ts; 3.7:
-// the version follows the chart): the two 'macdx' ids, through macdhRuleId, are fadeRuleId("macdx", "15min", 12),
-// "macdx_12_26_9_w600_15min_fade96of120_in_v12" (USD/JPY and AUD/USD), and fadeRuleId("macdx", "1h", 11), v40's
-// "macdx_12_26_9_w600_1h_fade96of120_in_v11" (EUR/JPY, AUD/JPY, EUR/USD and gold); fadeRuleId("stockmacd",
+// the version follows the chart): in v41 and v42 the two 'macdx' ids in force, through macdhRuleId, were
+// fadeRuleId("macdx", "15min", 12), "macdx_12_26_9_w600_15min_fade96of120_in_v12" (USD/JPY and AUD/USD), and
+// fadeRuleId("macdx", "1h", 11), v40's "macdx_12_26_9_w600_1h_fade96of120_in_v11" (EUR/JPY, AUD/JPY, EUR/USD and
+// gold). v43 (signal-alerts): the five pairs' id is fadeRuleId("macdx", "5min", 13),
+// "macdx_12_26_9_w600_5min_fade96of120_in_v13"; gold keeps fadeRuleId("macdx", "1h", 11) (v11); v12 is no chart's in
+// force and stays buildable for the rows written up to v42. fadeRuleId("stockmacd",
 // STOCKMACD_INTERVALS[0], 5) is "stockmacd_12_26_9_w600_15min_fade96of120_in_v5" (v40's, on the 1-hour chart:
-// ..._1h_fade96of120_in_v4).
+// ..._1h_fade96of120_in_v4). v43 (signal-alerts): the 'stockmacd' ids through stockmacdRuleId, one version a chart:
+// fadeRuleId("stockmacd", "15min", 5), v5 as above (every share but 4063.T), and fadeRuleId("stockmacd", "1h", 6),
+// "stockmacd_12_26_9_w600_1h_fade96of120_in_v6" (4063.T).
 
 import { macd, MACD_DEFAULTS } from "./macd.ts";
 import { LEVEL_WINDOW, ZONE_BARS, zoneAt } from "./macd-level.ts";

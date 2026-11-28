@@ -135,8 +135,8 @@ describe("#385 the AMD Po3 email (signal-alerts v32)", () => {
     expect(fn).toMatch(/try \{\s+sigs\.push\(\.\.\.amdpo3Signals\(pair, interval, closed, nowMs\)\);\s+\} catch \(err\) \{\s+console\.error\("amdpo3 failed:", pair, interval, err\);\s+\}/);
     // (#386: v33 put the MACD email back on the 1-hour chart; #387: v34 added the EMA 20 / 200 way's; #397: v39 made
     // the MACD email a ride; v40 the fade; v41 moved the fade to 15-minute bars; v42 opened the shares' email to any
-    // share; AMD Po3 is as v32 brought it)
-    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v42-2026-11-22";');
+    // share; v43 moved the five pairs' fade to 5-minute bars, gold's kept on 1-hour bars; AMD Po3 is as v32 brought it)
+    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v43-2026-11-27";');
     // the test email names the rule (not RSI + SAR)
     expect(renderTestMail([{ pair: "USD/JPY", interval: "15min", rule: "amdpo3" }], "ja").text).toContain("登録中のチャート: ドル/円 15分足（AMD Po3）");
     expect(renderTestMail([{ pair: "USD/JPY", interval: "15min", rule: "amdpo3" }], "en").text).toContain("Charts you follow: USD/JPY 15-minute (AMD Po3)");

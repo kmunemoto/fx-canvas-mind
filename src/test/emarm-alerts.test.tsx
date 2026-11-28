@@ -178,8 +178,9 @@ describe("#387 the EMA 20 / 200 way's email (signal-alerts v34)", () => {
     expect(fn).toMatch(/try \{\s+sigs\.push\(\.\.\.emarmSignals\(pair, interval, closed, nowMs\)\);\s+\} catch \(err\) \{\s+console\.error\("emarm failed:", pair, interval, err\);\s+\}/);
     expect(fn).toContain("emarm: { pairs: EMARM_PAIRS, intervals: EMARM_INTERVALS },");
     // (#397: v39 made the MACD email a ride; v40 the fade; v41 moved it to 15-minute bars; v42 opened the shares' email to
-    // any share; the EMA 20 / 200 way is as v34 brought it)
-    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v42-2026-11-22";');
+    // any share; v43 moved the five pairs' fade to 5-minute bars, gold's kept on 1-hour bars; the EMA 20 / 200 way is as
+    // v34 brought it)
+    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v43-2026-11-27";');
     expect(renderTestMail([{ pair: "USD/JPY", interval: "15min", rule: "emarm" }], "ja").text).toContain("登録中のチャート: ドル/円 15分足（EMAクロス＋リターンムーブ）");
     expect(renderTestMail([{ pair: "USD/JPY", interval: "15min", rule: "emarm" }], "en").text).toContain("Charts you follow: USD/JPY 15-minute (EMA cross + return move)");
     const mig = readFileSync("supabase/migrations/20261030070000_signal_alert_emarm.sql", "utf8");

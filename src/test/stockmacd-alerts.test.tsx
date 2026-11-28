@@ -39,16 +39,19 @@ import { AlertRequestError, normalizeAlertSettings, type AlertSettings } from ".
 import type { StockHit } from "../lib/stocks";
 import {
   CLOSES,
+  CLOSES_1H,
   STOCK_POLL_MS,
   STOCK_RUN_BUDGET_MS,
-  STOCKMACD_FADE_VERSION,
+  STOCKMACD_CHART_OF,
+  STOCKMACD_FADE_VERSION_OF,
   STOCKMACD_INTERVALS,
   STOCKMACD_PAIRS,
-  STOCKMACD_RULE_ID,
   STOCK_FRESH_MS,
   STOCKMACD_CAP,
   type StockBar,
   isListedStock,
+  isStockmacdChart,
+  isStockmacdJudged,
   localOf,
   renderStockMail,
   stockBarBreak,
@@ -60,6 +63,8 @@ import {
   stockNameClean,
   stockNameOf,
   stockSweepOf,
+  stockmacdChartOf,
+  stockmacdRuleId,
 } from "../../supabase/functions/signal-alerts/stocks";
 import {
   INDICATOR_INTERVALS,
@@ -72,6 +77,7 @@ import {
   renderIndicatorMail,
   rideSignalTag,
   signalRow,
+  signalRuleId,
   type IndicatorSignal,
 } from "../../supabase/functions/signal-alerts/indicators";
 import { renderTestMail } from "../../supabase/functions/signal-alerts/logic";
@@ -92,6 +98,10 @@ const at = (iso: string) => Date.parse(iso);
 // against their files)
 const RIDE_ID = /^(?:macdx|stockmacd)_.*_(?:touch|ride)(\d+)to(\d+)of120_(in|at|out)_/;
 const FADE_ID = /^(?:macdx|stockmacd)_.*_fade(\d+)(?:tp[0-9a-z]+)?of120_in_/;
+// v43: the fade's ids, one a chart (stocks.ts stockmacdRuleId): v41's on the 15-minute chart (every share but 4063.T),
+// v43's on the 1-hour chart (4063.T); pinned in the first test below
+const V5_ID = "stockmacd_12_26_9_w600_15min_fade96of120_in_v5";
+const V6_ID = "stockmacd_12_26_9_w600_1h_fade96of120_in_v6";
 
 describe("#391 when a share's bar closes (signal-alerts/stocks.ts; v41: its 15-minute bars)", () => {
   it("is the chart's list of shares, on the 15-minute chart, under its own id: the fade's one, built from its constants", () => {
@@ -99,13 +109,21 @@ describe("#391 when a share's bar closes (signal-alerts/stocks.ts; v41: its 15-m
     expect([...STOCKMACD_INTERVALS]).toEqual(["15min"]);
     // v41 (research/macdfade15min-prod-spec.md 3.7): the fade's one id, every part from a constant, v5 (v40 writes v4).
     // It starts as the app reads the rule back from it, the app reads it as a fade at 96% (FADE_ID), not as v9's ride
-    // (RIDE_ID), and it is none of the earlier ids
-    expect(STOCKMACD_FADE_VERSION).toBe(5);
-    expect(STOCKMACD_RULE_ID).toBe("stockmacd_12_26_9_w600_15min_fade96of120_in_v5");
-    expect(STOCKMACD_RULE_ID).toBe(fadeRuleId("stockmacd", STOCKMACD_INTERVALS[0], STOCKMACD_FADE_VERSION));
-    expect(STOCKMACD_RULE_ID.startsWith("stockmacd")).toBe(true);
-    expect(FADE_ID.exec(STOCKMACD_RULE_ID)?.[1]).toBe("96");
-    expect(RIDE_ID.test(STOCKMACD_RULE_ID)).toBe(false);
+    // (RIDE_ID), and it is none of the earlier ids. v43: one id a chart, v5 on the 15-minute chart as before, v6 on the
+    // 1-hour chart (4063.T's; v40's v4 on '1h' not used again)
+    expect(STOCKMACD_FADE_VERSION_OF).toEqual({ "15min": 5, "1h": 6 });
+    expect(stockmacdRuleId("15min")).toBe(V5_ID);
+    expect(stockmacdRuleId("1h")).toBe(V6_ID);
+    expect(V5_ID).toBe(fadeRuleId("stockmacd", STOCKMACD_INTERVALS[0], STOCKMACD_FADE_VERSION_OF["15min"]));
+    expect(V6_ID).toBe(fadeRuleId("stockmacd", "1h", 6));
+    for (const id of [V5_ID, V6_ID]) {
+      expect(id.startsWith("stockmacd")).toBe(true);
+      expect(FADE_ID.exec(id)?.[1]).toBe("96");
+      expect(RIDE_ID.test(id)).toBe(false);
+    }
+    expect(V6_ID).not.toBe(V5_ID);
+    // a chart with no version has no id
+    for (const no of ["5min", "4h", "1day", "", "toString"]) expect(() => stockmacdRuleId(no), no).toThrow(/no version/);
     for (const old of [
       "stockmacd_12_26_9_w600_1h_z95of120_v1",
       "stockmacd_12_26_9_w600_1h_ride90to96of120_in_v2",
@@ -116,12 +134,17 @@ describe("#391 when a share's bar closes (signal-alerts/stocks.ts; v41: its 15-m
       // v40's, written from 2026-11-18
       "stockmacd_12_26_9_w600_1h_fade96of120_in_v4",
     ]) {
-      expect(STOCKMACD_RULE_ID).not.toBe(old);
+      expect(V5_ID).not.toBe(old);
+      expect(V6_ID).not.toBe(old);
     }
     expect(INDICATOR_RULES).toContain("stockmacd");
     expect(isIndicatorRule("stockmacd")).toBe(true);
-    // indicatorRuleId gives it, and a share's row is written under it (signalRow, below)
-    expect(indicatorRuleId("stockmacd")).toBe(STOCKMACD_RULE_ID);
+    // v43: indicatorRuleId has no 'stockmacd' answer (one id a chart); a share's row is written under its signal's
+    // chart's id (signalRuleId, signalRow below)
+    expect(() => indicatorRuleId("stockmacd")).toThrow(/one id per chart/);
+    expect(signalRuleId({ rule: "stockmacd", interval: "15min" })).toBe(V5_ID);
+    expect(signalRuleId({ rule: "stockmacd", interval: "1h" })).toBe(V6_ID);
+    expect(() => signalRuleId({ rule: "stockmacd", interval: "4h" })).toThrow(/no version/);
     expect(isIndicatorChartFor("stockmacd", "AAPL", "15min")).toBe(true);
     expect(isIndicatorChartFor("stockmacd", "7203.T", "15min")).toBe(true);
     // v42 (research/allstocks-prod-spec.md 4.1): any share of the symbol's shape, not only the 22; not one of another
@@ -286,6 +309,203 @@ describe("#391 when a share's bar closes (signal-alerts/stocks.ts; v41: its 15-m
     // Monday 9:45 New York with the newest bar Friday's (a holiday): nothing to do that close
     const holiday = stockSweepOf("INTC", bars, at("2026-11-02T14:45:00Z"), undefined, at("2026-11-02T14:46:00Z"));
     expect(holiday).toMatchObject({ noSession: true, done: true, judge: false, closed: [], newest: null });
+  });
+});
+
+// v43 (the owner, 2026-11-27: 「信越化学工業 のメールは1時間足で判断して」): Shin-Etsu Chemical (4063.T) judged on its 1-hour
+// bars, every other share on its 15-minute bars; the follow stays the share's '15min' row
+describe("v43 one share on the 1-hour chart: 4063.T (stocks.ts STOCKMACD_CHART_OF)", () => {
+  it("the map names 4063.T alone, on '1h'; every other share of the 22, and any other share, is judged on '15min'", () => {
+    expect(STOCKMACD_CHART_OF).toEqual({ "4063.T": "1h" });
+    expect(stockmacdChartOf("4063.T")).toBe("1h");
+    for (const s of STOCKMACD_PAIRS.filter((p) => p !== "4063.T")) expect(stockmacdChartOf(s), s).toBe("15min");
+    for (const s of ["IBM", "BRK-B", "130A.T", "4062.T"]) expect(stockmacdChartOf(s), s).toBe("15min");
+    // no name of Object.prototype reads as a share's chart
+    for (const s of ["toString", "constructor", "__proto__", "hasOwnProperty"]) expect(stockmacdChartOf(s), s).toBe("15min");
+    // the follow: every share's '15min' row, 4063.T's too; never a '1h' row (set, set_many, the run's rows)
+    expect(isStockmacdChart("4063.T", "15min")).toBe(true);
+    expect(isStockmacdChart("4063.T", "1h")).toBe(false);
+    expect(isIndicatorChartFor("stockmacd", "4063.T", "15min")).toBe(true);
+    expect(isIndicatorChartFor("stockmacd", "4063.T", "1h")).toBe(false);
+    // the chart judged on: 4063.T's '1h' only, every other share's '15min' only
+    expect(isStockmacdJudged("4063.T", "1h")).toBe(true);
+    expect(isStockmacdJudged("4063.T", "15min")).toBe(false);
+    expect(isStockmacdJudged("7203.T", "15min")).toBe(true);
+    expect(isStockmacdJudged("7203.T", "1h")).toBe(false);
+    expect(isStockmacdJudged("AAPL", "15min")).toBe(true);
+    expect(isStockmacdJudged("AAPL", "1h")).toBe(false);
+    expect(isStockmacdJudged("ibm", "15min")).toBe(false);
+  });
+
+  it("closes on the 1-hour chart (v40's): Tokyo 10:00, 11:00, 11:30 (the lunch break), 13:00, 14:00, 15:00 and 15:30 (the closing auction); New York 10:30 … 15:30 and 16:00", () => {
+    const hm = (v: number) => `${Math.floor(v / 60)}:${String(v % 60).padStart(2, "0")}`;
+    expect(CLOSES_1H.jp.map(hm)).toEqual(["10:00", "11:00", "11:30", "13:00", "14:00", "15:00", "15:30"]);
+    expect(CLOSES_1H.us.map(hm)).toEqual(["10:30", "11:30", "12:30", "13:30", "14:30", "15:30", "16:00"]);
+    // the 15-minute closes are unchanged (the first test of this file holds them)
+    expect([CLOSES.us.length, CLOSES.jp.length]).toEqual([26, 22]);
+  });
+
+  it("4063.T is due only in the half hour after one of its own 1-hour closes (Monday 2026-11-02, Tokyo UTC+9); 7203.T on its 15-minute closes as before", () => {
+    // 9:59 JST: nothing closed yet today
+    expect(stockCloseDue("4063.T", at("2026-11-02T00:59:00Z"))).toBeNull();
+    // 10:00 JST, the first close, and its half hour; 10:15 is no close of 4063.T's (7203.T's 10:15 is)
+    expect(stockCloseDue("4063.T", at("2026-11-02T01:00:30Z"))).toBe(at("2026-11-02T01:00:00Z"));
+    expect(stockCloseDue("4063.T", at("2026-11-02T01:15:30Z"))).toBe(at("2026-11-02T01:00:00Z"));
+    expect(stockCloseDue("7203.T", at("2026-11-02T01:15:30Z"))).toBe(at("2026-11-02T01:15:00Z"));
+    expect(stockCloseDue("4063.T", at("2026-11-02T01:30:00Z"))).toBe(at("2026-11-02T01:00:00Z"));
+    // 10:31 JST: past the 10:00 close's half hour, before 11:00: nothing due (7203.T's 10:30 is)
+    expect(stockCloseDue("4063.T", at("2026-11-02T01:31:00Z"))).toBeNull();
+    expect(stockCloseDue("7203.T", at("2026-11-02T01:31:00Z"))).toBe(at("2026-11-02T01:30:00Z"));
+    // 11:00 JST, then 11:30 JST (the 11:00 bar's end, at the lunch break) up to 12:00 JST; nothing in the rest of the
+    // break or at 12:45 JST (the 15-minute chart's first afternoon close)
+    expect(stockCloseDue("4063.T", at("2026-11-02T02:10:00Z"))).toBe(at("2026-11-02T02:00:00Z"));
+    expect(stockCloseDue("4063.T", at("2026-11-02T02:30:10Z"))).toBe(at("2026-11-02T02:30:00Z"));
+    expect(stockCloseDue("4063.T", at("2026-11-02T02:45:00Z"))).toBe(at("2026-11-02T02:30:00Z"));
+    expect(stockCloseDue("4063.T", at("2026-11-02T03:00:00Z"))).toBe(at("2026-11-02T02:30:00Z"));
+    expect(stockCloseDue("4063.T", at("2026-11-02T03:01:00Z"))).toBeNull();
+    expect(stockCloseDue("4063.T", at("2026-11-02T03:45:10Z"))).toBeNull();
+    expect(stockCloseDue("7203.T", at("2026-11-02T03:45:10Z"))).toBe(at("2026-11-02T03:45:00Z"));
+    // 13:00 JST (the bar stamped 12:00, 12:30-13:00), 14:00, 15:00, and 15:30 JST (the closing auction), half an hour on
+    expect(stockCloseDue("4063.T", at("2026-11-02T04:00:20Z"))).toBe(at("2026-11-02T04:00:00Z"));
+    expect(stockCloseDue("4063.T", at("2026-11-02T05:20:00Z"))).toBe(at("2026-11-02T05:00:00Z"));
+    expect(stockCloseDue("4063.T", at("2026-11-02T06:15:00Z"))).toBe(at("2026-11-02T06:00:00Z"));
+    expect(stockCloseDue("4063.T", at("2026-11-02T06:45:00Z"))).toBe(at("2026-11-02T06:30:00Z"));
+    expect(stockCloseDue("4063.T", at("2026-11-02T07:00:00Z"))).toBe(at("2026-11-02T06:30:00Z"));
+    expect(stockCloseDue("4063.T", at("2026-11-02T07:01:00Z"))).toBeNull();
+    // Saturday
+    expect(stockCloseDue("4063.T", at("2026-10-31T01:05:00Z"))).toBeNull();
+    // (the minutes of the day a share is due, 9:00 to 17:00 JST: 4063.T's seven closes and the half hour after each, the
+    // windows of 11:00 and 11:30, and of 15:00 and 15:30, running into each other: 31 + 61 + 31 + 31 + 61 = 215; 7203.T's
+    // 9:15 to 12:00 and 12:45 to 16:00 JST: 166 + 196 = 362)
+    const minutes = (sym: string) => {
+      let n = 0;
+      for (let t = at("2026-11-02T00:00:00Z"); t < at("2026-11-02T08:00:00Z"); t += MIN) if (stockCloseDue(sym, t) !== null) n++;
+      return n;
+    };
+    expect(minutes("4063.T")).toBe(215);
+    expect(minutes("7203.T")).toBe(362);
+  });
+
+  it("ends 4063.T's bars as v40 did: the 11:00 bar at the lunch break (11:30), the bar stamped 12:00 (12:30-13:00) at 13:00, the 15:00 bar at the closing auction (15:30), every other an hour after it opens; its breaks are the 11:00 bar's and the 15:00 bar's", () => {
+    expect(stockBarEnd("4063.T", at("2026-11-02T00:00:00Z"))).toBe(at("2026-11-02T01:00:00Z"));
+    expect(stockBarEnd("4063.T", at("2026-11-02T01:00:00Z"))).toBe(at("2026-11-02T02:00:00Z"));
+    expect(stockBarEnd("4063.T", at("2026-11-02T02:00:00Z"))).toBe(at("2026-11-02T02:30:00Z"));
+    expect(stockBarEnd("4063.T", at("2026-11-02T03:00:00Z"))).toBe(at("2026-11-02T04:00:00Z"));
+    expect(stockBarEnd("4063.T", at("2026-11-02T05:00:00Z"))).toBe(at("2026-11-02T06:00:00Z"));
+    expect(stockBarEnd("4063.T", at("2026-11-02T06:00:00Z"))).toBe(at("2026-11-02T06:30:00Z"));
+    // a session that ends earlier cuts it, as on the 15-minute chart
+    expect(stockBarEnd("4063.T", at("2026-11-02T05:00:00Z"), at("2026-11-02T05:30:00Z"))).toBe(at("2026-11-02T05:30:00Z"));
+    expect(stockBarBreak("4063.T", at("2026-11-02T02:00:00Z"))).toBe("lunch");
+    expect(stockBarBreak("4063.T", at("2026-11-02T06:00:00Z"))).toBe("close");
+    for (const t of ["2026-11-02T00:00:00Z", "2026-11-02T01:00:00Z", "2026-11-02T03:00:00Z", "2026-11-02T05:00:00Z", "2026-11-02T02:15:00Z", "2026-11-02T06:15:00Z"]) {
+      expect(stockBarBreak("4063.T", at(t)), t).toBeNull();
+    }
+    // 7203.T on its 15-minute bars as before: 15 minutes a bar, the 11:15 and 15:15 bars its breaks
+    expect(stockBarEnd("7203.T", at("2026-11-02T02:00:00Z"))).toBe(at("2026-11-02T02:15:00Z"));
+    expect(stockBarEnd("7203.T", at("2026-11-02T06:00:00Z"))).toBe(at("2026-11-02T06:15:00Z"));
+    expect(stockBarBreak("7203.T", at("2026-11-02T02:15:00Z"))).toBe("lunch");
+    expect(stockBarBreak("7203.T", at("2026-11-02T02:00:00Z"))).toBeNull();
+    expect(stockBarBreak("7203.T", at("2026-11-02T06:00:00Z"))).toBeNull();
+  });
+
+  // A made 1-hour answer of 4063.T in the shape docs §8.141 reports of Yahoo's 1-hour Tokyo answers of 2026-11-06 (rows
+  // stamped 9:00, 10:00, 11:00, 12:00 for 12:30-13:00, 13:00, 14:00 and 15:00 JST, and after the close a 15:30 point of
+  // volume 0). The prices are made up (about 100 yen, no real price); no real Yahoo answer is in the repository
+  const t = (iso: string) => Date.parse(iso) / 1000;
+  // (nextDay: Yahoo already naming the next day's session, as after Tokyo's close, docs §8.141)
+  const shinEtsu = (rows: number, market: string, closingPoint = false, nextDay = false) => {
+    const day = nextDay ? "2026-11-17" : "2026-11-16";
+    const ts = ["00", "01", "02", "03", "04", "05", "06"].slice(0, rows).map((h) => t(`2026-11-16T${h}:00:00Z`));
+    const close = [100.1, 100.4, 100.2, 100.6, 100.9, 101.3, 101.0].slice(0, rows);
+    const volume: number[] = Array(rows).fill(20000);
+    if (closingPoint) {
+      ts.push(t("2026-11-16T06:30:00Z"));
+      close.push(101.2);
+      volume.push(0);
+    }
+    return {
+      chart: {
+        result: [{
+          meta: { symbol: "4063.T", gmtoffset: 32400, regularMarketPrice: close[close.length - 1], regularMarketTime: t(market), currentTradingPeriod: { regular: { start: t(`${day}T00:00:00Z`), end: t(`${day}T06:30:00Z`) } } },
+          timestamp: ts,
+          indicators: { quote: [{ open: close.map((c) => c - 0.1), high: close.map((c) => c + 0.2), low: close.map((c) => c - 0.3), close, volume }] },
+        }],
+      },
+    };
+  };
+
+  it("reads 4063.T's answer on its 1-hour chart (parseYahooChart's \"1h\"): the 11:00 bar ends at the lunch break and is closed once Yahoo's last trade is 11:30:00 JST (docs §8.141: 02:30:00 UTC, read at 11:45 JST); the 11:30 close is then done", () => {
+    // 11:44 JST, Yahoo's last trade 11:29 JST (15 minutes behind): the 11:00 bar not closed yet, the 11:30 close not done
+    const early = stockBarsOf("4063.T", shinEtsu(3, "2026-11-16T02:29:00Z"), at("2026-11-16T02:44:00Z"), "1h")!;
+    expect(early.bars.map((b) => [b.datetime, b.end - b.open_ms, b.closed])).toEqual([
+      ["2026-11-16 00:00:00", H, true],
+      ["2026-11-16 01:00:00", H, true],
+      ["2026-11-16 02:00:00", 30 * MIN, false],
+    ]);
+    const due = stockCloseDue("4063.T", at("2026-11-16T02:44:00Z"))!;
+    expect(due).toBe(at("2026-11-16T02:30:00Z"));
+    expect(stockSweepOf("4063.T", early.bars, due, undefined, at("2026-11-16T02:44:00Z"))).toMatchObject({ judge: true, done: false, noSession: false });
+    // 11:45:30 JST, the last trade at 11:30:00 JST: closed, judged, the close due done; trading stops at its end
+    const lunch = stockBarsOf("4063.T", shinEtsu(3, "2026-11-16T02:30:00Z"), at("2026-11-16T02:45:30Z"), "1h")!;
+    const s = stockSweepOf("4063.T", lunch.bars, due, undefined, at("2026-11-16T02:45:30Z"));
+    expect(s).toMatchObject({ judge: true, done: true, fresh: true });
+    expect(s.newest!.datetime).toBe("2026-11-16 02:00:00");
+    expect(s.newest!.end).toBe(at("2026-11-16T02:30:00Z"));
+    expect(stockBarBreak("4063.T", s.newest!.open_ms)).toBe("lunch");
+    // rounded as the chart's history, a tenth of a yen
+    expect(lunch.bars[0].open).toBe(100);
+  });
+
+  it("the afternoon: the bar stamped 12:00 ends at 13:00; after the close Yahoo's 15:30 point (volume 0) is joined to the 15:00 bar, which ends at the closing auction and is judged on that price", () => {
+    const after = stockBarsOf("4063.T", shinEtsu(7, "2026-11-16T06:30:00Z", true), at("2026-11-16T06:45:30Z"), "1h")!;
+    expect(after.bars).toHaveLength(7);
+    expect(after.bars.every((b) => b.closed)).toBe(true);
+    expect(after.bars[3]).toMatchObject({ datetime: "2026-11-16 03:00:00", end: at("2026-11-16T04:00:00Z") });
+    expect(after.bars[6]).toMatchObject({ datetime: "2026-11-16 06:00:00", close: 101.2, end: at("2026-11-16T06:30:00Z") });
+    const due = stockCloseDue("4063.T", at("2026-11-16T06:45:30Z"))!;
+    expect(due).toBe(at("2026-11-16T06:30:00Z"));
+    const s = stockSweepOf("4063.T", after.bars, due, undefined, at("2026-11-16T06:45:30Z"));
+    expect(s).toMatchObject({ judge: true, done: true, fresh: true });
+    expect(stockBarBreak("4063.T", s.newest!.open_ms)).toBe("close");
+    // with fewer than 600 closed bars there is no entry
+    expect(stockFadeClose("4063.T", s.closed, at("2026-11-16T06:45:30Z"))).toEqual({ fresh: true, entry: null });
+    // with Yahoo already naming the next day's session the 15:30 point is joined all the same (on 1-hour bars it falls
+    // inside the 15:00 bar), and the 15:00 bar still ends at 15:30
+    const next = stockBarsOf("4063.T", shinEtsu(7, "2026-11-16T06:30:00Z", true, true), at("2026-11-16T07:20:00Z"), "1h")!;
+    expect(next.bars).toHaveLength(7);
+    expect(next.bars[6]).toMatchObject({ close: 101.2, end: at("2026-11-16T06:30:00Z"), closed: true });
+  });
+
+  it("stockBarsOf parses the chart it is given: by default a `15m` answer, so 4063.T's `15m` bars (as research/allstocks-scan reads every share) end 15 minutes after they open, as any other Tokyo share's; the run passes the share's own chart, so 4063.T's `60m` answer is parsed on \"1h\"", () => {
+    // a made 15-minute Tokyo morning, 9:00 to 11:15 JST, made-up prices about 100 yen, Yahoo's last trade 11:30 JST
+    const rows = 10;
+    const ts = Array.from({ length: rows }, (_, k) => t(new Date(Date.UTC(2026, 10, 16, 0, 15 * k)).toISOString()));
+    const close = Array.from({ length: rows }, (_, k) => Number((100 + k / 10).toFixed(1)));
+    const quarter = (sym: string) => ({
+      chart: {
+        result: [{
+          meta: { symbol: sym, gmtoffset: 32400, regularMarketPrice: close[rows - 1], regularMarketTime: t("2026-11-16T02:30:00Z"), currentTradingPeriod: { regular: { start: t("2026-11-16T00:00:00Z"), end: t("2026-11-16T06:30:00Z") } } },
+          timestamp: ts,
+          indicators: { quote: [{ open: close.map((c) => c - 0.1), high: close.map((c) => c + 0.2), low: close.map((c) => c - 0.3), close, volume: Array(rows).fill(20000) }] },
+        }],
+      },
+    });
+    const now = at("2026-11-16T02:45:30Z");
+    const shin = stockBarsOf("4063.T", quarter("4063.T"), now)!;
+    const toyo = stockBarsOf("7203.T", quarter("7203.T"), now)!;
+    expect(shin.bars).toHaveLength(rows);
+    expect(shin.bars.every((b) => b.end - b.open_ms === 15 * MIN && b.closed)).toBe(true);
+    expect(shin.bars.map((b) => [b.datetime, b.end, b.closed])).toEqual(toyo.bars.map((b) => [b.datetime, b.end, b.closed]));
+    // the same with the chart named; stockBarEnd on a named chart, whatever the share's own
+    expect(stockBarsOf("4063.T", quarter("4063.T"), now, "15min")).toEqual(shin);
+    expect(stockBarEnd("4063.T", at("2026-11-16T02:00:00Z"), null, "15min")).toBe(at("2026-11-16T02:15:00Z"));
+    expect(stockBarEnd("7203.T", at("2026-11-16T02:00:00Z"), null, "1h")).toBe(at("2026-11-16T02:30:00Z"));
+    // the same `15m` answer taken as 1-hour bars would be ended on the 1-hour grid (60, 45, 30 or 15 minutes a bar)
+    const asHour = stockBarsOf("4063.T", quarter("4063.T"), now, "1h")!;
+    expect(asHour.bars[0].end - asHour.bars[0].open_ms).toBe(H);
+    // the run reads each share on its own chart and parses the answer on that same chart
+    const code = readFileSync("supabase/functions/signal-alerts/index.ts", "utf8");
+    expect(code).toMatch(/const chart = stockmacdChartOf\(sym\);\s+try \{\s+const r = await fetch\(yahooChartUrl\(sym, chart\), [\s\S]{0,1500}const got = stockBarsOf\(sym, body, nowMs, chart\);/);
   });
 });
 
@@ -507,6 +727,8 @@ const closes = Array.from({ length: N }, (_, i) => Number((200 + 10 * wave(i)).t
 const openOf = (k: number) => (k > 0 ? closes[k - 1] : closes[k]);
 const iso = (ms: number) => new Date(ms).toISOString();
 const dt = (ms: number) => iso(ms).slice(0, 19).replace("T", " ");
+// (v43) a time in Japan, "YYYY-MM-DD HH:MM"
+const jst = (ms: number) => iso(ms + 9 * H).slice(0, 16).replace("T", " ");
 const closeOf = (k: number) => ends[k];
 const shareBar = (k: number, over: Partial<StockBar> = {}): StockBar => ({
   datetime: dt(times[k]), open: openOf(k), high: Math.max(openOf(k), closes[k]), low: Math.min(openOf(k), closes[k]), close: closes[k],
@@ -535,6 +757,24 @@ const I_LAST = 1585; // a SELL at a session's last bar: 2025-08-25 15:45 New Yor
 const T_LUNCH = 1527; // Tokyo: a BUY at the 11:15 JST bar (the lunch break follows), 2025-09-05
 const T_LAST = 1253; // Tokyo: a BUY at the 15:15 JST bar (the session's last, ending at 15:30), 2025-08-19
 const T_MID = 1459; // Tokyo: a SELL at the 10:45 JST bar (ending 11:00), 2025-09-02
+// v43: 4063.T's 1-hour bars, made as TOKYO's on the same wave (about 100 yen, no real price): Tokyo's seven bars a
+// weekday, stamped 9:00, 10:00, 11:00 (ending at the lunch break, 11:30), 12:00 (12:30-13:00), 13:00, 14:00 and 15:00
+// (ending at the closing auction, 15:30) JST, as docs §8.141 reports Yahoo's 1-hour answer
+const HOURLY = (() => {
+  const sym = "4063.T";
+  const t: number[] = [];
+  for (let day = Date.UTC(2025, 5, 2); t.length < N; day += 24 * H) {
+    const wd = new Date(day).getUTCDay();
+    if (wd === 0 || wd === 6) continue;
+    for (let k = 0; k < 7 && t.length < N; k++) t.push(day + k * H);
+  }
+  return { sym, times: t, ends: t.map((x) => stockBarEnd(sym, x)), closes: Array.from({ length: N }, (_, i) => Number((100 + 3 * wave(i)).toFixed(1))) };
+})();
+const hEntryAt = (i: number): FadeEntry | null => fadeCloseEntryAt(HOURLY.closes.slice(i - 599, i + 1));
+const H_MID = 1149; // 4063.T: a SELL at the 10:00 JST bar (ending 11:00), 2026-01-16
+const H_NOON = 1459; // 4063.T: a SELL at the bar stamped 12:00 JST (12:30-13:00), 2026-03-19
+const H_LUNCH = 1822; // 4063.T: a BUY at the 11:00 JST bar (ending at the lunch break, 11:30), 2026-06-01
+const H_LAST = 1329; // 4063.T: a SELL at the 15:00 JST bar (ending at the closing auction, 15:30), 2026-02-20
 
 describe("v41 the share bars the fade's tests stand on (found with the shared code)", () => {
   it("are New York's 26 bars a weekday and Tokyo's 22, and hold SELLs and BUYs inside a session, at a session's last bar and before Tokyo's lunch", () => {
@@ -577,6 +817,22 @@ describe("v41 the share bars the fade's tests stand on (found with the shared co
     expect([I_BUY, I_SELL, I_LAST].map((k) => stockBarBreak(SYM, times[k]))).toEqual([null, null, "close"]);
     expect([T_LUNCH, T_LAST, T_MID].map((k) => dt(TOKYO.times[k]))).toEqual(["2025-09-05 02:15:00", "2025-08-19 06:15:00", "2025-09-02 01:45:00"]);
     expect([T_LUNCH, T_LAST, T_MID].map((k) => stockBarBreak(TOKYO.sym, TOKYO.times[k]))).toEqual(["lunch", "close", null]);
+  });
+
+  it("v43: 4063.T's 1-hour bars are Tokyo's seven a weekday, each ending as stockBarEnd says, and hold SELLs and BUYs inside a session, at the bar stamped 12:00, before the lunch break and at the session's last bar", () => {
+    expect(HOURLY.times.every((t) => {
+      const l = localOf(HOURLY.sym, t);
+      return l.wd >= 1 && l.wd <= 5 && l.min % 60 === 0 && l.min >= 9 * 60 && l.min <= 15 * 60;
+    })).toBe(true);
+    // 60 minutes a bar but the 11:00 and the 15:00 JST bars, 30
+    expect(HOURLY.ends.map((e, k) => (e - HOURLY.times[k]) / MIN).slice(0, 7)).toEqual([60, 60, 30, 60, 60, 60, 30]);
+    for (const [i, side, zside] of [[H_MID, "SELL", "top"], [H_NOON, "SELL", "top"], [H_LUNCH, "BUY", "bottom"], [H_LAST, "SELL", "top"]] as const) {
+      expect(hEntryAt(i), `bar ${i}`).toMatchObject({ side, zside });
+      expect(hEntryAt(i - 1), `bar ${i - 1}`).toBeNull();
+    }
+    expect([H_MID, H_NOON, H_LUNCH, H_LAST].map((k) => dt(HOURLY.times[k]))).toEqual(["2026-01-16 01:00:00", "2026-03-19 03:00:00", "2026-06-01 02:00:00", "2026-02-20 06:00:00"]);
+    expect([H_MID, H_NOON, H_LUNCH, H_LAST].map((k) => jst(HOURLY.ends[k]))).toEqual(["2026-01-16 11:00", "2026-03-19 13:00", "2026-06-01 11:30", "2026-02-20 15:30"]);
+    expect([H_MID, H_NOON, H_LUNCH, H_LAST].map((k) => stockBarBreak(HOURLY.sym, HOURLY.times[k]))).toEqual([null, null, "lunch", "close"]);
   });
 });
 
@@ -632,15 +888,15 @@ describe("v41 the share's signal and its row (spec 3.4)", () => {
 
   it("the row: the bar's open, its end, the side, the price in (the bar's close), no stop and no target, the fade's id; the record's tag", () => {
     expect(signalRow(usSig(I_BUY))).toEqual({
-      bar_time: iso(times[I_BUY]), closed_at: iso(closeOf(I_BUY)), side: "BUY", entry: closes[I_BUY], stop: null, target: null, rule: STOCKMACD_RULE_ID,
+      bar_time: iso(times[I_BUY]), closed_at: iso(closeOf(I_BUY)), side: "BUY", entry: closes[I_BUY], stop: null, target: null, rule: V5_ID,
     });
     // a session's last bar and Tokyo's bar before lunch close 15 minutes after they open, as every bar: the row's
     // closed_at is the bar's own end (stockBarEnd)
     expect(signalRow(usSig(I_LAST))).toEqual({
-      bar_time: iso(times[I_LAST]), closed_at: iso(times[I_LAST] + STEP), side: "SELL", entry: closes[I_LAST], stop: null, target: null, rule: STOCKMACD_RULE_ID,
+      bar_time: iso(times[I_LAST]), closed_at: iso(times[I_LAST] + STEP), side: "SELL", entry: closes[I_LAST], stop: null, target: null, rule: V5_ID,
     });
     expect(signalRow(tokyoSig(T_LUNCH))).toEqual({
-      bar_time: iso(TOKYO.times[T_LUNCH]), closed_at: iso(TOKYO.times[T_LUNCH] + STEP), side: "BUY", entry: TOKYO.closes[T_LUNCH], stop: null, target: null, rule: STOCKMACD_RULE_ID,
+      bar_time: iso(TOKYO.times[T_LUNCH]), closed_at: iso(TOKYO.times[T_LUNCH] + STEP), side: "BUY", entry: TOKYO.closes[T_LUNCH], stop: null, target: null, rule: V5_ID,
     });
     expect([usSig(I_BUY), usSig(I_SELL)].map(rideSignalTag)).toEqual(["stockmacd:BUY", "stockmacd:SELL"]);
   });
@@ -976,11 +1232,136 @@ describe("v41 the share's email, word for word (spec 4.2 and 4.4)", () => {
   });
 });
 
+// ---- v43: 4063.T's signal, its row and its mail on the 1-hour chart -------------------------------------------------
+
+// 4063.T's fade signal as the run makes it (index.ts stockFade: the share's own chart, stockmacdChartOf)
+const hourSig = (i: number): IndicatorSignal =>
+  fadeSignal("stockmacd", HOURLY.sym, stockmacdChartOf(HOURLY.sym), hEntryAt(i)!, { openMs: HOURLY.times[i], closeMs: HOURLY.ends[i], close: HOURLY.closes[i], price: HOURLY.closes[i] });
+// its items 8 and 10 (stocks.ts renderStockMail, v43): Yahoo's delay measured on the 1-hour reads, with no "not measured
+// yet" clause; the owner's choices with this share's 1-hour bars named as the owner's (2026-11-27) beside the other
+// shares' 15-minute ones, and the pane stated as the newest 120 bars of the 1-hour chart
+const ITEM8_TOKYO_1H_JA = "東証の値段は Yahoo では約15分遅れて届きます（2026-11-06 に、1時間足の読み込みで測りました）。そのため、このメールは足が確定してから15分ほど後に判定して送ります。";
+const ITEM8_TOKYO_1H_EN = "Yahoo's Tokyo prices come about 15 minutes late (measured on 2026-11-06, on the 1-hour reads), so this email is judged and sent some 15 minutes after the bar closed.";
+const ITEM10_1H_JA =
+  "この決まりは Sextant 独自のもので、公開されているインジケーターではありません。96%・足の確定で判定すること・逆張りの向き（株にも当てはめること）・利確と損切りの値段を書かないことは、アプリのオーナーが決めたものです。この銘柄を1時間足で判定すること（ほかの株は15分足で判定します）も、アプリのオーナーが決めたものです（2026-11-27）。MACD の枠は1時間足の新しい120本で、アプリの1時間足のチャートの枠と同じです。";
+const ITEM10_1H_EN =
+  "This rule is Sextant's own, not a published indicator. 96%, judging at the bar's close, the fade side (shares included) and stating no take-profit or stop price are the app owner's choices. Judging this share on 1-hour bars, while the other shares are judged on 15-minute bars, is the app owner's choice too (2026-11-27). The MACD pane is the newest 120 bars of the 1-hour chart, the same as the app's 1-hour chart's pane.";
+// the MACD numbers' decimals as the mail writes them (stocks.ts macdText: a tenth of a yen, or more for a small edge)
+const mdOf = (edge: number) => Math.min(20, Math.max(1, 1 - Math.floor(Math.log10(Math.abs(edge)))));
+
+describe("v43 4063.T on the 1-hour chart: its signal, its row and its mail, word for word, ja and en", () => {
+  it("the signal is on '1h' and its row carries '1h' and the v6 id; the bar's own end; the price in its close; no stop and no target", () => {
+    const s = hourSig(H_MID);
+    expect(s).toMatchObject({ rule: "stockmacd", pair: "4063.T", interval: "1h", side: "SELL", barTime: iso(HOURLY.times[H_MID]), closedAt: iso(HOURLY.times[H_MID] + H), close: HOURLY.closes[H_MID], sl: null, tps: null });
+    expect(signalRow(s)).toEqual({
+      bar_time: iso(HOURLY.times[H_MID]), closed_at: iso(HOURLY.ends[H_MID]), side: "SELL", entry: HOURLY.closes[H_MID], stop: null, target: null, rule: V6_ID,
+    });
+    // the lunch bar and the session's last bar end half an hour after they open
+    expect(signalRow(hourSig(H_LUNCH))).toMatchObject({ closed_at: iso(HOURLY.times[H_LUNCH] + 30 * MIN), side: "BUY", rule: V6_ID });
+    expect(signalRow(hourSig(H_LAST))).toMatchObject({ closed_at: iso(HOURLY.times[H_LAST] + 30 * MIN), side: "SELL", rule: V6_ID });
+    expect(rideSignalTag(s)).toBe("stockmacd:SELL");
+    // another share's row stays the 15-minute chart's v5
+    expect(signalRow(tokyoSig(T_MID)).rule).toBe(V5_ID);
+    expect(signalRow(usSig(I_BUY)).rule).toBe(V5_ID);
+  });
+
+  it("a BUY at the 11:00 JST bar, before the lunch break, Japanese and English: 「1時間足」 / \"1-hour\", the bar by its end (11:30), the break, Yahoo's delay measured on the 1-hour reads with no not-measured clause, the owner's choice of 1-hour bars for this share", () => {
+    const s = hourSig(H_LUNCH);
+    const f = s.fade!;
+    const md = mdOf(f.bottom);
+    const ja = renderIndicatorMail(s, "ja");
+    expect(ja).toEqual(renderStockMail(s, "ja"));
+    expect(ja.subject).toBe("【Sextant】信越化学工業（4063.T）1時間足 買い（BUY）: 青い線が下の端の96%で確定（株の MACD）");
+    expect(ja.text).toBe([
+      "信越化学工業（4063.T、東証）の1時間足で、MACD の逆張りの買い（BUY）の合図が出ました。",
+      [
+        "判定した足: 2026-06-01 11:30（日本時間）に確定した1時間足",
+        "この足の終わりで、青い線（MACD）が、新しい120本（1時間足）の MACD の枠の下の端（青い線・オレンジの線・棒の一番低い所）の96%以上（0の線から測って）でした。一つ前の足の終わりでは、96%に届いていませんでした。下の端なので、逆張りの買い（BUY）の合図です。",
+        `MACD = ${num(f.m, md)}、枠の下の端 = ${num(f.bottom, md)}（その96% = ${num(0.96 * f.bottom, md)}）`,
+        `この足の終値: ${HOURLY.closes[H_LUNCH].toFixed(1)}円`,
+        BREAK_JA,
+      ].join("\n"),
+      ITEM6_JA,
+      ITEM7_JA,
+      ITEM8_TOKYO_1H_JA + ITEM8_ARRIVE_JA,
+      ITEM9_JA,
+      ITEM10_1H_JA,
+      ITEM11_JA,
+      STOP_JA,
+    ].join("\n\n"));
+    const en = renderIndicatorMail(s, "en");
+    expect(en.subject).toBe("[Sextant] Shin-Etsu Chemical (4063.T) 1-hour BUY: the MACD line closed at 96% of the bottom (Stock MACD)");
+    expect(en.text).toBe([
+      "A MACD fade BUY signal on Shin-Etsu Chemical (4063.T, Tokyo), 1-hour chart.",
+      [
+        "Bar judged: the 1-hour bar that closed at 2026-06-01 02:30 UTC (2026-06-01 11:30 JST)",
+        "At this bar's close the MACD line (blue) was at 96% or more of the bottom of the MACD pane of the newest 120 bars (1-hour) (the lowest of the blue line, the orange line and the bars), measured from the zero line. At the close of the bar before, it was below 96%. It is the bottom, so this is a fade BUY signal.",
+        `MACD = ${num(f.m, md)}, the pane's bottom = ${num(f.bottom, md)} (96% of it = ${num(0.96 * f.bottom, md)})`,
+        `This bar's close: ${HOURLY.closes[H_LUNCH].toFixed(1)} yen`,
+        BREAK_EN,
+      ].join("\n"),
+      ITEM6_EN,
+      ITEM7_EN,
+      `${ITEM8_TOKYO_1H_EN} ${ITEM8_ARRIVE_EN}`,
+      ITEM9_EN,
+      ITEM10_1H_EN,
+      ITEM11_EN,
+      STOP_EN,
+    ].join("\n\n"));
+    // 「株では測っていません」 / "Not measured on shares." stays; nothing of the 15-minute chart's own sentences
+    for (const t of [ja.text, en.text]) {
+      expect(t).not.toContain("まだ測っていません");
+      expect(t).not.toContain("has not been measured yet");
+      expect(t).not.toContain("株を15分足で判定すること");
+      expect(t).not.toContain("judging shares on 15-minute bars");
+      expect(t).not.toMatch(COME_BACK_JA);
+      expect(t).not.toMatch(COME_BACK_EN);
+    }
+  });
+
+  it("a SELL at the session's last bar (15:00 JST, ending at the closing auction, 15:30), one inside the session (10:00 JST) and one at the bar stamped 12:00 (12:30-13:00): the break only at the last; a SELL a short sale", () => {
+    const last = renderIndicatorMail(hourSig(H_LAST), "ja");
+    expect(last.subject).toBe("【Sextant】信越化学工業（4063.T）1時間足 売り（SELL・空売り）: 青い線が上の端の96%で確定（株の MACD）");
+    expect(last.text.startsWith("信越化学工業（4063.T、東証）の1時間足で、MACD の逆張りの売り（SELL）の合図が出ました。株の売りは空売りです。\n\n判定した足: 2026-02-20 15:30（日本時間）に確定した1時間足\n")).toBe(true);
+    expect(last.text).toContain(`\nこの足の終値: ${HOURLY.closes[H_LAST].toFixed(1)}円\n${BREAK_JA}\n\n${ITEM6_JA}\n\n${ITEM7_JA}\n\n${ITEM8_TOKYO_1H_JA}${ITEM8_ARRIVE_JA}\n\n${ITEM9_JA}\n\n${ITEM10_1H_JA}\n\n`);
+    expect(renderIndicatorMail(hourSig(H_LAST), "en").text).toContain(`\nThis bar's close: ${HOURLY.closes[H_LAST].toFixed(1)} yen\n${BREAK_EN}\n\n`);
+    for (const [k, end] of [[H_MID, "2026-01-16 11:00"], [H_NOON, "2026-03-19 13:00"]] as const) {
+      const ja = renderIndicatorMail(hourSig(k), "ja");
+      expect(ja.subject).toBe("【Sextant】信越化学工業（4063.T）1時間足 売り（SELL・空売り）: 青い線が上の端の96%で確定（株の MACD）");
+      expect(ja.text).toContain(`\n\n判定した足: ${end}（日本時間）に確定した1時間足\n`);
+      expect(ja.text).not.toContain(BREAK_JA);
+      expect(ja.text).toContain(`\n\n${ITEM10_1H_JA}\n\n`);
+      const en = renderIndicatorMail(hourSig(k), "en");
+      expect(en.text).not.toContain(BREAK_EN);
+      expect(en.text).toContain(`\n\n${ITEM10_1H_EN}\n\n`);
+    }
+  });
+
+  it("another share's mail on the 15-minute chart is v42's word for word (its items 8 and 10 held above); a signal off its share's chart is refused", () => {
+    for (const s of [usSig(I_BUY), tokyoSig(T_MID), tokyoSig(T_LUNCH)]) {
+      for (const lang of ["ja", "en"] as const) {
+        const t = renderStockMail(s, lang).text;
+        expect(t).toContain(lang === "ja" ? ITEM10_JA : ITEM10_EN);
+        expect(t).not.toContain(lang === "ja" ? ITEM10_1H_JA : ITEM10_1H_EN);
+        expect(t).not.toContain("2026-11-27");
+      }
+    }
+    expect(renderStockMail(tokyoSig(T_MID), "ja").text).toContain(ITEM8_TOKYO_JA);
+    expect(renderStockMail(tokyoSig(T_MID), "en").text).toContain(ITEM8_TOKYO_EN);
+    // 4063.T on '15min', another share on '1h', a symbol of no share's shape: refused, the 1-hour text never written for
+    // a share not judged on 1-hour bars
+    expect(() => renderStockMail({ ...hourSig(H_MID), interval: "15min" }, "ja")).toThrow(/not judged on "15min"/);
+    expect(() => renderStockMail({ ...tokyoSig(T_MID), interval: "1h" }, "en")).toThrow(/not judged on "1h"/);
+    expect(() => renderStockMail({ ...usSig(I_BUY), pair: "aapl" }, "en")).toThrow(/not judged/);
+  });
+});
+
 describe("#391 the shares' run and the database", () => {
   it("runs every minute as its own mode, reads only its own subscriptions, and the database takes the shares and the rule", () => {
     const fn = readFileSync("supabase/functions/signal-alerts/index.ts", "utf8");
-    // (v40: the MACD email, the shares' too, is the fade; v41 on 15-minute bars; v42 on any share, up to 50)
-    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v42-2026-11-22";');
+    // (v40: the MACD email, the shares' too, is the fade; v41 on 15-minute bars; v42 on any share, up to 50; v43 moved
+    // the five pairs' fade to 5-minute bars, the shares' as v42)
+    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v43-2026-11-27";');
     // v42 (research/allstocks-prod-spec.md 4.2): the '15min' rows, paged by key
     expect(fn).toContain(
       "`signal_alert_subscriptions?rule=eq.stockmacd&interval=eq.15min&select=id,user_id,pair,interval,lang,rule&order=id.asc&limit=1000${after === null ? \"\" : `&id=gt.${encodeURIComponent(after)}`}`",
@@ -988,8 +1369,12 @@ describe("#391 the shares' run and the database", () => {
     // the other rules' run does not take them
     expect(fn).toContain('readRows("signal_alert_subscriptions?rule=in.(qtrend,ultra,macdx,amdpo3,emarm,spike)&select=user_id,pair,interval,lang,rule")');
     expect(fn).toContain('if (body.mode === "stocks") {');
-    expect(fn).toContain("stockmacd: { pairs, intervals: STOCKMACD_INTERVALS, cap: STOCKMACD_CAP, followed, shares },");
+    // (v43: and the shares judged on another chart, `charts`)
+    expect(fn).toContain("stockmacd: { pairs, intervals: STOCKMACD_INTERVALS, charts: STOCKMACD_CHART_OF, cap: STOCKMACD_CAP, followed, shares },");
     expect(renderTestMail([{ pair: "AAPL", interval: "15min", rule: "stockmacd" }], "ja").text).toContain("AAPL 15分足（株の MACD）");
+    // v43: the test mail names a share's '15min' row by the chart its email is judged on (4063.T's '1h')
+    expect(fn).toContain('interval: s.rule === "stockmacd" ? stockmacdChartOf(String(s.pair)) : String(s.interval),');
+    expect(renderTestMail([{ pair: "4063.T", interval: stockmacdChartOf("4063.T"), rule: "stockmacd" }], "ja").text).toContain("4063.T 1時間足（株の MACD）");
     const mig = readFileSync("supabase/migrations/20261031160000_signal_alert_stockmacd.sql", "utf8");
     expect(mig).toContain("'emarm', 'stockmacd']));");
     for (const s of STOCKMACD_PAIRS) expect(mig).toContain(`'${s}'`);
@@ -998,7 +1383,7 @@ describe("#391 the shares' run and the database", () => {
     expect(cron).toContain(`body := '{"mode":"stocks"}'::jsonb,`);
   });
 
-  it("v40/v41: the fade on a share is judged in its own try / catch, priced at the bar's close and mailed by mailRide, on the rule's chart (STOCKMACD_INTERVALS, no \"1h\" written); nothing of v39's ride, no state row, no minute read; the 95% decision is called nowhere", () => {
+  it("v40/v41: the fade on a share is judged in its own try / catch, priced at the bar's close and mailed by mailRide, on the share's own chart (v43: stockmacdChartOf, no \"1h\" written in the run or the bars' reading); nothing of v39's ride, no state row, no minute read; the 95% decision is called nowhere", () => {
     const fn = readFileSync("supabase/functions/signal-alerts/index.ts", "utf8");
     const run = fn.slice(fn.indexOf("const stockSweep = async"), fn.indexOf("const goldTicks = async"));
     // the code without its comment lines (the history in the comments names v39's ride)
@@ -1007,7 +1392,7 @@ describe("#391 the shares' run and the database", () => {
     // signal, mailRide to the share's followers; settled only with no error and no follower left unsent
     expect(code).toContain("const close = stockFadeClose(sym, closed, nowMs);");
     expect(code).toContain("const price = newest.close;");
-    expect(code).toContain('const sig = fadeSignal("stockmacd", sym, STOCKMACD_INTERVALS[0], entry, { openMs: newest.open_ms, closeMs: newest.end, close: newest.close, price });');
+    expect(code).toContain('const sig = fadeSignal("stockmacd", sym, stockmacdChartOf(sym), entry, { openMs: newest.open_ms, closeMs: newest.end, close: newest.close, price });');
     expect(code).toContain("const got = await mailRide(sig, subs, counts);");
     expect(code).toContain("if (got.otherSide) out.fade.other_side = true;");
     expect(code).toContain("return out.unsent.length === 0;");
@@ -1015,13 +1400,18 @@ describe("#391 the shares' run and the database", () => {
       /try \{\s+settled = await stockFade\(sym, step\.closed, step\.newest, said\);\s+\} catch \(err\) \{\s+console\.error\("stockmacd failed:", sym, errText\(err\)\);\s+said\.fade\.error = "failed";\s+settled = false;\s+\}/,
     );
     expect(code).toMatch(/if \(settled\) \{\s+if \(step\.done\) stockDone\.set\(sym, due\);\s+if \(step\.judge && step\.newest\) stockJudged\.set\(sym, step\.newest\.open_ms\);\s+\}/);
-    // the bars read are the rule's chart's (spec 3.3 item 2: Yahoo's `15m` over `60d`), at the reads as they were
-    // (v42, research/allstocks-prod-spec.md 4.2: the read's timeout the smaller of 5 s and the budget left)
+    // the bars read are the rule's chart's (spec 3.3 item 2: Yahoo's `15m` over `60d`; v43: the share's own chart,
+    // `60m` over `1y` for 4063.T), at the reads as they were (v42, research/allstocks-prod-spec.md 4.2: the read's
+    // timeout the smaller of 5 s and the budget left)
     expect(code).toContain("const cut = AbortSignal.timeout(Math.min(5_000, STOCK_RUN_BUDGET_MS - (Date.now() - nowMs)));");
-    expect(code).toContain("const r = await fetch(yahooChartUrl(sym, STOCKMACD_INTERVALS[0]), { headers: YAHOO_HEADERS, signal: cut });");
+    expect(code).toContain("const chart = stockmacdChartOf(sym);");
+    expect(code).toContain("const r = await fetch(yahooChartUrl(sym, chart), { headers: YAHOO_HEADERS, signal: cut });");
+    // v43: each follower's '15min' row carries the chart its share is judged on, so mailRide hands it that chart's signal
+    expect(code).toContain("interval: stockmacdChartOf(r.pair as string),");
     expect(code).toContain("const due = stockCloseDue(sym, nowMs);");
     expect(code).toContain("if (nowMs - (stockReadAt.get(sym) ?? 0) < 50_000) continue;");
-    expect(code).toContain("const got = stockBarsOf(sym, body, nowMs);");
+    // v43: the answer is parsed on the chart it was read on (the same local `chart`)
+    expect(code).toContain("const got = stockBarsOf(sym, body, nowMs, chart);");
     expect(code).toContain("const step = stockSweepOf(sym, got.bars, due, stockJudged.get(sym), nowMs);");
     // what is logged of a failure holds no address (a lookup's URL holds a follower's id)
     for (const line of code.split("\n").filter((l) => l.includes("console.error"))) expect(line, line).not.toMatch(/user_id|email|\bid\b/);
@@ -1038,13 +1428,17 @@ describe("#391 the shares' run and the database", () => {
     }
     // the one shared function, and the guard of the chart the rule is offered on (spec 3.3)
     expect(src).toContain('import { FADE_PCT, FADE_SHARE, fadeCloseEntryAt, fadeRuleId, type FadeEntry } from "../_shared/macd-fade.ts";');
-    expect(src).toContain("const newest = isStockmacdChart(sym, STOCKMACD_INTERVALS[0]) && closed.length > 0 ? closed[closed.length - 1] : null;");
+    expect(src).toContain("const newest = isStockmacdJudged(sym, stockmacdChartOf(sym)) && closed.length > 0 ? closed[closed.length - 1] : null;");
     expect(src).toContain("return { fresh: true, entry: fadeCloseEntryAt(closed.map((b) => b.close)) };");
-    // v41 (spec 3.3 items 1 and 2, 7.1): every "1h" of the share functions takes the constant, which is "15min"
+    // v41 (spec 3.3 items 1 and 2, 7.1): every "1h" of the share functions takes the constant, which is "15min". v43:
+    // the follow's chart stays the constant; the share's own chart is stockmacdChartOf's (one map), its id the chart's
     expect(src).toContain('export const STOCKMACD_INTERVALS = ["15min"] as const;');
-    expect(src).toContain("export const STOCKMACD_FADE_VERSION = 5;");
-    expect(src).toContain("const got = parseYahooChart(sym, body, STOCKMACD_INTERVALS[0], nowMs);");
-    expect(src).toContain("judge: newest !== null && isStockmacdChart(sym, STOCKMACD_INTERVALS[0]) && newest.open_ms !== judgedOpen,");
+    expect(src).toContain('export const STOCKMACD_CHART_OF: Readonly<Record<string, StockmacdChart>> = { "4063.T": "1h" };');
+    expect(src).toContain('export const STOCKMACD_FADE_VERSION_OF: Readonly<Record<StockmacdChart, number>> = { "15min": 5, "1h": 6 };');
+    // v43: stockBarsOf parses and ends the bars on the chart of the answer it is given (the run passes the share's own)
+    expect(src).toContain("const got = parseYahooChart(sym, body, chart, nowMs);");
+    expect(src).toContain("const end = stockBarEnd(sym, open, sessionEnd, chart);");
+    expect(src).toContain("judge: newest !== null && isStockmacdJudged(sym, stockmacdChartOf(sym)) && newest.open_ms !== judgedOpen,");
     const body = (from: string, to: string) => {
       const i = srcCode.indexOf(from);
       return srcCode.slice(i, srcCode.indexOf(to, i));
@@ -1059,7 +1453,8 @@ describe("#391 the shares' run and the database", () => {
       expect(part.length, name).toBeGreaterThan(100);
       expect(part, name).not.toContain('"1h"');
     }
-    // the mail's bar word is the signal's own (tfLabel), no 1-hour word written in it (spec 3.3 item 7)
+    // the mail's bar word is the signal's own (tfLabel), no 1-hour word written in it (spec 3.3 item 7; v43: 4063.T's
+    // 「1時間足」 / "1-hour" is tfLabel's too)
     const mail = body("export const renderStockMail = ", "\n};\n");
     expect(mail).toContain("const tf = tfLabel(lang, s.interval);");
     expect(mail.split("2026-11-06 に、1時間足の読み込みで測りました").join("").split("on the 1-hour reads").join("")).not.toMatch(/1時間足|1-hour/);
@@ -1140,6 +1535,8 @@ describe("#391 the MACD email on shares in the settings", () => {
       stockmacd: {
         pairs: [...STOCKMACD_PAIRS, OWN],
         intervals: STOCKMACD_INTERVALS,
+        // v43: as the function sends it
+        charts: STOCKMACD_CHART_OF,
         cap: STOCKMACD_CAP,
         followed: 23,
         shares: { [OWN]: { name: "Example Holdings", last_bar_at: "2026-11-20T20:45:00.000Z", bars: 812, stale: false } },
@@ -1161,10 +1558,11 @@ describe("#391 the MACD email on shares in the settings", () => {
     render(<SignalAlertSettings call={call} />);
     fireEvent.click(await screen.findByTestId("signal-alerts-rule-stockmacd"));
     expect(screen.getByTestId("signal-alerts-rule-stockmacd").textContent).toBe("株の MACD");
-    // v41: the tab describes the fade on 15-minute bars (the screen's text is src/lib/i18n's; spec section 5)
+    // v41: the tab describes the fade on 15-minute bars (the screen's text is src/lib/i18n's; spec section 5). v43: and
+    // 4063.T on 1-hour bars, the only 1-hour word of it
     const intro = screen.getByTestId("signal-alerts-indicator-intro").textContent!;
-    expect(intro).toContain("米国株と日本株の15分足で、FX と同じ「MACD の逆張り」のメールを送ります（1つの足で1通だけ）。15分足が確定した時に、");
-    expect(intro).not.toContain("1時間足");
+    expect(intro).toContain("米国株と日本株の15分足（信越化学工業〈4063.T〉は1時間足）で、FX と同じ「MACD の逆張り」のメールを送ります（1つの足で1通だけ）。足が確定した時に、");
+    expect(intro.split("1時間足").length - 1).toBe(1);
     expect(intro).toContain("株の売りは空売りです");
     expect(intro).toContain("株では測っていません。");
     const rows = screen.getByTestId("signal-alerts-grid").querySelectorAll("tbody tr");
@@ -1176,18 +1574,46 @@ describe("#391 the MACD email on shares in the settings", () => {
     expect((screen.getByTestId(`signal-alert-stockmacd-${OWN}-15min`) as HTMLInputElement).checked).toBe(true);
     expect(screen.getByTestId("signal-alert-stockmacd-AAPL-15min")).toBeTruthy();
     expect(screen.queryByTestId("signal-alert-stockmacd-AAPL-1h")).toBeNull();
+    // v43: 4063.T's row: its tick is its '15min' follow, and beside its name, that its emails are judged on 1-hour bars;
+    // no other share has the note, and no '1h' box is drawn
+    expect(screen.getByTestId("signal-alert-stockmacd-4063.T-15min")).toBeTruthy();
+    expect(screen.queryByTestId("signal-alert-stockmacd-4063.T-1h")).toBeNull();
+    expect(screen.getByTestId("stockmacd-chart-4063.T").textContent).toBe("メールは1時間足で判定します");
+    expect(screen.getByTestId("stockmacd-chart-4063.T").closest("tr")!.querySelector("td")!.textContent).toBe("4063.T信越化学工業メールは1時間足で判定します");
+    expect(screen.getAllByTestId(/^stockmacd-chart-/)).toHaveLength(1);
     const notes = screen.getByTestId("signal-alerts-notes").textContent!;
     expect(notes).toContain("利確の値段も損切りの値段もありません。これはこの決まりの作りで、損切りをしないことを勧めるものではありません。");
     // 4.4 item 10 (section 5's stockmacdNotes [3]): the owner named for 96%, judging at the close, the shares' 15-minute
-    // bars, the pane of the newest 120 15-minute bars, the fade side (shares included) and no take-profit or stop price
-    expect(notes).toContain(ITEM10_JA);
-    expect(notes).toContain("決まりは FX の「MACD の逆張り」と同じで、見るのは15分足の確定ごとです。");
+    // bars, the pane of the newest 120 15-minute bars, the fade side (shares included) and no take-profit or stop price;
+    // v43: 4063.T's 1-hour bars named beside the shares' 15-minute ones, and its pane, the newest 120 1-hour bars
+    expect(notes).toContain(
+      ITEM10_JA.replace("株を15分足で判定すること・", "株を15分足で判定すること（信越化学工業は1時間足。2026-11-27）・") +
+        "信越化学工業の MACD の枠は1時間足の新しい120本で、アプリの1時間足のチャートの枠と同じです。",
+    );
+    expect(notes).toContain("決まりは FX の「MACD の逆張り」と同じで、見るのは15分足（信越化学工業は1時間足）の確定ごとです。");
     expect(notes).toContain("株では測っていません。5ペアで測った数字は、株には当てはまりません。");
     // none of docs §8.133's numbers (the 95% rule's), nor that a price always comes back
     for (const no of ["1,696回", "99.36%", "−1,837.40%", "95%", "必ず戻"]) expect(`${intro}\n${notes}`, no).not.toContain(no);
     fireEvent.click(screen.getByTestId("signal-alert-stockmacd-7203.T-15min"));
     await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "set", pair: "7203.T", interval: "15min", on: true, rule: "stockmacd", lang: "ja" }));
     await waitFor(() => expect((screen.getByTestId("signal-alert-stockmacd-7203.T-15min") as HTMLInputElement).checked).toBe(true));
+    // v43: a tick of 4063.T saves its '15min' row, as every share's
+    fireEvent.click(screen.getByTestId("signal-alert-stockmacd-4063.T-15min"));
+    await waitFor(() => expect(call).toHaveBeenCalledWith({ action: "set", pair: "4063.T", interval: "15min", on: true, rule: "stockmacd", lang: "ja" }));
+  });
+
+  it("v43: in English, 4063.T's note says \"Emails judged on 1-hour bars\"; a v42 server (no `charts`) draws no note", async () => {
+    rtlRender(<LocaleProvider initial="en"><SignalAlertSettings call={async () => normalizeAlertSettings(payload())!} /></LocaleProvider>);
+    fireEvent.click(await screen.findByTestId("signal-alerts-rule-stockmacd"));
+    expect(screen.getByTestId("stockmacd-chart-4063.T").textContent).toBe("Emails judged on 1-hour bars");
+    expect(screen.getByTestId("signal-alerts-indicator-intro").textContent).toContain("on US and Japanese stocks' 15-minute charts (the 1-hour chart for Shin-Etsu Chemical, 4063.T). When a bar closes with");
+    cleanup();
+    const v42 = payload();
+    delete (v42.indicator.stockmacd as Record<string, unknown>).charts;
+    render(<SignalAlertSettings call={async () => normalizeAlertSettings(v42)!} />);
+    fireEvent.click(await screen.findByTestId("signal-alerts-rule-stockmacd"));
+    expect(screen.getByTestId("signal-alert-stockmacd-4063.T-15min")).toBeTruthy();
+    expect(screen.queryAllByTestId(/^stockmacd-chart-/)).toEqual([]);
   });
 
   it("from a server that does not send its charts: says it is not available yet", async () => {
@@ -1238,6 +1664,8 @@ describe("v42 the stock MACD tab: the count, the search, the refusals and the ow
     expect(s.indicator!.stockmacd).toEqual({
       pairs: [...STOCKMACD_PAIRS],
       intervals: ["15min"],
+      // (v43: a v42 block sends no `charts`)
+      charts: {},
       cap: 50,
       followed: 31,
       shares: {
@@ -1252,8 +1680,15 @@ describe("v42 the stock MACD tab: the count, the search, the refusals and the ow
       expect([b.cap, b.followed], String(bad)).toEqual([null, bad === 0 ? 0 : null]);
     }
     expect(status({ pairs: STOCKMACD_PAIRS, intervals: STOCKMACD_INTERVALS }).indicator!.stockmacd).toEqual({
-      pairs: [...STOCKMACD_PAIRS], intervals: ["15min"], cap: null, followed: null, shares: {},
+      pairs: [...STOCKMACD_PAIRS], intervals: ["15min"], charts: {}, cap: null, followed: null, shares: {},
     });
+    // v43: `charts`, the shares judged on another chart, keyed by the symbol: kept for a share symbol and a chart a share
+    // may be judged on ("15min", "1h"); any other key or value dropped ("__proto__" an own key never the prototype)
+    const charts = JSON.parse('{"4063.T":"1h","AAPL":"15min","IBM":"4h","not a share":"1h","__proto__":"1h","7203.T":null,"9984.T":1}');
+    const c = status(block({ charts })).indicator!.stockmacd!.charts;
+    expect(c).toEqual({ "4063.T": "1h", AAPL: "15min" });
+    expect(Object.getPrototypeOf(c)).toBe(Object.prototype);
+    for (const bad of [null, "1h", ["4063.T"], 3]) expect(status(block({ charts: bad })).indicator!.stockmacd!.charts, String(bad)).toEqual({});
   });
 
   it("the picker (6.2, fake timers): one search 400 ms after the typing stops; Japanese words find the listed only and Yahoo is never asked; the listed finds first, then Yahoo's less those; a pick gives the hit and the words typed", async () => {
@@ -1742,15 +2177,18 @@ let clock = 0;
 // Yahoo's 15-minute answer at the clock (less its lag): the bars of the 60 days before it (`range=60d`), each bar opened
 // by then, the one still forming 0.7 above its open (so that a price taken from the forming bar, or from Yahoo's last
 // trade, is not the judged bar's close and the price tests catch it), and Yahoo's last trade then. Every US share is
-// given the same bars, a Tokyo share TOKYO's.
-const yahooAnswer = (sym: string) => {
+// given the same bars, a Tokyo share TOKYO's. v43: a read of `60m` (4063.T's chart) is given HOURLY's 1-hour bars, of
+// the year before (`range=1y`)
+const yahooAnswer = (sym: string, interval: string | null = "15m") => {
   const seen = clock - world.yahooLag;
-  const S = sym.endsWith(".T") ? TOKYO : { times, ends, closes };
+  const hourly = interval === "60m";
+  const S = hourly ? HOURLY : sym.endsWith(".T") ? TOKYO : { times, ends, closes };
+  const back = (hourly ? 365 : 60) * 24 * H;
   let last = -1;
   let from = 0;
   for (let k = 0; k < N && S.times[k] <= seen; k++) {
     last = k;
-    if (S.times[k] < seen - 60 * 24 * H) from = k + 1;
+    if (S.times[k] < seen - back) from = k + 1;
   }
   const ts: number[] = [];
   const q = { open: [] as number[], high: [] as number[], low: [] as number[], close: [] as number[], volume: [] as number[] };
@@ -1824,7 +2262,7 @@ const fakeFetch = async (input: string | URL | Request, init?: RequestInit): Pro
     }
     // (a slow read: the clock moves on by it before the answer comes)
     clock += world.delayFor.get(sym) ?? world.yahooDelayMs;
-    return world.yahooStatus === 200 ? reply(yahooAnswer(sym)) : reply({}, world.yahooStatus);
+    return world.yahooStatus === 200 ? reply(yahooAnswer(sym, u.searchParams.get("interval"))) : reply({}, world.yahooStatus);
   }
   // v42: Yahoo's search (the made-up quotes the test gives a query)
   if (url.startsWith("https://query2.finance.yahoo.com/v1/finance/search?")) {
@@ -2044,7 +2482,8 @@ describe("v41 the shares' run: the real index.ts replayed over fake tables (spec
       if (r.startsWith("signal_alerts ")) expect(r).toBe("signal_alerts user_id,side");
     }
     // (v42: a share of any shape, BRK-B's dash too)
-    for (const y of world.yahoo) expect(y).toMatch(/^[A-Z0-9.-]+ 15m 60d$/);
+    // (v43: 4063.T's on its 1-hour chart, `60m` over `1y`, the live chart's read of that chart)
+    for (const y of world.yahoo) expect(y).toMatch(y.startsWith("4063.T ") ? /^4063\.T 60m 1y$/ : /^[A-Z0-9.-]+ 15m 60d$/);
   };
 
   it("a US share's BUY at a close: one email a follower, the price the bar's close; read again before the next close by fresh instances, nobody is mailed twice and a follower whose plan lookup failed is mailed then; the row; the next close judged; nothing asked of v39's ride tables", async () => {
@@ -2052,7 +2491,7 @@ describe("v41 the shares' run: the real index.ts replayed over fake tables (spec
     world.failPlanFor.add("userB");
     const s0 = await fresh(after(I_BUY, 0));
     expect(s0).toMatchObject({ ok: true, mode: "stocks", subscriptions: 2, sent: 1, not_allowed: 1 });
-    expect(String(s0.version)).toMatch(/^signal-alerts-v42-/);
+    expect(String(s0.version)).toMatch(/^signal-alerts-v43-/);
     // (the follower whose lookup failed got no row: said, with no name)
     expect(readOf(s0)).toMatchObject({
       pair: SYM, due: iso(closeOf(I_BUY)), bars: I_BUY + 1, newest: dt(times[I_BUY]), close: closes[I_BUY], judged: true, signals: ["stockmacd:BUY"],
@@ -2068,7 +2507,7 @@ describe("v41 the shares' run: the real index.ts replayed over fake tables (spec
     expect(world.alerts).toHaveLength(1);
     expect(world.alerts[0]).toMatchObject({
       user_id: "userA", kind: "signal", pair: SYM, interval: "15min", bar_time: iso(times[I_BUY]), closed_at: iso(times[I_BUY] + STEP), side: "BUY",
-      entry: closes[I_BUY], stop: null, target: null, rule: STOCKMACD_RULE_ID, event_id: null, status: "sent",
+      entry: closes[I_BUY], stop: null, target: null, rule: V5_ID, event_id: null, status: "sent",
     });
     // read again before the next close, a fresh instance each time, the lookup working: the same bar judged again
     world.failPlanFor.clear();
@@ -2080,7 +2519,7 @@ describe("v41 the shares' run: the real index.ts replayed over fake tables (spec
     }
     expect(mails()).toEqual([`userA: ${BUY_SUBJECT}`, `userB: ${BUY_SUBJECT}`]);
     expect(world.sent[1].text).toBe(world.sent[0].text);
-    expect(world.alerts.map((r) => `${r.user_id} ${r.rule} ${r.entry}`)).toEqual([`userA ${STOCKMACD_RULE_ID} ${closes[I_BUY]}`, `userB ${STOCKMACD_RULE_ID} ${closes[I_BUY]}`]);
+    expect(world.alerts.map((r) => `${r.user_id} ${r.rule} ${r.entry}`)).toEqual([`userA ${V5_ID} ${closes[I_BUY]}`, `userB ${V5_ID} ${closes[I_BUY]}`]);
     // Yahoo was read once a run, 60 days of 15-minute bars
     expect(world.yahoo).toEqual(Array(8).fill("AAPL 15m 60d"));
     // the next close (15 minutes on): its bar judged, no entry, nothing mailed
@@ -2103,7 +2542,7 @@ describe("v41 the shares' run: the real index.ts replayed over fake tables (spec
     expect(world.sent[0].text).toContain(`\nこの足の終値: ${closes[I_LAST].toFixed(2)}ドル\n${BREAK_JA}\n\n`);
     expect(world.sent[1].text).toContain(`\nThis bar's close: $${closes[I_LAST].toFixed(2)}\n${BREAK_EN}\n\n`);
     expect(world.alerts.map((r) => [r.side, r.interval, r.bar_time, r.closed_at, r.entry, r.stop, r.target, r.rule])).toEqual(
-      Array(2).fill(["SELL", "15min", iso(times[I_LAST]), iso(times[I_LAST] + STEP), closes[I_LAST], null, null, STOCKMACD_RULE_ID]),
+      Array(2).fill(["SELL", "15min", iso(times[I_LAST]), iso(times[I_LAST] + STEP), closes[I_LAST], null, null, V5_ID]),
     );
     // 16:30 New York: still the last close's half hour; 16:31: nothing due, nothing read
     expect(readOf(await fresh(after(I_LAST, 29)))).toMatchObject({ due: iso(closeOf(I_LAST)) });
@@ -2132,7 +2571,7 @@ describe("v41 the shares' run: the real index.ts replayed over fake tables (spec
     expect(world.sent[0].text).toContain(`\n\n${ITEM8_TOKYO_JA}${ITEM8_ARRIVE_JA}\n\n`);
     expect(world.sent[0].text).toContain(`\nこの足の終値: ${T.closes[T_MID].toFixed(1)}円\n\n`);
     expect(world.alerts[0]).toMatchObject({
-      pair: T.sym, interval: "15min", bar_time: iso(T.times[T_MID]), closed_at: iso(T.ends[T_MID]), side: "SELL", entry: T.closes[T_MID], stop: null, target: null, rule: STOCKMACD_RULE_ID,
+      pair: T.sym, interval: "15min", bar_time: iso(T.times[T_MID]), closed_at: iso(T.ends[T_MID]), side: "SELL", entry: T.closes[T_MID], stop: null, target: null, rule: V5_ID,
     });
     clean();
     // 45 minutes behind: read at 11:45 JST (in the 11:30 close's half hour) the bar that closed at 11:00 is in, 45
@@ -2198,7 +2637,7 @@ describe("v41 the shares' run: the real index.ts replayed over fake tables (spec
 
   it("one side a bar (spec 2.5): a row of the other side at the bar under the fade's id — nothing mailed, the record says other_side, the bar stays judged; another rule's row of the other side is no such row", async () => {
     world.subs = [follow("userA"), follow("userB")];
-    world.alerts = [{ id: "alert-x", user_id: "userC", kind: "signal", pair: SYM, interval: "15min", bar_time: iso(times[I_BUY]), side: "SELL", rule: STOCKMACD_RULE_ID, status: "sent" }];
+    world.alerts = [{ id: "alert-x", user_id: "userC", kind: "signal", pair: SYM, interval: "15min", bar_time: iso(times[I_BUY]), side: "SELL", rule: V5_ID, status: "sent" }];
     const h = await instance();
     const s0 = await run(h, after(I_BUY, 0));
     expect(readOf(s0)).toMatchObject({ judged: true, signals: [] });
@@ -2222,7 +2661,7 @@ describe("v41 the shares' run: the real index.ts replayed over fake tables (spec
 
   it("one side a bar holds when the bar's rows cannot be read (a 503): nothing mailed, an error, the bar not settled; the next run before the next close reads them, other_side, settled", async () => {
     world.subs = [follow("userA")];
-    world.alerts = [{ id: "alert-x", user_id: "userC", kind: "signal", pair: SYM, interval: "15min", bar_time: iso(times[I_BUY]), side: "SELL", rule: STOCKMACD_RULE_ID, status: "sent" }];
+    world.alerts = [{ id: "alert-x", user_id: "userC", kind: "signal", pair: SYM, interval: "15min", bar_time: iso(times[I_BUY]), side: "SELL", rule: V5_ID, status: "sent" }];
     world.alertsFailFor.add(SYM);
     const h = await instance();
     const s0 = await run(h, after(I_BUY, 0));
@@ -2338,6 +2777,83 @@ describe("v41 the shares' run: the real index.ts replayed over fake tables (spec
     const s2 = await fresh(after(I_BUY, 0));
     expect(s2).toMatchObject({ subscriptions: 1, sent: 1 });
     expect(world.alerts.map((r) => r.interval)).toEqual(["15min"]);
+    clean();
+  });
+
+  it("v43: 4063.T, followed by its '15min' rows, is read on its 1-hour chart (`60m` over `1y`) and judged at its 1-hour closes, Yahoo 15 minutes behind: each follower mailed once with the '1h' signal, its row '1h' and v6; a '1h' row is no follower; a 15-minute share in the same run is read on `15m` as before", async () => {
+    const S = HOURLY;
+    const end = S.ends[H_MID];
+    expect(jst(end)).toBe("2026-01-16 11:00");
+    // the bar after it gives no entry (the line still at 96%)
+    expect(hEntryAt(H_MID + 1)).toBeNull();
+    world.subs = [follow("userA", S.sym), follow("userB", S.sym, "en"), follow("userD", S.sym, "ja", "1h"), follow("userC", TOKYO.sym)];
+    world.yahooLag = 15 * MIN;
+    // at the close: Yahoo's newest closed bar is the one before, ended an hour ago: judged, not fresh, nothing mailed
+    const s0 = await fresh(end + 1_000);
+    expect(s0).toMatchObject({ subscriptions: 3, shares: 2 });
+    expect(readOf(s0, S.sym)).toMatchObject({ due: iso(end), newest: dt(S.times[H_MID - 1]), judged: true, signals: [], fade: { fresh: false, entry: null, price: null } });
+    expect(world.sent).toEqual([]);
+    // fifteen minutes on, Yahoo has priced past the bar's end: the SELL, mailed to each '15min' follower once
+    const s1 = await fresh(end + 15 * MIN + 1_000);
+    expect(readOf(s1, S.sym)).toMatchObject({
+      due: iso(end), newest: dt(S.times[H_MID]), close: S.closes[H_MID], judged: true, signals: ["stockmacd:SELL"], fade: { fresh: true, entry: "SELL", price: S.closes[H_MID] },
+    });
+    expect(Number(readOf(s1, S.sym)!.bars)).toBeGreaterThanOrEqual(600);
+    expect(readOf(s1, S.sym)!.judged_after_ms).toBeGreaterThanOrEqual(15 * MIN);
+    expect(s1).toMatchObject({ sent: 2 });
+    expect(mails()).toEqual([
+      "userA: 【Sextant】信越化学工業（4063.T）1時間足 売り（SELL・空売り）: 青い線が上の端の96%で確定（株の MACD）",
+      "userB: [Sextant] Shin-Etsu Chemical (4063.T) 1-hour SELL (short sale): the MACD line closed at 96% of the top (Stock MACD)",
+    ]);
+    expect(world.sent[0].text).toBe(renderStockMail(hourSig(H_MID), "ja").text);
+    expect(world.sent[1].text).toBe(renderStockMail(hourSig(H_MID), "en").text);
+    expect(world.sent[0].text).toContain(`\n\n${ITEM8_TOKYO_1H_JA}${ITEM8_ARRIVE_JA}\n\n`);
+    // the rows: interval '1h' and the 1-hour chart's id, though the follow is the '15min' row
+    const rows = () => world.alerts.map((r) => [r.user_id, r.pair, r.interval, r.rule, r.bar_time, r.closed_at, r.side, r.entry, r.stop, r.target]);
+    expect(rows()).toEqual(["userA", "userB"].map((u) => [u, S.sym, "1h", V6_ID, iso(S.times[H_MID]), iso(end), "SELL", S.closes[H_MID], null, null]));
+    // read again in the close's half hour and in the next close's (11:30 JST, the 11:00 bar not in yet), fresh
+    // instances each: the same bar judged again, nobody mailed twice
+    for (const m of [16, 20, 29, 30, 31]) {
+      const s = await fresh(end + m * MIN + 1_000);
+      expect(readOf(s, S.sym), `minute ${m}`).toMatchObject({ newest: dt(S.times[H_MID]), judged: true, signals: ["stockmacd:SELL"] });
+      expect(s.sent ?? 0, `minute ${m}`).toBe(0);
+    }
+    expect(world.sent).toHaveLength(2);
+    expect(world.alerts).toHaveLength(2);
+    // 11:45 JST: the 11:00 bar is in (it ended at the lunch break), judged, no entry
+    const s2 = await fresh(end + 45 * MIN + 1_000);
+    expect(readOf(s2, S.sym)).toMatchObject({ due: iso(end + 30 * MIN), newest: dt(S.times[H_MID + 1]), judged: true, signals: [], fade: { fresh: true, entry: null, price: null } });
+    // 12:01 JST: nothing due for either share, nothing read
+    const n = world.yahoo.length;
+    expect((await fresh(end + 61 * MIN)).reads).toEqual([]);
+    expect(world.yahoo).toHaveLength(n);
+    // 4063.T read on `60m` over `1y`, 7203.T on `15m` over `60d` (its made bars end before this date: no session)
+    expect([...new Set(world.yahoo)].sort()).toEqual(["4063.T 60m 1y", "7203.T 15m 60d"]);
+    expect(readOf(s1, TOKYO.sym)).toMatchObject({ skipped: "no_session" });
+    expect(world.sent).toHaveLength(2);
+    clean();
+  });
+
+  it("v43: one side a bar and the claim's key on 4063.T's '1h' rows: a row of the other side at the bar under v6 — nothing mailed; a row under v5 or on '15min' at the same time is another chart's and blocks nothing", async () => {
+    const S = HOURLY;
+    const end = S.ends[H_MID];
+    world.subs = [follow("userA", S.sym)];
+    world.yahooLag = 15 * MIN;
+    world.alerts = [{ id: "alert-x", user_id: "userC", kind: "signal", pair: S.sym, interval: "1h", bar_time: iso(S.times[H_MID]), side: "BUY", rule: V6_ID, status: "sent" }];
+    const s0 = await fresh(end + 15 * MIN + 1_000);
+    expect(readOf(s0, S.sym)!.fade).toMatchObject({ fresh: true, entry: "SELL", other_side: true });
+    expect(world.sent).toEqual([]);
+    resetWorld();
+    world.subs = [follow("userA", S.sym)];
+    world.yahooLag = 15 * MIN;
+    world.alerts = [
+      { id: "alert-y", user_id: "userC", kind: "signal", pair: S.sym, interval: "15min", bar_time: iso(S.times[H_MID]), side: "BUY", rule: V5_ID, status: "sent" },
+      { id: "alert-z", user_id: "userA", kind: "signal", pair: S.sym, interval: "1h", bar_time: iso(S.times[H_MID]), side: "SELL", rule: "stockmacd_12_26_9_w600_1h_fade96of120_in_v4", status: "sent" },
+    ];
+    const s1 = await fresh(end + 15 * MIN + 1_000);
+    expect(readOf(s1, S.sym)!.fade).toEqual({ fresh: true, entry: "SELL", price: S.closes[H_MID] });
+    expect(world.sent).toHaveLength(1);
+    expect(world.alerts.filter((r) => r.rule === V6_ID).map((r) => [r.user_id, r.interval, r.side])).toEqual([["userA", "1h", "SELL"]]);
     clean();
   });
 
@@ -2799,6 +3315,33 @@ describe("v41 the shares' run: the real index.ts replayed over fake tables (spec
 
   describe("v42 the status call's stockmacd block (spec 4.2)", () => {
     const T0 = Date.parse("2026-11-22T12:00:00Z");
+    it("v43: the block's `charts` is 4063.T's 1-hour chart, whoever follows what; 4063.T's own row stays '15min' in pairs and subscriptions; the test mail names its row by its 1-hour chart and 7203.T's by its 15-minute one", async () => {
+      world.subs = [
+        { ...follow("userA", "4063.T"), created_at: "2026-11-22T09:00:00.000Z" },
+        { ...follow("userA", "7203.T"), created_at: "2026-11-22T10:00:00.000Z" },
+      ];
+      const h = await instance();
+      clock = T0;
+      const a = await call(h, "userA", { action: "status" });
+      expect(a.status).toBe(200);
+      expect(a.body.indicator!.stockmacd).toMatchObject({ intervals: ["15min"], charts: { "4063.T": "1h" } });
+      expect((a.body.subscriptions as Array<Record<string, unknown>>).filter((x) => x.rule === "stockmacd")).toEqual([
+        { pair: "4063.T", interval: "15min", rule: "stockmacd" },
+        { pair: "7203.T", interval: "15min", rule: "stockmacd" },
+      ]);
+      // read by the screen: the tick is the '15min' row, and the note beside 4063.T says its emails' chart
+      const n = normalizeAlertSettings(a.body)!;
+      expect(n.indicator!.stockmacd!.charts).toEqual({ "4063.T": "1h" });
+      // a user with no row is sent the same map
+      expect((await call(h, "userB", { action: "status" })).body.indicator!.stockmacd).toMatchObject({ charts: { "4063.T": "1h" } });
+      const t = await call(h, "userA", { action: "test", lang: "ja" });
+      expect(t.status).toBe(200);
+      expect(world.sent).toHaveLength(1);
+      expect(world.sent[0].text).toBe(
+        renderTestMail([{ pair: "4063.T", interval: "1h", rule: "stockmacd" }, { pair: "7203.T", interval: "15min", rule: "stockmacd" }], "ja").text,
+      );
+      expect(world.sent[0].text).toContain("4063.T 1時間足（株の MACD）、7203.T 15分足（株の MACD）");
+    });
     it("pairs: the 22, then the user's own '15min' shares in their rows' order; shares keyed by the symbol; followed counts every user's; another user's share never in pairs or shares; no user id anywhere in the answer", async () => {
       world.subs = [
         { ...follow("userA", "NEWB"), created_at: "2026-11-22T10:00:00.000Z" },
@@ -2821,6 +3364,8 @@ describe("v41 the shares' run: the real index.ts replayed over fake tables (spec
       expect(b).toEqual({
         pairs: [...STOCKMACD_PAIRS, "NEWB", "NEWA"],
         intervals: ["15min"],
+        // v43: the shares judged on another chart than the column's: 4063.T on '1h' (whoever follows it)
+        charts: { "4063.T": "1h" },
         cap: 50,
         followed: 4,
         shares: {
@@ -2913,6 +3458,7 @@ describe("v41 the shares' run: the real index.ts replayed over fake tables (spec
       expect(normalizeAlertSettings(a.body)!.indicator!.stockmacd).toEqual({
         pairs: [...STOCKMACD_PAIRS, "NEWB"],
         intervals: ["15min"],
+        charts: { "4063.T": "1h" },
         cap: 50,
         followed: 3,
         shares: {
@@ -2941,7 +3487,7 @@ describe("v41 the shares' run: the real index.ts replayed over fake tables (spec
         "userA: 【Sextant】BRK-B 15分足 買い（BUY）: 青い線が下の端の96%で確定（株の MACD）",
         "userA: 【Sextant】XYZ 15分足 買い（BUY）: 青い線が下の端の96%で確定（株の MACD）",
       ]);
-      expect(world.alerts.map((r) => `${r.pair} ${r.rule}`).sort()).toEqual([`BRK-B ${STOCKMACD_RULE_ID}`, `XYZ ${STOCKMACD_RULE_ID}`]);
+      expect(world.alerts.map((r) => `${r.pair} ${r.rule}`).sort()).toEqual([`BRK-B ${V5_ID}`, `XYZ ${V5_ID}`]);
       clean();
       resetWorld();
       world.subs = [follow("userA", "130A.T")];
@@ -2990,7 +3536,7 @@ describe("v41 the shares' run: the real index.ts replayed over fake tables (spec
         world.subsFailAt = failAt;
         world.subsNotListAt = notListAt;
         const s = await fresh(after(I_BUY, 0));
-        expect(s, `${failAt} ${notListAt}`).toEqual({ ok: false, mode: "stocks", version: "signal-alerts-v42-2026-11-22", email_configured: true, error: "subscriptions_unread", took_ms: 0 });
+        expect(s, `${failAt} ${notListAt}`).toEqual({ ok: false, mode: "stocks", version: "signal-alerts-v43-2026-11-27", email_configured: true, error: "subscriptions_unread", took_ms: 0 });
         expect(world.yahoo).toEqual([]);
         expect(world.log.filter((x) => x.includes("signal_alert_stocks"))).toEqual([]);
         expect(world.sent).toEqual([]);

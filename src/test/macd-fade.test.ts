@@ -13,11 +13,13 @@
 //   3. equality at the share is in (a share that puts the line exactly on s * top or s * bottom)
 //   4. null on 599 closes and on a non-finite close of the newest 600; only the newest 600 read
 //   5. FADE_MEASURED, each chart's run against its own ledger copy, value by value (meta.tf, share 0.96, tp 10);
-//      FADE_MAILED_ON and each pair's run against the function's map (MACDH_INTERVAL_OF)
+//      v43: FADE_MAILED_TF (the five pairs' emails on 5-minute bars, where no run is held) against the function's map
+//      (MACDH_INTERVAL_OF); the module loads with the five pairs on 5 minutes
 //   6. the measured paragraph per chart, ja and en, word for word: section 4.5's text (copied below and held against
 //      the spec file) filled with the table's values, for every pair's mail on each chart and each chart's notes'
-//      version; 〔mailedOn〕, 〔chance〕, 〔baseWhat〕 and the per-pair chance sentence; the 〔open〕 = 0 and 〔tp〕 = 0
-//      variants from summaries made here; the refusals; 4.1's guards
+//      version; 〔mailedOn〕 (v43's sentence, in place of section 4.5's v41 one, which is held against the spec file
+//      still), 〔chance〕, 〔baseWhat〕 and the per-pair chance sentence; the 〔open〕 = 0 and 〔tp〕 = 0 variants from
+//      summaries made here; the refusals; 4.1's guards; v43's not-measured sentence of a pair's 5-minute mail
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
@@ -36,10 +38,11 @@ import {
   fadeSideOf,
 } from "../../supabase/functions/_shared/macd-fade";
 import {
-  FADE_MAILED_ON,
+  FADE_MAILED_TF,
   FADE_MEASURED,
   FADE_MEASURED_NOTES,
   FADE_MEASURED_SOURCE,
+  FADE_NOT_MEASURED_ON_MAILED_TF,
   FADE_TFS,
   type FadeMeasured,
   type FadeSummary,
@@ -48,8 +51,8 @@ import {
   fadeMeasuredLine,
   fadeMeasuredNotes,
 } from "../../supabase/functions/_shared/macd-fade-measured";
-import { MACDH_FADE_VERSION_OF, MACDH_INTERVAL_OF, MACDH_PAIRS, macdhRuleId } from "../../supabase/functions/signal-alerts/indicators";
-import { STOCKMACD_FADE_VERSION, STOCKMACD_INTERVALS, STOCKMACD_RULE_ID } from "../../supabase/functions/signal-alerts/stocks";
+import { MACDH_FADE_VERSION_OF, MACDH_INTERVAL_OF, MACDH_PAIRS, isMacdhChart, macdhRuleId } from "../../supabase/functions/signal-alerts/indicators";
+import { STOCKMACD_FADE_VERSION_OF, STOCKMACD_INTERVALS, stockmacdChartOf, stockmacdRuleId } from "../../supabase/functions/signal-alerts/stocks";
 
 const W = LEVEL_WINDOW;
 const SIDES: FadeZoneSide[] = ["top", "bottom"];
@@ -132,13 +135,20 @@ describe("the MACD fade's constants and rule ids (spec 3.1, 3.7)", () => {
 
   it("the three ids built from the constants as 3.7 writes them (the version follows the chart), matching FADE_ID (pct 96) and not RIDE_ID", () => {
     // research/macdfade15min-prod-spec.md 3.7: fadeRuleId("macdx", "15min", 12) and fadeRuleId("macdx", "1h", 11)
-    // through macdhRuleId, fadeRuleId("stockmacd", STOCKMACD_INTERVALS[0], 5) (v40's: 11 and 4 on "1h")
-    expect(MACDH_FADE_VERSION_OF).toEqual({ "15min": 12, "1h": 11 });
+    // through macdhRuleId, fadeRuleId("stockmacd", STOCKMACD_INTERVALS[0], 5) (v40's: 11 and 4 on "1h"); v43:
+    // fadeRuleId("macdx", "5min", 13), the five pairs' (12 stays buildable for the rows up to v42; 11 is gold's); and the
+    // shares' one version a chart: 5 on "15min" as before, 6 on "1h" (4063.T's), through stockmacdRuleId
+    expect(MACDH_FADE_VERSION_OF).toEqual({ "5min": 13, "15min": 12, "1h": 11 });
+    const five = fadeRuleId("macdx", "5min", 13);
+    expect(five).toBe("macdx_12_26_9_w600_5min_fade96of120_in_v13");
+    expect(macdhRuleId("5min")).toBe(five);
     expect(STOCKMACD_INTERVALS[0]).toBe("15min");
-    expect(STOCKMACD_FADE_VERSION).toBe(5);
+    expect(STOCKMACD_FADE_VERSION_OF).toEqual({ "15min": 5, "1h": 6 });
     const pairs = fadeRuleId("macdx", "15min", 12);
     const hour = fadeRuleId("macdx", "1h", 11);
-    const shares = fadeRuleId("stockmacd", STOCKMACD_INTERVALS[0], STOCKMACD_FADE_VERSION);
+    const shares = fadeRuleId("stockmacd", STOCKMACD_INTERVALS[0], STOCKMACD_FADE_VERSION_OF["15min"]);
+    const shareHour = fadeRuleId("stockmacd", "1h", STOCKMACD_FADE_VERSION_OF["1h"]);
+    expect(shareHour).toBe("stockmacd_12_26_9_w600_1h_fade96of120_in_v6");
     expect(pairs).toBe("macdx_12_26_9_w600_15min_fade96of120_in_v12");
     expect(hour).toBe("macdx_12_26_9_w600_1h_fade96of120_in_v11");
     expect(shares).toBe("stockmacd_12_26_9_w600_15min_fade96of120_in_v5");
@@ -146,17 +156,23 @@ describe("the MACD fade's constants and rule ids (spec 3.1, 3.7)", () => {
     expect(macdhRuleId("15min")).toBe(pairs);
     expect(macdhRuleId("1h")).toBe(hour);
     expect(() => macdhRuleId("4h")).toThrow(/no version/);
-    expect(STOCKMACD_RULE_ID).toBe(shares);
-    for (const id of [pairs, hour, shares]) {
+    expect(stockmacdRuleId("15min")).toBe(shares);
+    expect(stockmacdRuleId("1h")).toBe(shareHour);
+    expect(stockmacdRuleId(stockmacdChartOf("4063.T"))).toBe(shareHour);
+    expect(stockmacdRuleId(stockmacdChartOf("7203.T"))).toBe(shares);
+    expect(() => stockmacdRuleId("5min")).toThrow(/no version/);
+    for (const id of [five, pairs, hour, shares, shareHour]) {
       const m = FADE_ID.exec(id);
       expect(m, id).not.toBeNull();
       expect(Number(m?.[1])).toBe(FADE_PCT);
       expect(RIDE_ID.test(id), id).toBe(false);
     }
     // the app's tab (ruleOfId: the prefix the id starts with)
+    expect(five.startsWith("macdx_")).toBe(true);
     expect(pairs.startsWith("macdx_")).toBe(true);
     expect(hour.startsWith("macdx_")).toBe(true);
     expect(shares.startsWith("stockmacd_")).toBe(true);
+    expect(shareHour.startsWith("stockmacd_")).toBe(true);
     // v9's and v10's ids are RIDE_ID's, not FADE_ID's; v8's 1-hour zone id is neither
     for (const old of ["macdx_12_26_9_w600_1h_ride90to96of120_in_v9", "macdx_12_26_9_w600_1h_touch90to95of120_in_v10", "stockmacd_12_26_9_w600_1h_ride90to96of120_in_v2"]) {
       expect(RIDE_ID.test(old)).toBe(true);
@@ -182,6 +198,19 @@ describe("the MACD fade's constants and rule ids (spec 3.1, 3.7)", () => {
     expect(hour).toBe("macdx_12_26_9_w600_1h_fade96of120_in_v11");
     // the never-built 15-minute v11 differs from v40's 1-hour v11 by the interval: no id names two rules
     expect("macdx_12_26_9_w600_15min_fade96of120_in_v11").not.toBe(hour);
+    // v43: the five pairs' 5-minute id differs from every id written before it (v12 on 15 minutes, v11 on 1 hour, the
+    // shares' v5 and v4, the never-built ones above, the 5-minute rule's of v23 and v24); gold keeps v40's v11 (its
+    // chart and rule do not change)
+    for (const other of [pairs, hour, shares, "macdx_12_26_9_w600_1h_fade96tp10of120_in_v11", "macdx_12_26_9_w600_15min_fade96of120_in_v11", "stockmacd_12_26_9_w600_15min_fade96of120_in_v4", "stockmacd_12_26_9_w600_1h_fade96of120_in_v4", "macdx_12_26_9_w600_n288_k4_2_v1"]) {
+      expect(five).not.toBe(other);
+    }
+    // v43: 4063.T's 1-hour id differs from every share id written before it (v40's v4 on '1h' for every share, v41's v5
+    // on '15min', the never-built 15-minute v4, the 95% rule's and the ride's) and from every pair's
+    for (const other of [five, pairs, hour, shares, "stockmacd_12_26_9_w600_1h_fade96of120_in_v4", "stockmacd_12_26_9_w600_15min_fade96of120_in_v4", "stockmacd_12_26_9_w600_1h_z95of120_v1", "stockmacd_12_26_9_w600_1h_ride90to96of120_in_v2"]) {
+      expect(shareHour).not.toBe(other);
+    }
+    expect(macdhRuleId(MACDH_INTERVAL_OF["XAU/USD"])).toBe(hour);
+    for (const p of MACDH_PAIRS.filter((x) => x !== "XAU/USD")) expect(macdhRuleId(MACDH_INTERVAL_OF[p]), p).toBe(five);
   });
 
   it("the copies above are the app's RIDE_ID as written, and section 5's FADE_ID (the app's, once it has one)", () => {
@@ -528,26 +557,56 @@ describe("FADE_MEASURED: one run of record per chart (research/macdfade15min-pro
     expect(h.chance.nullSha256).toBe("3d285440123d50ac776228092b1a2560db12ff1d114b97bbec676350175b9b96");
   });
 
-  it("FADE_MAILED_ON and each pair's run are the function's map (MACDH_INTERVAL_OF): every one of the five pairs' chart has a run with that tf holding the pair, the pair is in FADE_MAILED_ON of that chart, and no pair is in both", () => {
-    expect(FADE_MAILED_ON).toEqual({ "15min": ["USD/JPY", "AUD/USD"], "1h": ["EUR/JPY", "AUD/JPY", "EUR/USD"] });
+  it("v43: FADE_MAILED_TF is the function's map (MACDH_INTERVAL_OF): all five pairs' emails are judged on 5-minute bars, where no run is held (none can be built); the runs of record stay the 15-minute and 1-hour ones, each holding the five pairs; gold on its 1-hour chart, measured on neither", () => {
+    expect(FADE_MAILED_TF).toBe("5min");
     const five = MACDH_PAIRS.filter((p) => p !== "XAU/USD");
     expect([...five].sort()).toEqual([...PAIRS].sort());
     for (const p of five) {
-      const tf = MACDH_INTERVAL_OF[p] as FadeTf;
-      expect(FADE_TFS, p).toContain(tf);
-      expect(FADE_MEASURED[tf].tf, p).toBe(tf);
-      expect(FADE_MEASURED[tf].pairs.map((x) => x.pair), p).toContain(p);
-      expect(FADE_MAILED_ON[tf], p).toContain(p);
-      // so the run's own signals never reach fadeMeasuredLine's refusals
-      for (const lang of ["ja", "en"] as const) expect(() => fadeMeasuredLine(lang, p, tf)).not.toThrow();
+      expect(MACDH_INTERVAL_OF[p], p).toBe(FADE_MAILED_TF);
+      expect(isMacdhChart(p, FADE_MAILED_TF), p).toBe(true);
     }
-    for (const tf of FADE_TFS) expect([...FADE_MAILED_ON[tf]].sort()).toEqual(five.filter((p) => MACDH_INTERVAL_OF[p] === tf).sort());
-    expect(FADE_MAILED_ON["15min"].filter((p) => FADE_MAILED_ON["1h"].includes(p))).toEqual([]);
+    // no run is held on the mailed chart, and none can be built for it (nothing was measured on 5-minute bars)
+    expect(FADE_TFS as readonly string[]).not.toContain(FADE_MAILED_TF);
+    expect(Object.keys(FADE_MEASURED)).not.toContain(FADE_MAILED_TF);
+    expect(Object.keys(FADE_MEASURED_NOTES)).not.toContain(FADE_MAILED_TF);
+    for (const lang of ["ja", "en"] as const) {
+      expect(() => fadeMeasuredNotes(lang, FADE_MAILED_TF)).toThrow(/no run is held for the chart "5min"/);
+      for (const p of five) expect(() => fadeMeasuredLine(lang, p, FADE_MAILED_TF), p).toThrow(/no run is held for the chart "5min"/);
+    }
+    // the runs of record hold the five pairs (〔mailedOn〕 speaks of them as the five), and each still builds for every
+    // pair (fadeMeasuredLine is no mail's from v43, but its form stays buildable)
+    for (const tf of FADE_TFS) {
+      expect(FADE_MEASURED[tf].pairs.map((x) => x.pair)).toEqual(PAIRS);
+      for (const lang of ["ja", "en"] as const) for (const p of five) expect(() => fadeMeasuredLine(lang, p, tf)).not.toThrow();
+    }
     // gold is mailed on its 1-hour chart, but measured on neither (no numbers in its mail)
     expect(MACDH_INTERVAL_OF["XAU/USD"]).toBe("1h");
+    for (const tf of FADE_TFS) expect(FADE_MEASURED[tf].pairs.map((x) => x.pair)).not.toContain("XAU/USD");
+  });
+
+  it("v43: the module loads with the five pairs on 5 minutes (FADE_MEASURED_NOTES is built as it loads): both runs' notes, ja and en, each with v43's 〔mailedOn〕 and its own run's bar word", () => {
+    expect(Object.keys(FADE_MEASURED_NOTES).sort()).toEqual(["15min", "1h"]);
     for (const tf of FADE_TFS) {
-      expect(FADE_MAILED_ON[tf]).not.toContain("XAU/USD");
-      expect(FADE_MEASURED[tf].pairs.map((x) => x.pair)).not.toContain("XAU/USD");
+      for (const lang of ["ja", "en"] as const) {
+        const t = FADE_MEASURED_NOTES[tf][lang];
+        expect(t.length, `${tf} ${lang}`).toBeGreaterThan(1000);
+        expect(t, `${tf} ${lang}`).toContain(MAILED_ON[tf][lang]);
+        // v41's sentence is gone
+        expect(t, `${tf} ${lang}`).not.toContain(MAILED_ON_V41[tf][lang]);
+        expect(t, `${tf} ${lang}`).not.toMatch(/この5ペアのうち、メールを|Of these five pairs, the email is judged on/);
+      }
+    }
+  });
+
+  it("v43: a pair's 5-minute email's sentence in place of the measured paragraph: not measured on 5-minute bars, no number, the numbers measured on 15-minute and 1-hour bars in the app's notes and not 5-minute numbers", () => {
+    expect(FADE_NOT_MEASURED_ON_MAILED_TF.ja).toBe("この決まりは、5分足ではまだ測っていません（数字はありません）。15分足と1時間足で測った数字は、アプリの設定の注にあります（5分足の数字ではありません）。");
+    expect(FADE_NOT_MEASURED_ON_MAILED_TF.en).toBe("This rule has not been measured on 5-minute bars (there are no numbers for them). The numbers measured on 15-minute and 1-hour bars are in the app's settings notes (they are not 5-minute numbers).");
+    for (const lang of ["ja", "en"] as const) {
+      const t = FADE_NOT_MEASURED_ON_MAILED_TF[lang];
+      // no measured number, no rate, no count
+      expect(t, lang).not.toMatch(/\d\.\d|pips|%|回|勝率|win rate/i);
+      // none of either run's paragraph is in it
+      for (const tf of FADE_TFS) expect(FADE_MEASURED_NOTES[tf][lang].includes(t), `${lang} ${tf}`).toBe(false);
     }
   });
 });
@@ -561,7 +620,9 @@ const SPEC_JA_15 =
   "測った数字（5ペア、〔from〕以後、〔to〕より前に確定した15分足、スプレッド込み、docs §〔sec〕）。〔mailedOn〕過去の GMO の足を読み直して測ったもので、メールの読み込みが失敗した時などは入っていません（その回数は測っていません）。このメールの決まりで足の終値で入り、+10 pips で利確・損切りなしで持ったとして測りました（オーナーの持ち方です。メールには利確の値段を書いていません）: 合図は〔trades〕回、うち〔tp〕回が+10 pips に届きました。〔open〕回は〔to〕の時点でまだ届いておらず、その含み損益は合わせて〔openPipsSum〕 pips（マイナスが損）、いちばん悪いもので〔openPipsWorst〕 pips、いちばん長いもので〔openLongest〕持ったままでした（その後は追っていません）。1回あたり平均〔mean〕 pips（届いていないものは、その時の含み損益で数えました）。途中の含み損は中央値〔maeMedian〕 pips、最大〔maeMax〕 pips。+10 pips に届くまでの時間は中央値〔tpMedian〕、10回に1回は〔tpP90〕より長く、いちばん長いもので〔tpMax〕でした。足の終値で入るので指値ではなく、入らなかった注文はありません（週末の止まっている時間に確定した足のもの〈下〉を除き、この決まりの合図は、そのペアのメールをこの時間足で判定するかどうかに関わらず、すべて入ったとして数えました）。損切りをしないので、+10 pips に届く割合は作りの上で高く出ます。同じ合図で逆向き（上で買い・下で売り）に入ると1回あたり〔flowMean〕 pips、合図なしで〔baseWhat〕入ると〔baseMean〕 pips でした（合図なしは、同じ持ち方〈+10 pips で利確・損切りなし〉ですが、足の終値ではなく15分足の最初の1分に入ったもので、同じ入りではありません）。〔chance〕〔pair〕だけでは平均〔pairMean〕 pips（合図なしでは〔pairBaseMean〕 pips）です。ペアごとの合図なしとの差は、偶然で出る差より大きいとは示せていません（値動きに傾きのない作り物の値段10本の幅の外には、偶然だけでも11回に約2回は出ます）。平均がマイナスだったペア: 〔negPairs〕。ほかに〔notMailed〕回、週末の止まっている時間に確定した足に合図がありましたが、その足はどのペアのメールでも判定しないので、上の数字に入れていません。";
 const SPEC_EN_15 =
   "Measured (five pairs, 15-minute bars that closed from 〔from〕 up to, not including, 〔to〕, spread paid, docs §〔sec〕). 〔mailedOn〕 The measurement re-reads GMO's past bars; times this email's reads failed and the like are not in it (how often: not measured). Entered by this email's rule at the bar's close and held with a take profit of +10 pips and no stop (the owner's way of holding; this email states no take-profit price): 〔trades〕 signals, of which 〔tp〕 reached +10 pips. 〔open〕 had not reached it by 〔to〕; their unrealised result was 〔openPipsSum〕 pips in all (a minus is a loss), the worst 〔openPipsWorst〕 pips, the longest held 〔openLongest〕 (not followed after that). The mean was 〔mean〕 pips a trade (those not reached counted at their unrealised result then). The largest loss on the way: median 〔maeMedian〕 pips, largest 〔maeMax〕 pips. Time to +10 pips: median 〔tpMedian〕, longer than 〔tpP90〕 one time in ten, longest 〔tpMax〕. The entry is at the bar's close, not a limit order, so no order went unfilled (every signal of this rule, but those on bars that closed in the weekend pause (below), is counted as entered, whether or not that pair's email is judged on this timeframe). With no stop, the share reaching +10 pips comes out high by construction. Entering the other way on the same signals (a BUY at the top, a SELL at the bottom) gave 〔flowMean〕 pips a trade, and entering with no signal 〔baseWhat〕 gave 〔baseMean〕 pips (held the same way, +10 pips and no stop, but entered at the 15-minute bar's first minute, not at its close, so not the same entry). 〔chance〕 On 〔pair〕 alone the mean was 〔pairMean〕 pips (with no signal, 〔pairBaseMean〕 pips). Each pair's difference from no signal has not been shown to be larger than chance gives (chance alone puts a gap outside the range of ten made-up price walks with no trend about 2 times in 11). Pairs whose mean was below zero: 〔negPairs〕. Besides these, 〔notMailed〕 signals fell on bars that closed in the weekend pause; no pair's email judges those bars, so they are not in the numbers above.";
-const MAILED_ON: Record<FadeTf, Record<Lang, string>> = {
+// 〔mailedOn〕 as section 4.5 wrote it for v41 (which pairs were mailed on which run's chart; held against the spec file
+// below, as the record of v41 and v42's paragraphs)
+const MAILED_ON_V41: Record<FadeTf, Record<Lang, string>> = {
   "15min": {
     ja: "この5ペアのうち、メールを15分足で判定するのはドル/円・豪ドル/ドルです。ユーロ/円・豪ドル/円・ユーロ/ドルのメールは1時間足で判定し、そのメールには1時間足で測った数字を載せています（この段落の数字は、どのペアの分も、すべて15分足で測ったものです）。",
     en: "Of these five pairs, the email is judged on 15-minute bars for USD/JPY and AUD/USD. The emails of EUR/JPY, AUD/JPY and EUR/USD are judged on 1-hour bars and carry the numbers measured on 1-hour bars (every number in this paragraph, for every pair, was measured on 15-minute bars).",
@@ -569,6 +630,19 @@ const MAILED_ON: Record<FadeTf, Record<Lang, string>> = {
   "1h": {
     ja: "この5ペアのうち、メールを1時間足で判定するのはユーロ/円・豪ドル/円・ユーロ/ドルです。ドル/円・豪ドル/ドルのメールは15分足で判定し、そのメールには15分足で測った数字を載せています（この段落の数字は、どのペアの分も、すべて1時間足で測ったものです）。",
     en: "Of these five pairs, the email is judged on 1-hour bars for EUR/JPY, AUD/JPY and EUR/USD. The emails of USD/JPY and AUD/USD are judged on 15-minute bars and carry the numbers measured on 15-minute bars (every number in this paragraph, for every pair, was measured on 1-hour bars).",
+  },
+};
+// v43's 〔mailedOn〕 (the five pairs' emails judged on 5-minute bars, the owner's 2026-11-26 and 2026-11-27; no spec
+// file holds it): all five pairs' emails are judged on 5-minute bars, and every number of the paragraph was measured on
+// the run's own bars, not on 5-minute bars. It takes v41's place in every paragraph, the mail's form and the notes'
+const MAILED_ON: Record<FadeTf, Record<Lang, string>> = {
+  "15min": {
+    ja: "この5ペアのメールは、今はすべて5分足で判定しています。この段落の数字は、どのペアの分も、すべて15分足で測ったもので、5分足で測ったものではありません。",
+    en: "The emails of all five pairs are now judged on 5-minute bars. Every number in this paragraph, for every pair, was measured on 15-minute bars, not on 5-minute bars.",
+  },
+  "1h": {
+    ja: "この5ペアのメールは、今はすべて5分足で判定しています。この段落の数字は、どのペアの分も、すべて1時間足で測ったもので、5分足で測ったものではありません。",
+    en: "The emails of all five pairs are now judged on 5-minute bars. Every number in this paragraph, for every pair, was measured on 1-hour bars, not on 5-minute bars.",
   },
 };
 const CHANCE_BELOW_SPEC = {
@@ -949,9 +1023,11 @@ describe("the measured paragraph (spec 4.5), one per chart, ja and en, word for 
     const flatJa = lines.map((l) => l.trim()).join("");
     const flatEn = lines.map((l) => l.trim()).join(" ");
     expect(flatEn).toContain("`1h`: the same two texts with 「確定した15分足」 → 「確定した1時間足」, 「15分足の最初の1分」 → 「1時間足の最初の1分」; \"15-minute bars that closed\" → \"1-hour bars that closed\", \"the 15-minute bar's first minute\" → \"the 1-hour bar's first minute\"; 〔mailedOn〕 its `1h` sentence.");
+    // 〔mailedOn〕 as section 4.5 wrote it (v41's; v43's, MAILED_ON, is in no spec file: it is pinned word for word below)
     for (const tf of FADE_TFS) {
-      expect(flatJa, `${tf} mailedOn ja`).toContain(`「${MAILED_ON[tf].ja}」`);
-      expect(flatEn, `${tf} mailedOn en`).toContain(`en "${MAILED_ON[tf].en}"`);
+      expect(flatJa, `${tf} mailedOn ja`).toContain(`「${MAILED_ON_V41[tf].ja}」`);
+      expect(flatEn, `${tf} mailedOn en`).toContain(`en "${MAILED_ON_V41[tf].en}"`);
+      for (const lang of ["ja", "en"] as const) expect(lang === "ja" ? flatJa : flatEn, `${tf} v43 mailedOn ${lang}`).not.toContain(MAILED_ON[tf][lang]);
     }
     expect(flatJa).toContain(`\`15min\` 「${BASE_WHAT["15min"].ja}」`);
     expect(flatEn).toContain(`/ "${BASE_WHAT["15min"].en}"; \`1h\` the same with 「1時間足」 / "1-hour".`);
@@ -988,16 +1064,16 @@ describe("the measured paragraph (spec 4.5), one per chart, ja and en, word for 
     }
   });
 
-  it("the mails as the owner reads them: USD/JPY's on 15-minute bars and EUR/JPY's on 1-hour bars, each its own pair's sentence and the per-pair chance sentence after it", () => {
+  it("the paragraph's mail form (v41 and v42's mails; no mail carries it from v43) as the owner read it: USD/JPY's of the 15-minute run and EUR/JPY's of the 1-hour run, each its own pair's sentence and the per-pair chance sentence after it, v43's 〔mailedOn〕 after the first sentence", () => {
     const uj = fadeMeasuredLine("ja", "USD/JPY", "15min");
-    expect(uj.startsWith("測った数字（5ペア、2024年1月1日 0:00（UTC）以後、2026年11月10日 21:00（UTC）より前に確定した15分足、スプレッド込み、docs §8.156）。この5ペアのうち、メールを15分足で判定するのはドル/円・豪ドル/ドルです。")).toBe(true);
+    expect(uj.startsWith("測った数字（5ペア、2024年1月1日 0:00（UTC）以後、2026年11月10日 21:00（UTC）より前に確定した15分足、スプレッド込み、docs §8.156）。この5ペアのメールは、今はすべて5分足で判定しています。この段落の数字は、どのペアの分も、すべて15分足で測ったもので、5分足で測ったものではありません。")).toBe(true);
     expect(uj).toContain("ではありません）。ドル/円だけでは平均+2.67 pips（合図なしでは+5.69 pips）です。ペアごとの合図なしとの差は、偶然で出る差より大きいとは示せていません（値動きに傾きのない作り物の値段10本の幅の外には、偶然だけでも11回に約2回は出ます）。平均がマイナスだったペア: 豪ドル/円（-0.82 pips）。ほかに3回、");
     expect(uj).toContain("合図なしとの差（この決まり − 合図なし）は1回あたり-0.91 pips で、合図なしで入った時より低くありました。");
     const ue = fadeMeasuredLine("en", "USD/JPY", "15min");
-    expect(ue.startsWith("Measured (five pairs, 15-minute bars that closed from 1 January 2024, 00:00 UTC up to, not including, 10 November 2026, 21:00 UTC, spread paid, docs §8.156). Of these five pairs, the email is judged on 15-minute bars for USD/JPY and AUD/USD. ")).toBe(true);
+    expect(ue.startsWith("Measured (five pairs, 15-minute bars that closed from 1 January 2024, 00:00 UTC up to, not including, 10 November 2026, 21:00 UTC, spread paid, docs §8.156). The emails of all five pairs are now judged on 5-minute bars. Every number in this paragraph, for every pair, was measured on 15-minute bars, not on 5-minute bars. ")).toBe(true);
     expect(ue).toContain("On USD/JPY alone the mean was +2.67 pips (with no signal, +5.69 pips). Each pair's difference from no signal has not been shown to be larger than chance gives");
     const ej = fadeMeasuredLine("ja", "EUR/JPY", "1h");
-    expect(ej.startsWith("測った数字（5ペア、2024年1月1日 0:00（UTC）以後、2026年11月10日 21:00（UTC）より前に確定した1時間足、スプレッド込み、docs §8.156）。この5ペアのうち、メールを1時間足で判定するのはユーロ/円・豪ドル/円・ユーロ/ドルです。")).toBe(true);
+    expect(ej.startsWith("測った数字（5ペア、2024年1月1日 0:00（UTC）以後、2026年11月10日 21:00（UTC）より前に確定した1時間足、スプレッド込み、docs §8.156）。この5ペアのメールは、今はすべて5分足で判定しています。この段落の数字は、どのペアの分も、すべて1時間足で測ったもので、5分足で測ったものではありません。")).toBe(true);
     expect(ej).toContain("ユーロ/円だけでは平均+4.30 pips（合図なしでは+3.28 pips）です。ペアごとの合図なしとの差は");
     expect(ej).toContain("入ると+3.21 pips でした");
     // the AUD/JPY and EUR/USD sentences of the 1-hour run (no signal -0.75 and +2.61; v40's run said -0.77 and +2.60)
@@ -1056,15 +1132,21 @@ describe("the measured paragraph (spec 4.5), one per chart, ja and en, word for 
     }
   });
 
-  it("the bar's word per chart: a run's paragraph names its own chart only, but for the other chart in 〔mailedOn〕", () => {
+  it("the bar's word per chart: a run's paragraph names its own chart only, but for the 5-minute chart its emails are judged on in 〔mailedOn〕 (v43; v41's named the other run's chart there)", () => {
+    // 「5分足」 / "5-minute" not as the end of 「15分足」 / "15-minute"
+    const FIVE = { ja: /(?<!1)5分足/, en: /(?<!1)5-minute/ };
     for (const tf of FADE_TFS) {
       const [own, other] = tf === "15min" ? [["15分足", "15-minute"], ["1時間足", "1-hour"]] : [["1時間足", "1-hour"], ["15分足", "15-minute"]];
       for (const lang of ["ja", "en"] as const) {
         const i = lang === "ja" ? 0 : 1;
+        expect(MAILED_ON[tf][lang], `${lang} ${tf}`).toMatch(FIVE[lang]);
+        expect(MAILED_ON[tf][lang], `${lang} ${tf}`).toContain(own[i]);
+        expect(MAILED_ON[tf][lang], `${lang} ${tf}`).not.toContain(other[i]);
         for (const t of [fadeMeasuredLine(lang, "EUR/USD", tf), fadeMeasuredNotes(lang, tf)]) {
           const rest = t.replace(MAILED_ON[tf][lang], "");
           expect(rest, `${lang} ${tf}`).toContain(own[i]);
           expect(rest, `${lang} ${tf}`).not.toContain(other[i]);
+          expect(rest, `${lang} ${tf}`).not.toMatch(FIVE[lang]);
         }
       }
     }
@@ -1131,7 +1213,7 @@ describe("the measured paragraph (spec 4.5), one per chart, ja and en, word for 
     for (const t of [ja, en]) expect(t).not.toMatch(/null|undefined|NaN/);
   });
 
-  it("refused (spec 4.5, 7.1): a chart with no run; a run that is not the chart's (m.tf !== tf); a pair not measured (gold); no fade trade; a missing value; a pair mailed on the chart that the run does not hold", () => {
+  it("refused (spec 4.5, 7.1): a chart with no run (5 minutes among them); a run that is not the chart's (m.tf !== tf); a pair not measured (gold); no fade trade; a missing value; a run that does not hold the five pairs (v43's 〔mailedOn〕)", () => {
     expect(() => fadeMeasuredLine("ja", "USD/JPY", "4h")).toThrow(/no run is held for the chart "4h"/);
     expect(() => fadeMeasuredNotes("en", "5min")).toThrow(/no run is held/);
     expect(() => fadeMeasuredLine("en", "USD/JPY", "4h", { ...FADE_MEASURED["15min"], tf: "4h" })).toThrow(/no run is held/);
@@ -1144,8 +1226,10 @@ describe("the measured paragraph (spec 4.5), one per chart, ja and en, word for 
     expect(() => fadeMeasuredLine("ja", "USD/JPY", "1h", none)).toThrow(/no fade trade/);
     expect(() => fadeMeasuredNotes("en", "1h", none)).toThrow(/no fade trade/);
     expect(() => fadeMeasuredNotes("ja", "1h", { ...FADE_MEASURED["1h"], fade: { ...FADE_MEASURED["1h"].fade, openPipsSum: null } })).toThrow(/openPipsSum/);
+    // v43: 〔mailedOn〕 speaks of the run's pairs as the five (v41: a pair mailed on the chart that the run did not hold)
     const noAud = { ...FADE_MEASURED["15min"], pairs: FADE_MEASURED["15min"].pairs.filter((p) => p.pair !== "AUD/USD") };
-    expect(() => fadeMeasuredLine("ja", "USD/JPY", "15min", noAud)).toThrow(/AUD\/USD, mailed on 15min, is not among the run's pairs/);
+    expect(() => fadeMeasuredLine("ja", "USD/JPY", "15min", noAud)).toThrow(/〔mailedOn〕 speaks of five pairs, the run holds 4/);
+    expect(() => fadeMeasuredNotes("en", "15min", noAud)).toThrow(/〔mailedOn〕 speaks of five pairs, the run holds 4/);
   });
 
   it("the fields 4.1 and 7.1 require with a count reaching +10: the mean, the open trades, the largest loss on the way, the holding time, no order unfilled, the baseline, the re-read clause", () => {

@@ -164,7 +164,8 @@ export interface AlertSettings {
   // #291: and the video's way's (gold, 1 minute), likewise
   // v41 per pair (research/macdfade15min-prod-spec.md section 5): the MACD fade's block also says which of its
   // timeframes each pair is offered on (`limited`, read as the base block's is): USD/JPY and AUD/USD on 15 minutes,
-  // EUR/JPY, AUD/JPY, EUR/USD and gold on 1 hour; a server that does not send it (v40 and before) leaves it empty,
+  // EUR/JPY, AUD/JPY, EUR/USD and gold on 1 hour (signal-alerts v43: the five pairs on 5 minutes, gold on 1 hour; no
+  // code here changes for it); a server that does not send it (v40 and before) leaves it empty,
   // and then every pair is offered on every timeframe of the block, as before
   indicator: {
     pairs: string[];
@@ -180,8 +181,18 @@ export interface AlertSettings {
     // (null when the server could not read it); `shares` each share this user follows, keyed by its symbol: its stored
     // name (null for the 22, which the screen names itself), the newest bar the run read from Yahoo and the count of its
     // closed bars, and whether that bar is more than 7 days old. A v41 server sends none of the three: `cap` and
-    // `followed` null, `shares` empty
-    stockmacd: { pairs: string[]; intervals: string[]; cap: number | null; followed: number | null; shares: Record<string, StockShare> } | null;
+    // `followed` null, `shares` empty.
+    // signal-alerts v43: `charts`, the shares whose emails are judged on another chart than the block's column, keyed by
+    // the symbol ({"4063.T": "1h"}: its '15min' tick is the follow, its emails are judged on 1-hour bars); empty from a
+    // server that does not send it (v42 and before)
+    stockmacd: {
+      pairs: string[];
+      intervals: string[];
+      charts: Record<string, string>;
+      cap: number | null;
+      followed: number | null;
+      shares: Record<string, StockShare>;
+    } | null;
     // #395: a sharp rise or fall's (the six, 1 hour), likewise
     spike: { pairs: string[]; intervals: string[] } | null;
   } | null;
@@ -286,6 +297,8 @@ const alertRow = (v: unknown): AlertRow | null => {
   };
 };
 
+// signal-alerts v43: the charts a share's email may be judged on (stocks.ts StockmacdChart)
+const STOCKMACD_JUDGED_CHARTS: readonly string[] = ["15min", "1h"];
 // v42 (research/allstocks-prod-spec.md 6.1): the stock MACD block, read from the server's object keyed by the symbol
 // with snake_case fields; a key that is not a share symbol, or a value that is not an object, is dropped, and so is a
 // field of the wrong kind (it reads as null, `stale` as false)
@@ -309,11 +322,17 @@ const stockmacdOf = (v: unknown): NonNullable<AlertSettings["indicator"]>["stock
     const s = isStockSymbol(p) ? stockShareOf(sv) : null;
     if (s) shares[p] = s;
   }
+  // v43: a share's chart, kept only for a share symbol and a chart a share's email may be judged on
+  const charts: Record<string, string> = {};
+  for (const [p, iv] of Object.entries(rec(b.charts) ?? {})) {
+    if (isStockSymbol(p) && typeof iv === "string" && STOCKMACD_JUDGED_CHARTS.includes(iv)) charts[p] = iv;
+  }
   const cap = num(b.cap);
   const followed = num(b.followed);
   return {
     pairs: strings(b.pairs),
     intervals: strings(b.intervals),
+    charts,
     cap: cap !== null && Number.isInteger(cap) && cap > 0 ? cap : null,
     followed: followed !== null && Number.isInteger(followed) && followed >= 0 ? followed : null,
     shares,

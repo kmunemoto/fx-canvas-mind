@@ -45,6 +45,30 @@
 // time a share is first added) and the database's public.stockmacd_follow. A share outside the 22 is named in its mail
 // by the name Yahoo's search gave when it was added (stored in public.signal_alert_stocks, cleaned by stockNameClean),
 // or by its code alone; the judgment is unchanged.
+//
+// v43: one share on another chart. The owner (2026-11-27): 「信越化学工業 のメールは1時間足で判断して」. Shin-Etsu
+// Chemical (4063.T) is judged on its 1-hour bars; every other share stays on its 15-minute bars, as in v42. One map
+// says it (STOCKMACD_CHART_OF; stockmacdChartOf gives a share's chart, "15min" for a share not in it), and it drives
+// what is read (Yahoo's `60m` over `1y` for a 1-hour share, v40's read and the live chart's own of that chart: a
+// year of Tokyo's seven 1-hour bars a day, counted, not read here, is well past the 600 closed bars a judgment needs;
+// `15m` over `60d` for the others, unchanged), the closes and when a share is due
+// (stockCloseDue: a 1-hour share only in the half hour after one of its own 1-hour closes), the bars' ends and breaks
+// (stockBarEnd, stockBarBreak), the signal's interval and its rule id (one version a chart: v5 on '15min', unchanged;
+// v6 on '1h', stockmacd_12_26_9_w600_1h_fade96of120_in_v6, since v40 wrote v4 on '1h' for every share from 2026-11-18
+// to 11-20 and each change of the chart raises the number), and the mail's words. The 1-hour bars, closes, ends and
+// breaks are v40's (Tokyo's bars stamped 9:00 … 15:00, the 11:00 bar ending at the lunch break, 11:30, the bar
+// stamped 12:00 running 12:30-13:00 and the 15:00 bar ending at the closing auction, 15:30), and on them Yahoo's
+// Tokyo prices were measured some 15 minutes late (docs §8.141: the 1-hour reads of 2026-11-06, each bar judged 901 to
+// 904 seconds after its close). The subscriptions do not change: a share is followed by its 'stockmacd' '15min' row
+// as before (isStockmacdChart, STOCKMACD_INTERVALS: public.stockmacd_follow inserts '15min' rows,
+// stockmacd_followed_count and the cap of 50 count them, the screen ticks and unticks them). That row is the follow;
+// the chart the share is judged on comes from the map, so the run hands 4063.T's '15min' followers its '1h' signal,
+// and their rows of public.signal_alerts carry '1h' and the v6 id. The rule itself is unchanged (the 600 closed bars
+// ending at the bar, 96%, the bar before not at 96%, the pane of the newest 120 bars of the chart, the bar's close as
+// the price in, no take-profit, no stop, one email). Nothing of the fade is measured on shares, on either chart.
+// stockBarsOf takes the chart of the answer it parses (the run passes the share's own, the chart it read); its default
+// is the `15m` answer, so a caller that reads every share's `15m` bars (research/allstocks-scan/scan.ts) still gets
+// 15-minute bars for 4063.T, not its 15-minute bars ended on the 1-hour grid.
 
 import type { Candle } from "../analyze/indicators.ts";
 import { barOpenMs } from "../analyze/state.ts";
@@ -68,12 +92,27 @@ export const STOCKMACD_CAP = 50;
 export const isListedStock = (p: string) => STOCKMACD_PAIRS.includes(p);
 // v41 (research/macdfade15min-prod-spec.md 3.3 item 1): the shares' 15-minute chart (v40's was the 1-hour one). This
 // one constant drives isStockmacdChart, the run's subscriptions, the bars read (Yahoo's `15m`), the status call, set /
-// set_many and the rule id
+// set_many and the rule id. v43: it is the follow's chart only — the interval of every share's 'stockmacd' row (the
+// run's subscriptions, the status call's column, set / set_many, public.stockmacd_follow and the cap's count) — and the
+// chart of every share STOCKMACD_CHART_OF does not name; the chart a share is judged on is stockmacdChartOf's
 export const STOCKMACD_INTERVALS = ["15min"] as const;
 // v42 (research/allstocks-prod-spec.md 4.1): the symbol's shape (a US ticker or a Tokyo code on ".T"), not the list;
-// the cap is the database call's
+// the cap is the database call's. v43: whether a row is a share's follow (its '15min' row, whatever chart the share is
+// judged on); not whether a signal's chart is the share's (isStockmacdJudged)
 export const isStockmacdChart = (pair: unknown, interval: unknown): boolean =>
   isStockSymbol(pair) && typeof interval === "string" && (STOCKMACD_INTERVALS as readonly string[]).includes(interval);
+// v43: the charts a share's email may be judged on
+export type StockmacdChart = "15min" | "1h";
+// v43 (the owner, 2026-11-27: 「信越化学工業 のメールは1時間足で判断して」): the shares judged on a chart other than the
+// 15-minute one. The one place that says it: stockmacdChartOf reads it for the run (the bars read, the closes, the
+// signal's interval and its id), the mail and the status call (stockmacd.charts, which the screen shows beside the share)
+export const STOCKMACD_CHART_OF: Readonly<Record<string, StockmacdChart>> = { "4063.T": "1h" };
+// A share's chart: its entry in STOCKMACD_CHART_OF, else the 15-minute one (the map's own entries only, so no name
+// of Object.prototype reads as a share's)
+export const stockmacdChartOf = (sym: string): StockmacdChart =>
+  Object.prototype.hasOwnProperty.call(STOCKMACD_CHART_OF, sym) ? STOCKMACD_CHART_OF[sym] : STOCKMACD_INTERVALS[0];
+// v43: whether `chart` is the chart the share's email is judged on (a share's shape, and its chart)
+export const isStockmacdJudged = (pair: unknown, chart: unknown): boolean => isStockSymbol(pair) && chart === stockmacdChartOf(pair);
 // The rule's id (its own, so the FX record and the morning check's never take it in; it starts with "stockmacd", as
 // the app reads the rule back from it). #391: the 95% email's was stockmacd_12_26_9_w600_1h_z95of120_v1, never written
 // again; #397: the ride's three, stockmacd_12_26_9_w600_1h_ride90to96of120_{in,at,out}_v2, written no more from v40.
@@ -83,8 +122,18 @@ export const isStockmacdChart = (pair: unknown, interval: unknown): boolean =>
 // 5, not 4, since v40 writes 4 (each change of the chart raises the number; the never-built
 // stockmacd_..._15min_fade96of120_in_v4 of research/macdfade15-prod-spec.md stays that spec's record). The
 // subscriptions keep rule = 'stockmacd'.
-export const STOCKMACD_FADE_VERSION = 5;
-export const STOCKMACD_RULE_ID = fadeRuleId("stockmacd", STOCKMACD_INTERVALS[0], STOCKMACD_FADE_VERSION);
+// v43: one version a chart, as the pairs' MACD fade has (indicators.ts MACDH_FADE_VERSION_OF): 5 on the 15-minute
+// chart, unchanged; 6 on the 1-hour chart (4063.T's), stockmacd_12_26_9_w600_1h_fade96of120_in_v6 — 6, not v40's 4,
+// which v40 wrote on '1h' for every share from 2026-11-18 to 11-20 and which is not used again. No single id stands
+// beside them (v41's STOCKMACD_FADE_VERSION and STOCKMACD_RULE_ID are gone): one would read as the one in force, so
+// indicatorRuleId has no 'stockmacd' answer and signalRuleId takes the signal's chart's (stockmacdRuleId)
+export const STOCKMACD_FADE_VERSION_OF: Readonly<Record<StockmacdChart, number>> = { "15min": 5, "1h": 6 };
+export const stockmacdRuleId = (chart: string): string => {
+  if (!Object.prototype.hasOwnProperty.call(STOCKMACD_FADE_VERSION_OF, chart)) {
+    throw new Error(`stockmacdRuleId: the stock MACD fade has no version on the chart "${chart}"`);
+  }
+  return fadeRuleId("stockmacd", chart, STOCKMACD_FADE_VERSION_OF[chart as StockmacdChart]);
+};
 
 // The shares' names in the emails (the live chart's, src/lib/stocks.ts)
 const NAMES: Record<string, { ja: string; en: string }> = {
@@ -127,8 +176,8 @@ export const stockNameClean = (v: unknown, sym: string): string | null => {
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
-// v41: a bar's length (the 15-minute chart's; spec 3.3 items 3-5)
-const BAR_MS = 15 * MIN;
+// v41: a bar's length (the 15-minute chart's; spec 3.3 items 3-5). v43: and the 1-hour chart's (4063.T's)
+const BAR_MS: Readonly<Record<StockmacdChart, number>> = { "15min": 15 * MIN, "1h": HOUR };
 
 // The weekday and the time of day (minutes) at `ms` in the share's market: Tokyo's is UTC+9 all year, New York's
 // moves with daylight saving (the runtime's time zones)
@@ -158,22 +207,36 @@ export const CLOSES: Record<"us" | "jp", readonly number[]> = {
   us: every15(hm(9, 45), hm(16, 0)),
   jp: [...every15(hm(9, 15), hm(11, 30)), ...every15(hm(12, 45), hm(15, 30))],
 };
+// v43: the 1-hour bars' closes, v40's (a share on the 1-hour chart: 4063.T): New York 10:30 … 15:30 and 16:00 (7: the
+// bars 9:30 … 14:30 and the 15:30 bar ending at the close), Tokyo 10:00, 11:00, 11:30 (the 11:00 bar ending at the lunch
+// break), 13:00 (the bar stamped 12:00, 12:30-13:00), 14:00, 15:00 and 15:30 (the 15:00 bar ending at the closing
+// auction): 7 a day (docs §8.141: Yahoo's 1-hour answer of 2026-11-06 stamps the afternoon's first bar 12:00, and
+// every one of them was judged some 15 minutes after its close)
+export const CLOSES_1H: Record<"us" | "jp", readonly number[]> = {
+  us: [hm(10, 30), hm(11, 30), hm(12, 30), hm(13, 30), hm(14, 30), hm(15, 30), hm(16, 0)],
+  jp: [hm(10, 0), hm(11, 0), hm(11, 30), hm(13, 0), hm(14, 0), hm(15, 0), hm(15, 30)],
+};
+// a share's closes, by the chart it is judged on
+const closesOf = (sym: string): readonly number[] => (stockmacdChartOf(sym) === "1h" ? CLOSES_1H : CLOSES)[stockMarketOf(sym)];
 // how long after a close Yahoo is read for its bar
 export const STOCK_POLL_MS = 30 * MIN;
 // how long after its close a bar is still mailed (a lagging feed, a missed run). v41: kept at 45 minutes, which holds
 // a Tokyo bar judged some 16 minutes after its close (Yahoo's Tokyo prices about 15 minutes late, docs §8.141; counted
-// from the code, not measured on 15-minute reads) inside it
+// from the code, not measured on 15-minute reads) inside it. v43: the same on the 1-hour chart (v40's, where the Tokyo
+// bars were judged 901 to 904 seconds after their close, docs §8.141)
 export const STOCK_FRESH_MS = 45 * MIN;
 // v41 (spec 3.3 item 10): how long a "stocks" run may go on starting Yahoo reads. The stocks run and the pairs' and
 // gold's run share pg_net's one queue (docs §8.112), and on 15-minute bars a Tokyo share is read about once a minute
 // through the session; so once a run has spent this long, no more reads are started, and the shares left are read
-// first by the next run (index.ts stockSweep)
+// first by the next run (index.ts stockSweep). v43: unchanged; a share on the 1-hour chart is due only in the half hour
+// after one of its own 1-hour closes (stockCloseDue), so it adds no read outside those
 export const STOCK_RUN_BUDGET_MS = 30_000;
 
 // The newest regular close (ms, on the minute) at or before `nowMs` and within STOCK_POLL_MS of it, on a weekday;
-// null when there is none (outside the session, the weekend). A holiday is told by the bars (stockSweepOf)
+// null when there is none (outside the session, the weekend). A holiday is told by the bars (stockSweepOf). v43: the
+// closes of the share's own chart (CLOSES, or CLOSES_1H for a share on the 1-hour chart)
 export const stockCloseDue = (sym: string, nowMs: number): number | null => {
-  const closes = CLOSES[stockMarketOf(sym)];
+  const closes = closesOf(sym);
   const minute = Math.floor(nowMs / MIN) * MIN;
   for (let k = 0; k * MIN <= STOCK_POLL_MS; k++) {
     const t = minute - k * MIN;
@@ -187,9 +250,24 @@ export const stockCloseDue = (sym: string, nowMs: number): number | null => {
 // bar; Tokyo's 11:15 bar ends at the lunch break, its 15:15 bar at the closing auction, New York's 15:45 bar at its
 // close, each 15 minutes after it opens). On a day that ends early, at the session's end when Yahoo gives it and it is
 // earlier (`sessionEndMs`, the session the bar is in). (v40's hourly bars had two half bars in Tokyo and one in New
-// York.)
-export const stockBarEnd = (sym: string, openMs: number, sessionEndMs: number | null = null): number => {
-  const end = openMs + BAR_MS;
+// York.) v43: by the share's own chart; on the 1-hour chart v40's ends again: Tokyo's 11:00 bar at the lunch break
+// (11:30) and its 15:00 bar at the closing auction (15:30), New York's 15:30 bar at its close (16:00), each half an hour
+// after it opens; every other an hour after it opens (the bar stamped 12:00 in Tokyo, trading 12:30-13:00, at 13:00).
+// `chart` is the chart the bar is of: by default the share's own (stockmacdChartOf); stockBarsOf passes the chart of
+// the answer it parses
+export const stockBarEnd = (
+  sym: string,
+  openMs: number,
+  sessionEndMs: number | null = null,
+  chart: StockmacdChart = stockmacdChartOf(sym),
+): number => {
+  let len = BAR_MS[chart];
+  if (chart === "1h") {
+    const l = localOf(sym, openMs);
+    const half = stockMarketOf(sym) === "jp" ? l.min === hm(11, 0) || l.min === hm(15, 0) : l.min === hm(15, 30);
+    if (half) len = 30 * MIN;
+  }
+  const end = openMs + len;
   return sessionEndMs !== null && openMs < sessionEndMs && sessionEndMs < end ? sessionEndMs : end;
 };
 
@@ -205,9 +283,18 @@ const rec = (v: unknown): Record<string, unknown> | null =>
 
 // Yahoo's answer on the rule's chart (v41: its `15m` bars, STOCKMACD_INTERVALS) -> the chart's bars (rounded as its
 // history is: Number(v.toFixed(d))), each with its end and whether it has closed by Yahoo's last price (`marketMs`,
-// its regularMarketTime) — or a later bar is there
-export const stockBarsOf = (sym: string, body: unknown, nowMs: number): { bars: StockBar[]; marketMs: number | null } | null => {
-  const got = parseYahooChart(sym, body, STOCKMACD_INTERVALS[0], nowMs);
+// its regularMarketTime) — or a later bar is there. v43: `chart` is the chart of the answer `body` is, and the bars
+// are parsed and ended on it (on "1h" as the live chart parses its 1-hour bars, Yahoo's closing point joined to the
+// session's last bar as v40's were). The run reads each share on its own chart and passes it (stockmacdChartOf: `60m`
+// for 4063.T); the default is the `15m` answer (yahooChartUrl(sym, "15min")), so a caller that reads every share's
+// `15m` bars, as research/allstocks-scan/scan.ts does, gets them as 15-minute bars for 4063.T too, not as 1-hour ones
+export const stockBarsOf = (
+  sym: string,
+  body: unknown,
+  nowMs: number,
+  chart: StockmacdChart = STOCKMACD_INTERVALS[0],
+): { bars: StockBar[]; marketMs: number | null } | null => {
+  const got = parseYahooChart(sym, body, chart, nowMs);
   if (!got) return null;
   const result = rec(rec(body)?.chart)?.result;
   const meta = rec(Array.isArray(result) ? rec(result[0])?.meta : null);
@@ -222,7 +309,8 @@ export const stockBarsOf = (sym: string, body: unknown, nowMs: number): { bars: 
   const opens = got.bars.map((c) => barOpenMs(c.datetime));
   const bars: StockBar[] = got.bars.map((c, k) => {
     const open = opens[k];
-    const end = stockBarEnd(sym, open, session && open >= session.start && open < session.end ? session.end : null);
+    const sessionEnd = session && open >= session.start && open < session.end ? session.end : null;
+    const end = stockBarEnd(sym, open, sessionEnd, chart);
     // docs §8.140: closed once its end has passed and Yahoo has priced at or past it, or a bar that opens at or after
     // its end is there. A later point inside the bar is not one: while a session trades, Yahoo's answer goes on past
     // the forming bar (2026-11-05: the bar opened 15:30 UTC was judged as closed from 15:32 on)
@@ -256,8 +344,10 @@ export interface StockFadeClose {
   fresh: boolean;
   entry: FadeEntry | null;
 }
+// v43: `closed` are the bars of the share's own chart (the run reads stockmacdChartOf's chart and passes it to
+// stockBarsOf); on either chart an entry is mailed up to STOCK_FRESH_MS after its bar's end
 export const stockFadeClose = (sym: string, closed: ReadonlyArray<StockBar>, nowMs: number): StockFadeClose => {
-  const newest = isStockmacdChart(sym, STOCKMACD_INTERVALS[0]) && closed.length > 0 ? closed[closed.length - 1] : null;
+  const newest = isStockmacdJudged(sym, stockmacdChartOf(sym)) && closed.length > 0 ? closed[closed.length - 1] : null;
   if (newest === null || !stockBarFresh(newest, nowMs)) return { fresh: false, entry: null };
   return { fresh: true, entry: fadeCloseEntryAt(closed.map((b) => b.close)) };
 };
@@ -279,7 +369,7 @@ export const stockSweepOf = (
   return {
     closed,
     newest,
-    judge: newest !== null && isStockmacdChart(sym, STOCKMACD_INTERVALS[0]) && newest.open_ms !== judgedOpen,
+    judge: newest !== null && isStockmacdJudged(sym, stockmacdChartOf(sym)) && newest.open_ms !== judgedOpen,
     fresh: newest !== null && stockBarFresh(newest, nowMs),
     done: newest !== null && newest.end >= due,
     noSession: false,
@@ -288,11 +378,17 @@ export const stockSweepOf = (
 
 // Whether trading stops at the end of the bar that opens at `openMs`, by the regular hours: "close" for a session's
 // last bar (v41, spec 3.3 item 5: New York's 15:45, Tokyo's 15:15), "lunch" for Tokyo's 11:15 bar (the lunch break
-// follows), null for the others. A day that ends early is not told from here: its last bar reads as any other
+// follows), null for the others. A day that ends early is not told from here: its last bar reads as any other. v43: by
+// the share's own chart; on the 1-hour chart v40's: Tokyo's 15:00 bar "close" and its 11:00 bar "lunch", New York's
+// 15:30 bar "close"
 export const stockBarBreak = (sym: string, openMs: number): "close" | "lunch" | null => {
   const l = localOf(sym, openMs);
-  if (stockMarketOf(sym) === "jp") return l.min === hm(15, 15) ? "close" : l.min === hm(11, 15) ? "lunch" : null;
-  return l.min === hm(15, 45) ? "close" : null;
+  const hour = stockmacdChartOf(sym) === "1h";
+  if (stockMarketOf(sym) === "jp") {
+    const [close, lunch] = hour ? [hm(15, 0), hm(11, 0)] : [hm(15, 15), hm(11, 15)];
+    return l.min === close ? "close" : l.min === lunch ? "lunch" : null;
+  }
+  return l.min === (hour ? hm(15, 30) : hm(15, 45)) ? "close" : null;
 };
 
 // The MACD numbers as the email writes them: the price's decimals, or more where the pane's edge the mail is about
@@ -325,7 +421,23 @@ const macdText = (sym: string, end: number | null): ((v: number | null) => strin
 // last bar is judged on its closing price: that holds only once parseYahooChart is fitted to Yahoo's 15-minute closing
 // points (spec 3.3 item 6, its "closing-price condition"), and on Yahoo's answer of 2026-11-19 it does not (Tokyo's
 // 11:30 closing-auction row has volume, so it stays a bar of its own).
+// v43: a share on the 1-hour chart (4063.T, STOCKMACD_CHART_OF) has the bar's word 「1時間足」 / "1-hour" from the
+// signal's interval, as every share's, and two items of its own: (8) a Tokyo share's, judged and sent some 15 minutes
+// after the close with no "not measured yet" clause (Yahoo's delay was measured on the 1-hour reads, docs §8.141);
+// (10) the owner's choices without "judging shares on 15-minute bars" and the 15-minute pane, then that judging this
+// share on 1-hour bars, the other shares being judged on 15-minute bars, is the owner's choice too (2026-11-27), and
+// that the MACD pane is the newest 120 bars of the 1-hour chart, the same as the app's 1-hour chart's (stated as a
+// fact of the rule: the live chart draws the newest CHART_BARS, 120, closed bars of a share's chart on every
+// timeframe, and ZONE_BARS is CHART_BARS). A share's mail on the 15-minute chart is word for word as in v42. A signal
+// off its share's chart is refused (the 1-hour text says the share is judged on 1-hour bars, and the run would have
+// read and judged it otherwise)
 export const renderStockMail = (s: IndicatorSignal, lang: Lang): Mail => {
+  if (!isStockmacdJudged(s.pair, s.interval)) {
+    throw new Error(`the stock MACD email: ${s.pair} is not judged on "${s.interval}" (its chart is ${stockmacdChartOf(s.pair)})`);
+  }
+  // v43: on the 1-hour chart (spec above), and the word of the other shares' chart
+  const hour = s.interval === "1h";
+  const others = tfLabel(lang, STOCKMACD_INTERVALS[0]);
   const f = s.fade ?? null;
   const jp = stockMarketOf(s.pair) === "jp";
   const d = stockDecimals(s.pair);
@@ -349,7 +461,7 @@ export const renderStockMail = (s: IndicatorSignal, lang: Lang): Mail => {
   const brk = Number.isFinite(open) ? stockBarBreak(s.pair, open) !== null : false;
   // the minutes after its close a bar is still mailed (45)
   const freshMin = STOCK_FRESH_MS / MIN;
-  // the bar's word: 「15分足」 / "15-minute" on the rule's chart (spec 3.3 item 7)
+  // the bar's word: 「15分足」 / "15-minute" on the rule's chart (spec 3.3 item 7); v43: 「1時間足」 / "1-hour" on 4063.T's
   const tf = tfLabel(lang, s.interval);
   if (lang === "en") {
     const side = buy ? "BUY" : "SELL";
@@ -369,11 +481,15 @@ export const renderStockMail = (s: IndicatorSignal, lang: Lang): Mail => {
       "There is no take-profit price and no stop price. That is how this rule is built; it is not advice to hold without a stop.",
       "This is the only email: nothing more is sent about this signal. A later signal on the same chart and side is sent too, whatever came before it.",
       (jp
-        ? `Yahoo's Tokyo prices come about 15 minutes late (measured on 2026-11-06, on the 1-hour reads), so this email is judged and sent some 15 minutes after the bar closed (how many minutes on ${tf} bars has not been measured yet).`
+        ? hour
+          ? "Yahoo's Tokyo prices come about 15 minutes late (measured on 2026-11-06, on the 1-hour reads), so this email is judged and sent some 15 minutes after the bar closed."
+          : `Yahoo's Tokyo prices come about 15 minutes late (measured on 2026-11-06, on the 1-hour reads), so this email is judged and sent some 15 minutes after the bar closed (how many minutes on ${tf} bars has not been measured yet).`
         : `This email is judged and sent at a read after the bar closes (a read judges only the newest bar closed by then; a bar more than ${freshMin} minutes past its close is not sent; how long it takes to arrive has not been measured).`) +
         " The price when it arrives may differ from the close above (the difference has not been measured).",
       "Not measured on shares.",
-      `This rule is Sextant's own, not a published indicator. ${FADE_PCT}%, judging at the bar's close, judging shares on ${tf} bars, the MACD pane of the newest ${ZONE_BARS} ${tf} bars, the fade side (shares included) and stating no take-profit or stop price are the app owner's choices. That pane is the same as the app's ${tf} chart's.`,
+      hour
+        ? `This rule is Sextant's own, not a published indicator. ${FADE_PCT}%, judging at the bar's close, the fade side (shares included) and stating no take-profit or stop price are the app owner's choices. Judging this share on ${tf} bars, while the other shares are judged on ${others} bars, is the app owner's choice too (2026-11-27). The MACD pane is the newest ${ZONE_BARS} bars of the ${tf} chart, the same as the app's ${tf} chart's pane.`
+        : `This rule is Sextant's own, not a published indicator. ${FADE_PCT}%, judging at the bar's close, judging shares on ${tf} bars, the MACD pane of the newest ${ZONE_BARS} ${tf} bars, the fade side (shares included) and stating no take-profit or stop price are the app owner's choices. That pane is the same as the app's ${tf} chart's.`,
       `${yahooName ? "The bars, the price and the stock's name are" : "The bars and the price are"} Yahoo Finance's public data (not an official feed; it may stop), the same as the app's stock chart. Check the latest state in the app before you place an order:\n${APP_URL}`,
       "To stop these emails, open Settings → Email alerts in the app and untick the share under Stock MACD.\nThis is reference information, not investment advice. Every trading decision is your own.",
     ]);
@@ -395,11 +511,15 @@ export const renderStockMail = (s: IndicatorSignal, lang: Lang): Mail => {
     "利確の値段も損切りの値段もありません。これはこの決まりの作りで、損切りをしないことを勧めるものではありません。",
     "メールはこの1通だけです。このあと、この合図について知らせは送りません。同じチャート・同じ向きに前の合図があっても、次の合図は送ります。",
     (jp
-      ? `東証の値段は Yahoo では約15分遅れて届きます（2026-11-06 に、1時間足の読み込みで測りました）。そのため、このメールは足が確定してから15分ほど後に判定して送ります（${tf}で実際に何分後になるかは、まだ測っていません）。`
+      ? hour
+        ? "東証の値段は Yahoo では約15分遅れて届きます（2026-11-06 に、1時間足の読み込みで測りました）。そのため、このメールは足が確定してから15分ほど後に判定して送ります。"
+        : `東証の値段は Yahoo では約15分遅れて届きます（2026-11-06 に、1時間足の読み込みで測りました）。そのため、このメールは足が確定してから15分ほど後に判定して送ります（${tf}で実際に何分後になるかは、まだ測っていません）。`
       : `このメールは、足の確定の後の読み込みで判定して送ります（読み込みで判定するのは、その時に確定している一番新しい足だけです。確定から${freshMin}分を過ぎた足は送りません。実際に何分で届くかは測っていません）。`) +
       "届いた時の値段は、上の終値と違うことがあります（その差は測っていません）。",
     "株では測っていません。",
-    `この決まりは Sextant 独自のもので、公開されているインジケーターではありません。${FADE_PCT}%・足の確定で判定すること・株を${tf}で判定すること・MACD の枠を${tf}の新しい${ZONE_BARS}本にすること・逆張りの向き（株にも当てはめること）・利確と損切りの値段を書かないことは、アプリのオーナーが決めたものです。この枠は、アプリの${tf}のチャートの枠と同じです。`,
+    hour
+      ? `この決まりは Sextant 独自のもので、公開されているインジケーターではありません。${FADE_PCT}%・足の確定で判定すること・逆張りの向き（株にも当てはめること）・利確と損切りの値段を書かないことは、アプリのオーナーが決めたものです。この銘柄を${tf}で判定すること（ほかの株は${others}で判定します）も、アプリのオーナーが決めたものです（2026-11-27）。MACD の枠は${tf}の新しい${ZONE_BARS}本で、アプリの${tf}のチャートの枠と同じです。`
+      : `この決まりは Sextant 独自のもので、公開されているインジケーターではありません。${FADE_PCT}%・足の確定で判定すること・株を${tf}で判定すること・MACD の枠を${tf}の新しい${ZONE_BARS}本にすること・逆張りの向き（株にも当てはめること）・利確と損切りの値段を書かないことは、アプリのオーナーが決めたものです。この枠は、アプリの${tf}のチャートの枠と同じです。`,
     `${yahooName ? "足と値段と銘柄の名前は" : "足と値段は"} Yahoo Finance の公開データ（公式の配信ではないため、止まることがあります）で、アプリの株のチャートと同じです。注文の前にアプリで最新の状態を確認してください。\n${APP_URL}`,
     "この通知を止めるには、アプリの「設定」→「メール通知」の「株の MACD」でチェックを外してください。\n本メールは参考情報であり、投資助言ではありません。取引の最終判断はご自身の責任で行ってください。",
   ]);

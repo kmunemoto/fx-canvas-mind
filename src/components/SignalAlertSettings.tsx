@@ -338,18 +338,26 @@ const SignalAlertSettings = ({ call = callSignalAlerts, loadSearch }: Props) => 
                         // Yahoo's search, sent in `shares`; the 22 by the app's own names)
                         const share = stock?.shares[pair] ?? null;
                         const name = isStock(pair) ? share?.name ?? stockName(pair, locale) : null;
+                        // signal-alerts v43: a share whose emails are judged on another chart than the column's (4063.T:
+                        // 1-hour bars); its tick in the column stays its follow
+                        const charts = stock?.charts ?? {};
+                        const judgedOn = Object.prototype.hasOwnProperty.call(charts, pair) ? charts[pair] : null;
+                        const otherChart = judgedOn !== null && !ind.intervals.includes(judgedOn) ? judgedOn : null;
                         return (
                         <tr key={pair} className="border-t border-border/50">
                           <td className="py-1 font-mono text-foreground">
                             {pair}
                             {name && <span className="ml-1 font-sans text-muted-foreground">{name}</span>}
+                            {otherChart && (
+                              <span className="block font-sans text-[10px] text-muted-foreground" data-testid={`stockmacd-chart-${pair}`}>{a.stockmacdChartNote(otherChart)}</span>
+                            )}
                             {/* v42 (2.3, 6.3): what the app read of the share from Yahoo, when it says the share is not
                                 judged as it should be: the newest bar more than 7 days old, fewer than 600 bars */}
                             {share?.stale && share.lastBarAt !== null && (
                               <span className="block font-sans text-[10px] text-warning" data-testid={`stockmacd-stale-${pair}`}>{a.stockmacdStale(jstDate(share.lastBarAt))}</span>
                             )}
                             {share && share.bars !== null && share.bars < 600 && (
-                              <span className="block font-sans text-[10px] text-warning" data-testid={`stockmacd-short-${pair}`}>{a.stockmacdShortBars(share.bars)}</span>
+                              <span className="block font-sans text-[10px] text-warning" data-testid={`stockmacd-short-${pair}`}>{a.stockmacdShortBars(share.bars, judgedOn ?? ind.intervals[0])}</span>
                             )}
                           </td>
                           {ind.intervals.map((iv) => {

@@ -2,8 +2,9 @@ import { describe, it, expect, vi } from "vitest";
 import { mailDigests, eventOfRow, type MailerDeps } from "../../supabase/functions/econ-calendar/mailer.ts";
 import type { SendResult } from "../../supabase/functions/signal-alerts/logic.ts";
 
-// each pair's MACD email chart (signal-alerts v41, indicators.ts MACDH_INTERVAL_OF, written out here)
-const OWN_CHART: Record<string, string> = { "USD/JPY": "15min", "AUD/USD": "15min", "EUR/JPY": "1h", "AUD/JPY": "1h", "EUR/USD": "1h", "XAU/USD": "1h" };
+// each pair's MACD email chart (signal-alerts v43, indicators.ts MACDH_INTERVAL_OF, written out here: the five pairs on
+// 5 minutes, gold on 1 hour; v41 and v42 had USD/JPY and AUD/USD on 15 minutes, the other four on 1 hour)
+const OWN_CHART: Record<string, string> = { "USD/JPY": "5min", "AUD/USD": "5min", "EUR/JPY": "5min", "AUD/JPY": "5min", "EUR/USD": "5min", "XAU/USD": "1h" };
 
 // #370: one morning's run of the big-events mail (docs §8.123) against a fake database
 
@@ -42,8 +43,8 @@ const ev = (country: string, at: string, title: string, impact: string, fetched_
 });
 
 const freshDb = (): Db => ({
-  // each on its own MACD email chart (signal-alerts v41, research/macdfade15min-prod-spec.md 3.2 item 1): USD/JPY and
-  // AUD/USD on 15 minutes, the others on 1 hour
+  // each on its own MACD email chart (signal-alerts v41, research/macdfade15min-prod-spec.md 3.2 item 1; v43: the five
+  // pairs on 5 minutes, gold on 1 hour)
   subs: ["AUD/JPY", "AUD/USD", "EUR/JPY", "EUR/USD", "USD/JPY", "XAU/USD"].map((pair) => ({ user_id: OWNER, pair, interval: OWN_CHART[pair], rule: "macdx", lang: "ja" })),
   mails: [],
   events: [
@@ -158,7 +159,7 @@ describe("mailDigests", () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const db = freshDb();
-      db.subs.push({ user_id: OTHER, pair: "USD/JPY", interval: "15min", rule: "macdx", lang: "en" });
+      db.subs.push({ user_id: OTHER, pair: "USD/JPY", interval: OWN_CHART["USD/JPY"], rule: "macdx", lang: "en" });
       db.fail.add("claim");
       const r = await run(db);
       const said = JSON.stringify(r.result) + JSON.stringify(errors.mock.calls);
@@ -247,7 +248,7 @@ describe("mailDigests", () => {
 
   it("someone without a plan is recorded as skipped and not mailed", async () => {
     const db = freshDb();
-    db.subs = [{ user_id: OTHER, pair: "USD/JPY", interval: "15min", rule: "macdx", lang: "ja" }];
+    db.subs = [{ user_id: OTHER, pair: "USD/JPY", interval: OWN_CHART["USD/JPY"], rule: "macdx", lang: "ja" }];
     const r = await run(db);
     expect(r.sent).toHaveLength(0);
     expect(r.result).toMatchObject({ skipped: 1 });
@@ -267,17 +268,13 @@ describe("mailDigests", () => {
     expect(db2.mails[0]).toMatchObject({ status: "failed", error: "no_email" });
   });
 
-  it("only a subscription the MACD email follows (#384: the 15-minute chart from signal-alerts v31; #386: the 1-hour chart again from v33; v41: each pair's own chart, research/macdfade15min-prod-spec.md 3.6 and 7.1) makes a recipient; the other pairs still give the currencies", async () => {
+  it("only a subscription the MACD email follows (#384: the 15-minute chart from signal-alerts v31; #386: the 1-hour chart again from v33; v41: each pair's own chart, research/macdfade15min-prod-spec.md 3.6 and 7.1; v43: the five pairs' 5-minute chart, gold's 1-hour chart) makes a recipient; the other pairs still give the currencies", async () => {
     const db = freshDb();
     db.subs = [
-      { user_id: OWNER, pair: "USD/JPY", interval: "5min", rule: "macdx", lang: "ja" },
-      // a pair's other chart is not the MACD email's (v41: USD/JPY's and AUD/USD's '1h' rows left over from v40 make no
-      // recipient, nor would a '15min' row of the 1-hour pairs or gold), nor is a pair it does not follow
-      { user_id: OWNER, pair: "USD/JPY", interval: "1h", rule: "macdx", lang: "ja" },
-      { user_id: OWNER, pair: "AUD/USD", interval: "1h", rule: "macdx", lang: "ja" },
-      { user_id: OWNER, pair: "EUR/JPY", interval: "15min", rule: "macdx", lang: "ja" },
-      { user_id: OWNER, pair: "AUD/JPY", interval: "15min", rule: "macdx", lang: "ja" },
-      { user_id: OWNER, pair: "EUR/USD", interval: "15min", rule: "macdx", lang: "ja" },
+      // a pair's other chart is not the MACD email's (v43: the five pairs' '15min' and '1h' rows left over from v41 and
+      // v42 make no recipient, nor do gold's '5min' and '15min' rows), nor is a pair it does not follow
+      ...["USD/JPY", "AUD/USD", "EUR/JPY", "AUD/JPY", "EUR/USD"].flatMap((pair) => ["15min", "1h"].map((interval) => ({ user_id: OWNER, pair, interval, rule: "macdx", lang: "ja" }))),
+      { user_id: OWNER, pair: "XAU/USD", interval: "5min", rule: "macdx", lang: "ja" },
       { user_id: OWNER, pair: "XAU/USD", interval: "15min", rule: "macdx", lang: "ja" },
       { user_id: OWNER, pair: "HKD/JPY", interval: "15min", rule: "macdx", lang: "ja" },
       { user_id: OWNER, pair: "HKD/JPY", interval: "1h", rule: "macdx", lang: "ja" },
@@ -288,7 +285,7 @@ describe("mailDigests", () => {
     ];
     const a = await run(db);
     expect(a.result).toMatchObject({ recipients: 0 });
-    // each pair's own chart makes one: '15min' for USD/JPY and AUD/USD, '1h' for EUR/JPY, AUD/JPY, EUR/USD and gold
+    // each pair's own chart makes one: '5min' for the five pairs, '1h' for gold
     for (const pair of ["USD/JPY", "AUD/USD", "EUR/JPY", "AUD/JPY", "EUR/USD", "XAU/USD"]) {
       const one = freshDb();
       one.subs = [...db.subs, { user_id: OWNER, pair, interval: OWN_CHART[pair], rule: "macdx", lang: "ja" }];
@@ -296,7 +293,7 @@ describe("mailDigests", () => {
       expect(r.result, pair).toMatchObject({ recipients: 1 });
       expect(r.sent, pair).toHaveLength(1);
     }
-    db.subs.push({ user_id: OWNER, pair: "EUR/USD", interval: "1h", rule: "macdx", lang: "ja" });
+    db.subs.push({ user_id: OWNER, pair: "EUR/USD", interval: "5min", rule: "macdx", lang: "ja" });
     const b = await run(db);
     expect(b.sent).toHaveLength(1);
     expect(b.sent[0].text).toContain("対象の通貨: 米ドル・円・ユーロ・豪ドル・中国");

@@ -11,8 +11,10 @@
 // answers with the newest 40 bars only (fewer than the rule's 600, so no entry and no mail: the dry run counts reads,
 // leftovers and notes, not signals; the signals are src/test/stockmacd-alerts.test.tsx's). Tokyo's prices come 15
 // minutes late here, as production's did on 1-hour reads (docs §8.141); New York's on time. Nothing reaches a network.
+// v43: and the Tokyo session with 4063.T among the shares, read on its 1-hour chart (`60m`) only in the half hour after
+// each of its 1-hour closes, the budget holding.
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { CLOSES, STOCK_RUN_BUDGET_MS, localOf } from "../../supabase/functions/signal-alerts/stocks";
+import { CLOSES, STOCK_RUN_BUDGET_MS, localOf, stockBarEnd } from "../../supabase/functions/signal-alerts/stocks";
 
 type Row = Record<string, unknown>;
 type Handler = (req: Request) => Promise<Response>;
@@ -42,6 +44,9 @@ const opensOf = (jp: boolean): number[] => {
   return out;
 };
 const OPENS = { us: opensOf(false), jp: opensOf(true) };
+// v43: 4063.T's 1-hour bar opens on the same days (Tokyo 9:00 … 15:00 JST on the hour, the bar stamped 12:00 trading
+// 12:30-13:00, as docs §8.141 reports Yahoo's 1-hour answer)
+const HOUR_OPENS = [...new Set(OPENS.jp.map((t) => Math.floor(t / H) * H))].sort((a, b) => a - b);
 
 const world = {
   subs: [] as Row[],
@@ -49,6 +54,8 @@ const world = {
   // the notes' writes, each with the run it came in
   writes: [] as Array<{ run: number; body: Row[] }>,
   yahoo: [] as string[],
+  // v43: each Yahoo read as "symbol interval range"
+  charts: [] as string[],
   unrouted: [] as string[],
   delayMs: 530,
   run: 0,
@@ -57,18 +64,20 @@ let clock = 0;
 let ids = 0;
 
 // Yahoo's 15-minute answer at the clock (Tokyo's 15 minutes behind): the newest 40 bars opened by then, the one still
-// forming 0.5 above its open, Yahoo's last trade then
-const yahooAnswer = (sym: string) => {
+// forming 0.5 above its open, Yahoo's last trade then. v43: a `60m` read (4063.T's chart) the newest 40 of HOUR_OPENS,
+// each closed at its own end (stockBarEnd: the 11:00 and 15:00 JST bars half an hour)
+const yahooAnswer = (sym: string, interval: string | null = "15m") => {
   const jp = isJp(sym);
+  const hourly = interval === "60m";
   const seen = clock - (jp ? 15 * MIN : 0);
-  const opens = OPENS[jp ? "jp" : "us"].filter((t) => t <= seen).slice(-40);
+  const opens = (hourly ? HOUR_OPENS : OPENS[jp ? "jp" : "us"]).filter((t) => t <= seen).slice(-40);
   const base = jp ? 2000 : 100;
   const ts: number[] = [];
   const q = { open: [] as number[], high: [] as number[], low: [] as number[], close: [] as number[], volume: [] as number[] };
   for (const t of opens) {
     const k = Math.round(t / (15 * MIN));
     const open = base + (k % 7);
-    const close = t + 15 * MIN <= seen ? base + ((k + 3) % 7) : open + 0.5;
+    const close = (hourly ? stockBarEnd(sym, t) : t + 15 * MIN) <= seen ? base + ((k + 3) % 7) : open + 0.5;
     ts.push(t / 1000);
     q.open.push(open);
     q.high.push(Math.max(open, close) + 1);
@@ -86,9 +95,11 @@ const fakeFetch = async (input: string | URL | Request, init?: RequestInit): Pro
   const body = typeof init?.body === "string" ? JSON.parse(init.body) : null;
   if (url.startsWith("https://query1.finance.yahoo.com/v8/finance/chart/")) {
     const sym = decodeURIComponent(new URL(url).pathname.split("/").pop()!);
+    const q = new URL(url).searchParams;
     world.yahoo.push(sym);
+    world.charts.push(`${sym} ${q.get("interval")} ${q.get("range")}`);
     clock += world.delayMs;
-    return reply(yahooAnswer(sym));
+    return reply(yahooAnswer(sym, q.get("interval")));
   }
   const u = new URL(url);
   const table = u.pathname.slice("/rest/v1/".length);
@@ -159,15 +170,16 @@ describe("v42 dry run: 50 made-up shares through a Tokyo and a US session (resea
     const res = await h(new Request("https://fn.test/signal-alerts", { method: "POST", headers: { "x-sweep-token": "tok", "Content-Type": "application/json" }, body: JSON.stringify({ mode: "stocks" }) }));
     expect(res.status).toBe(200);
     const s = JSON.parse(await res.text()) as Summary;
-    expect(s).toMatchObject({ ok: true, mode: "stocks", version: "signal-alerts-v42-2026-11-22" });
+    // (v43 moved the five pairs' fade to 5-minute bars; the shares' run is v42's)
+    expect(s).toMatchObject({ ok: true, mode: "stocks", version: "signal-alerts-v43-2026-11-27" });
     return s;
   };
-  const reset = (delayMs: number) => {
+  const reset = (delayMs: number, shares: string[] = SHARES) => {
     // one follower a share, a second one for every fifth share (60 rows), made-up users and ids
-    world.subs = SHARES.flatMap((p, k) => [p, ...(k % 5 === 0 ? [p] : [])].map((pair, j) => ({
+    world.subs = shares.flatMap((p, k) => [p, ...(k % 5 === 0 ? [p] : [])].map((pair, j) => ({
       id: `00000000-0000-4000-8000-${(++ids).toString(16).padStart(12, "0")}`, user_id: `dry-${k}-${j}`, pair, interval: "15min", lang: "ja", rule: "stockmacd",
     })));
-    Object.assign(world, { stocks: [], writes: [], yahoo: [], unrouted: [], delayMs, run: 0 });
+    Object.assign(world, { stocks: [], writes: [], yahoo: [], charts: [], unrouted: [], delayMs, run: 0 });
   };
   // the minutes of the day the runs are made at (a second past each minute): the two markets' due windows with five
   // minutes on either side (Tokyo 00:10 to 07:05 UTC, New York 14:40 to 21:35), and every 20th minute of the rest of
@@ -252,6 +264,49 @@ describe("v42 dry run: 50 made-up shares through a Tokyo and a US session (resea
     // the 11:30 close's at 11:45) and 12:45 to 15:45 (181), as spec 3.5's "about 330"
     for (const p of JP) expect(n.get(p), p).toBe(151 + 181);
     expect([...notesPerShare().entries()].sort()).toEqual(SHARES.map((p) => [p, 1]).sort());
+    expect(world.unrouted).toEqual([]);
+  });
+
+  // v43: 4063.T judged on its 1-hour bars (stocks.ts STOCKMACD_CHART_OF), followed by its '15min' rows as every share;
+  // the 25 Tokyo shares here are 24 made-up ones and 4063.T (its bars made up too)
+  const JP43 = [...JP.slice(0, 24), "4063.T"];
+  const tokyoMinutes = MINUTES.filter((x) => x < 7 * 60 + 30);
+
+  it("v43, a new module instance every minute through the Tokyo session, 530 ms a read: 4063.T read on `60m` over `1y` only in the half hour after each of its seven 1-hour closes (215 reads), the 15-minute shares as before (362), none left for the budget", { timeout: 600_000 }, async () => {
+    reset(530, JP43);
+    const readMinutes: number[] = [];
+    for (const m of tokyoMinutes) {
+      const s = await run(await instance(), at(m));
+      expect(s).toMatchObject({ subscriptions: 30, shares: 25 });
+      expect((s.reads ?? []).filter((r) => r.skipped === "budget"), hm(m)).toEqual([]);
+      if ((s.reads ?? []).some((r) => r.pair === "4063.T")) readMinutes.push(m);
+      expect(Number(s.took_ms)).toBeLessThan(STOCK_RUN_BUDGET_MS);
+    }
+    const n = perShare();
+    expect(n.get("4063.T")).toBe(215);
+    for (const p of JP43.slice(0, 24)) expect(n.get(p), p).toBe(362);
+    // its windows: 10:00, 11:00 to 12:00, 13:00, 14:00, 15:00 to 16:00 JST (01:00, 02:00 to 03:00, 04:00, 05:00, 06:00 to
+    // 07:00 UTC), each close's half hour
+    const runs: string[] = [];
+    for (const m of readMinutes) {
+      const last = runs.at(-1);
+      if (last && Number(last.split("-")[1]) === m - 1) runs[runs.length - 1] = `${last.split("-")[0]}-${m}`;
+      else runs.push(`${m}-${m}`);
+    }
+    expect(runs.map((r) => r.split("-").map((x) => hm(Number(x))).join("–"))).toEqual(["01:00–01:30", "02:00–03:00", "04:00–04:30", "05:00–05:30", "06:00–07:00"]);
+    expect(new Set(world.charts.filter((c) => c.startsWith("4063.T ")))).toEqual(new Set(["4063.T 60m 1y"]));
+    expect(new Set(world.charts.filter((c) => !c.startsWith("4063.T ")).map((c) => c.split(" ").slice(1).join(" ")))).toEqual(new Set(["15m 60d"]));
+    expect([...notesPerShare().entries()].sort()).toEqual(JP43.map((p) => [p, 1]).sort());
+    expect(world.unrouted).toEqual([]);
+  });
+
+  it("v43, one instance throughout the Tokyo session: 4063.T read once a minute from each 1-hour close until its bar is in (15 minutes behind), 16 reads a close, 112 a day; the 15-minute shares as before (332)", { timeout: 600_000 }, async () => {
+    reset(530, JP43);
+    const h = await instance();
+    for (const m of tokyoMinutes) await run(h, at(m));
+    const n = perShare();
+    expect(n.get("4063.T")).toBe(7 * 16);
+    for (const p of JP43.slice(0, 24)) expect(n.get(p), p).toBe(151 + 181);
     expect(world.unrouted).toEqual([]);
   });
 });

@@ -254,8 +254,8 @@ describe("#395 the email (signal-alerts v36)", () => {
     expect(fn.match(/fetchLiveQuotes\(pair, "1h", nowMs, deadline, chartFetcher\(latestCloseMs\("1h", nowMs\), HOUR\), spikeOpens\.length\)/g)).toHaveLength(1);
     expect(fn.match(/gold_tick_bars\?minute=gte\./g)).toHaveLength(1);
     // (v40 made the MACD email the fade, v41 moved it to 15-minute bars, v42 opened the shares' email to any share; the
-    // sharp rise is as v36 brought it)
-    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v42-2026-11-22";');
+    // sharp rise is as v36 brought it; v43 moved the five pairs' fade to 5-minute bars, gold's kept on 1-hour bars)
+    expect(fn).toContain('const FUNCTION_VERSION = "signal-alerts-v43-2026-11-27";');
     expect(renderTestMail([{ pair: "USD/JPY", interval: "1h", rule: "spike" }], "ja").text).toContain("登録中のチャート: ドル/円 1時間足（急騰・急落）");
     const mig = readFileSync("supabase/migrations/20261105060000_signal_alert_spike.sql", "utf8");
     expect(mig).toContain("check (rule = any (array['rsi_sar', 'gainz', 'qtrend', 'ultra', 'macdx', 'sweepx', 'amdpo3', 'emarm', 'stockmacd', 'spike']));");
